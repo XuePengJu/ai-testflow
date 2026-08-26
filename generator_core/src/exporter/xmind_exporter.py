@@ -5,11 +5,28 @@ import uuid
 from src.models.testcase import TestCase
 
 
-def _node(title: str, children: list | None = None) -> dict:
+def _node(title: str, children: list | None = None, notes: str | None = None) -> dict:
     n = {"id": uuid.uuid4().hex, "title": title}
+    if notes:
+        n["notes"] = {"plain": {"content": notes}}
     if children:
         n["children"] = {"attached": children}
     return n
+
+
+def _case_notes(c: TestCase) -> str:
+    """把一个用例的关键信息拼成 Xmind 备注文本（双击节点可见）。"""
+    lines = [f"优先级: {c.priority.value}", f"类型: {c.case_type.value}"]
+    if c.pre_condition:
+        lines.append(f"前置条件: {c.pre_condition}")
+    if c.steps:
+        lines.append("步骤:")
+        lines += [f"  {i}. {s}" for i, s in enumerate(c.steps, 1)]
+    if c.expected:
+        lines.append(f"预期结果: {c.expected}")
+    if c.test_data:
+        lines.append(f"测试数据: {c.test_data}")
+    return "\n".join(lines)
 
 
 def export_xmind(cases: list[TestCase], out_path: str) -> None:
@@ -19,7 +36,10 @@ def export_xmind(cases: list[TestCase], out_path: str) -> None:
 
     attached = []
     for mod, cs in groups.items():
-        children = [_node(f"[{c.case_type.value}] {c.title}") for c in cs]
+        children = [
+            _node(f"[{c.case_type.value}] {c.title}", notes=_case_notes(c))
+            for c in cs
+        ]
         attached.append(_node(mod, children))
 
     sheet = {
