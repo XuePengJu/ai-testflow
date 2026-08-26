@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 测试工作流平台</title>
+<style>
+  :root{
+    --bg:#f5f7fa; --card:#fff; --line:#e6e9ef; --text:#1f2329; --sub:#6b7280;
+    --brand:#2f6bff; --ok:#16a34a; --run:#f59e0b; --fail:#dc2626; --wait:#94a3b8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+       background:var(--bg);color:var(--text);padding:24px;}
+  header{max-width:960px;margin:0 auto 20px}
+  header h1{margin:0;font-size:22px}
+  header p{margin:4px 0 0;color:var(--sub);font-size:13px}
+  main{max-width:960px;margin:0 auto;display:grid;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
+  h2{margin:0 0 12px;font-size:16px;display:flex;justify-content:space-between;align-items:center}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  label{font-size:13px;color:var(--sub)}
+  textarea,input[type=text]{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px;font-family:inherit}
+  textarea{min-height:90px;resize:vertical}
+  .pill{border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:13px;cursor:pointer;background:#fff}
+  .pill.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+  button.primary{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 18px;font-size:14px;cursor:pointer}
+  button.primary:hover{opacity:.9}
+  .task{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);
+        border-radius:10px;padding:12px 14px;margin-bottom:10px;cursor:pointer;transition:.15s}
+  .task:hover{border-color:var(--brand);box-shadow:0 2px 8px rgba(47,107,255,.08)}
+  .task-main{display:flex;align-items:center;gap:10px}
+  .task-sub{color:var(--sub);font-size:12px}
+  .meta{color:var(--sub);font-size:12px}
+  .badge{font-size:11px;padding:2px 9px;border-radius:20px;color:#fff;white-space:nowrap}
+  .badge.pending{background:var(--wait)} .badge.running{background:var(--run)}
+  .badge.completed{background:var(--ok)} .badge.failed{background:var(--fail)}
+  .empty{color:var(--sub);font-size:13px;text-align:center;padding:20px}
+  .timeline{border-left:2px solid var(--line);margin-left:8px;padding-left:0}
+  .step{padding:10px 0 10px 18px;position:relative;margin-bottom:6px}
+  .step:before{content:"";position:absolute;left:-7px;top:14px;width:12px;height:12px;border-radius:50%;
+               background:#fff;border:2px solid var(--line)}
+  .step.completed:before{border-color:var(--ok);background:var(--ok)}
+  .step.failed:before{border-color:var(--fail);background:var(--fail)}
+  .step.running:before{border-color:var(--run);background:var(--run)}
+  .step-head{display:flex;align-items:center;gap:8px}
+  .step-body{color:var(--sub);font-size:13px;margin-top:4px;line-height:1.5}
+  .err{color:var(--fail);font-size:12px;margin-top:4px;font-family:monospace;white-space:pre-wrap}
+  .dl{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .dl-btn{font-size:13px;color:var(--brand);text-decoration:none;border:1px solid var(--brand);
+          border-radius:8px;padding:6px 12px}
+  .dl-btn:hover{background:var(--brand);color:#fff}
+  .hint{font-size:12px;color:var(--sub);margin-top:6px}
+  code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 AI 测试工作流平台</h1>
+  <p>四 Agent 编排：解析规格 → AI 生成用例 → 质量校验 → 导出文件。被测系统：DBERP 进销存（真实部署）。</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>提交生成任务</h2>
+    <div class="row">
+      <label>规格类型：</label>
+      <span class="pill active" data-kind="api" onclick="pickKind(this)">接口规格 (api)</span>
+      <span class="pill" data-kind="business" onclick="pickKind(this)">业务需求 (business)</span>
+    </div>
+    <div class="row">
+      <label>导出格式：</label>
+      <span class="pill active" data-fmt="xlsx" onclick="pickFmt(this)">XLSX</span>
+      <span class="pill active" data-fmt="json" onclick="pickFmt(this)">JSON</span>
+      <span class="pill" data-fmt="xmind" onclick="pickFmt(this)">XMIND</span>
+    </div>
+    <div class="row">
+      <label>规格文件（.json swagger / .md 需求）：</label>
+      <input type="file" id="file">
+    </div>
+    <label>或直接粘贴规格文本（business 类型）：</label>
+    <textarea id="text" placeholder="例如：采购管理 - 采购订单创建。功能点：..."></textarea>
+    <div class="row" style="margin-top:10px">
+      <label>任务名：</label>
+      <input type="text" id="name" placeholder="可选，默认自动命名" style="max-width:280px">
+      <button class="primary" onclick="createTask()">🚀 提交任务</button>
+    </div>
+    <div class="hint">无百炼 API Key 时自动走 <code>mock 兜底</code>，无需联网即可演示完整编排流程。</div>
+  </section>
+
+  <section class="card">
+    <h2>任务列表 <button class="pill" onclick="loadTasks()">刷新</button></h2>
+    <div id="taskList"><p class="empty">加载中…</p></div>
+  </section>
+
+  <section class="card" id="detailCard" style="display:none">
+    <button class="pill" onclick="closeDetail()">← 返回列表</button>
+    <div id="detailBody"></div>
+  </section>
+</main>
+
+<script>
+const API = "/api";
+let kind = "api";
+const fmts = new Set(["xlsx","json"]);
+
+function pickKind(el){ document.querySelectorAll('[data-kind]').forEach(e=>e.classList.remove('active'));
+  el.classList.add('active'); kind = el.dataset.kind; }
+function pickFmt(el){ el.classList.toggle('active');
+  if(el.classList.contains('active')) fmts.add(el.dataset.fmt); else fmts.delete(el.dataset.fmt); }
+
+async function createTask(){
+  const fd = new FormData();
+  const file = document.getElementById('file').files[0];
+  const text = document.getElementById('text').value;
+  const name = document.getElementById('name').value;
+  if(file) fd.append('file', file);
+  fd.append('text', text);
+  fd.append('kind', kind);
+  fd.append('formats', [...fmts].join(','));
+  fd.append('name', name);
+  const r = await fetch(API+'/tasks', {method:'POST', body:fd});
+  if(!r.ok){ alert('提交失败: '+(await r.text())); return; }
+  document.getElementById('taskList').scrollIntoView();
+  loadTasks();
+}
+
+async function loadTasks(){
+  try{
+    const r = await fetch(API+'/tasks');
+    const tasks = await r.json();
+    const el = document.getElementById('taskList');
+    if(!tasks.length){ el.innerHTML='<p class="empty">暂无任务，提交一个试试 ↑</p>'; return; }
+    el.innerHTML = tasks.map(t=>`
+      <div class="task" onclick="showDetail('${t.id}')">
+        <div class="task-main">
+          <span class="badge ${t.status}">${statusText(t.status)}</span>
+          <strong>${esc(t.name)}</strong>
+        </div>
+        <div class="task-sub">${t.kind} · ${t.cases_count} 条 · ${t.duration_ms?t.duration_ms.toFixed(0):'-'}ms · ${t.id}</div>
+      </div>`).join('');
+  }catch(e){ /* ignore */ }
+}
+
+async function showDetail(id){
+  const r = await fetch(API+'/tasks/'+id);
+  if(!r.ok) return;
+  const t = await r.json();
+  document.getElementById('detailCard').style.display='block';
+  const steps = t.steps.map(s=>`
+    <div class="step ${s.status}">
+      <div class="step-head">
+        <strong>${s.title}</strong>
+        <span class="badge ${s.status}">${statusText(s.status)}</span>
+        <span class="meta">${s.duration_ms?s.duration_ms.toFixed(0)+'ms':''}</span>
+      </div>
+      <div class="step-body">${esc(s.output_summary||'')}</div>
+      ${s.error?`<div class="err">${esc(s.error)}</div>`:''}
+    </div>`).join('');
+  const dl = ['xlsx','json','xmind'].map(f=>
+    `<a class="dl-btn" href="${API}/tasks/${t.id}/download?fmt=${f}">下载 ${f.toUpperCase()}</a>`).join(' ');
+  document.getElementById('detailBody').innerHTML = `
+    <h3 style="margin-top:14px">${esc(t.name)} <span class="badge ${t.status}">${statusText(t.status)}</span></h3>
+    <p class="meta">${t.id} · ${t.kind} · 用例 ${t.cases_count} 条 · 耗时 ${t.duration_ms?t.duration_ms.toFixed(0):'-'}ms</p>
+    <h4>工作流步骤（四 Agent 编排）</h4>
+    <div class="timeline">${steps}</div>
+    <h4>导出文件</h4><div class="dl">${dl}</div>`;
+  if(t.status==='running' || t.status==='pending'){ setTimeout(()=>showDetail(id), 1500); }
+}
+
+function closeDetail(){ document.getElementById('detailCard').style.display='none'; }
+function statusText(s){ return {pending:'排队中',running:'运行中',completed:'已完成',failed:'失败'}[s]||s; }
+function esc(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+setInterval(loadTasks, 3000);
+loadTasks();
+</script>
+</body>
+</html>
