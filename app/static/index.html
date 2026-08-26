@@ -184,7 +184,7 @@
         <div class="chips" id="fmtChips">
           <span class="chip on" data-fmt="xlsx">XLSX</span>
           <span class="chip on" data-fmt="json">JSON</span>
-          <span class="chip" data-fmt="xmind">XMIND</span>
+          <span class="chip on" data-fmt="xmind">XMIND</span>
         </div>
       </div>
 
@@ -252,7 +252,7 @@
 <script>
 const API="/api";
 let kind="api";
-const fmts=new Set(["xlsx","json"]);
+const fmts=new Set(["xlsx","json","xmind"]);
 let pendingFile=null, currentId=null, pollTimer=null;
 
 function $(id){return document.getElementById(id);}
@@ -355,11 +355,21 @@ async function renderDetail(id){
       </div>
     </div>`).join('');
   const all=(t.formats||'xlsx,json').split(',').filter(Boolean);
-  $("dDl").innerHTML=all.map(f=>`<a class="dl" href="${API}/tasks/${t.id}/download?fmt=${f}" download>⬇ 下载 ${f.toUpperCase()}</a>`).join('');
+  $("dDl").innerHTML=all.map(f=>`<a class="dl" href="javascript:void(0)" onclick="dl('${t.id}','${f}')">⬇ 下载 ${f.toUpperCase()}</a>`).join('');
   if(t.status==='running'||t.status==='pending'){clearTimeout(pollTimer);pollTimer=setTimeout(()=>renderDetail(id),1500);}
   else{clearTimeout(pollTimer);}
 }
 function openDrawer(){$("overlay").classList.add("open");document.body.style.overflow='hidden';}
+async function dl(id,fmt){
+  const url=`${API}/tasks/${id}/download?fmt=${fmt}`;
+  try{
+    const r=await fetch(url);
+    if(!r.ok){showToast(`未生成 ${fmt.toUpperCase()} 文件，请重新提交并勾选该格式`);return;}
+    const blob=await r.blob();
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${id}.${fmt}`;
+    document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);
+  }catch(e){showToast('下载失败：'+e.message);}
+}
 function closeDetail(){$("overlay").classList.remove("open");document.body.style.overflow='';clearTimeout(pollTimer);currentId=null;}
 
 setInterval(loadTasks,4000);
