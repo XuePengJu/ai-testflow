@@ -4,9 +4,9 @@
 
 结构说明：
 - 每个模块作为一个 topic
-- 每个用例作为一个 topic，标题为 `[类型] 用例标题`
-- 用例的 优先级 / 类型 / 前置条件 / 步骤 / 预期结果 / 测试数据 全部展开为子节点
-- 这样 XMind 打开后可直接看到完整用例信息，无需双击查看备注
+- 每个用例作为一个 topic，标题为 `[类型用例]-[优先级]-序号-用例标题`
+- 子节点只保留流程相关字段：前置条件 → 步骤 → 预期结果 → 测试数据
+- 预期结果紧跟步骤，增强流程感
 """
 import time
 import uuid
@@ -44,13 +44,13 @@ def _topic(title: str, children: list[str] | None = None, root: bool = False) ->
     return "".join(parts)
 
 
-def _case_topic(c: TestCase) -> str:
-    """把一个用例展开成 topic + 子节点。"""
-    children: list[str] = []
+def _case_topic(c: TestCase, idx: int) -> str:
+    """把一个用例展开成 topic + 子节点。
 
-    # 基础信息
-    children.append(_topic(f"优先级: {c.priority.value}"))
-    children.append(_topic(f"类型: {c.case_type.value}"))
+    标题格式：[类型用例]-[优先级]-序号-用例标题
+    子节点顺序：前置条件 -> 步骤 -> 预期结果 -> 测试数据
+    """
+    children: list[str] = []
 
     # 前置条件
     if c.pre_condition:
@@ -63,7 +63,7 @@ def _case_topic(c: TestCase) -> str:
         ]
         children.append(_topic("步骤", children=step_children))
 
-    # 预期结果
+    # 预期结果（紧跟步骤，流程感更强）
     if c.expected:
         children.append(_topic(f"预期结果: {c.expected}"))
 
@@ -71,7 +71,8 @@ def _case_topic(c: TestCase) -> str:
     if c.test_data:
         children.append(_topic(f"测试数据: {c.test_data}"))
 
-    return _topic(f"[{c.case_type.value}] {c.title}", children=children)
+    title = f"[{c.case_type.value}用例]-[{c.priority.value}]-{idx}-{c.title}"
+    return _topic(title, children=children)
 
 
 _CONTENT_HEAD = (
@@ -117,7 +118,7 @@ def export_xmind(cases: list[TestCase], out_path: str) -> None:
 
     modules_xml: list[str] = []
     for mod, cs in groups.items():
-        case_topics = [_case_topic(c) for c in cs]
+        case_topics = [_case_topic(c, idx) for idx, c in enumerate(cs, 1)]
         modules_xml.append(_topic(mod, children=case_topics))
 
     root_xml = _topic("DBERP 测试用例", children=modules_xml, root=True)
