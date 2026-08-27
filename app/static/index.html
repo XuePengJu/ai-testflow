@@ -354,7 +354,7 @@ async function renderDetail(id){
         ${s.error?`<div class="serr">${esc(s.error)}</div>`:''}
       </div>
     </div>`).join('');
-  const all=(t.formats||'xlsx,json').split(',').filter(Boolean);
+  const all=(t.formats||'xlsx,json,xmind').split(',').filter(Boolean);
   $("dDl").innerHTML=all.map(f=>`<a class="dl" href="javascript:void(0)" onclick="dl('${t.id}','${f}')">⬇ 下载 ${f.toUpperCase()}</a>`).join('');
   if(t.status==='running'||t.status==='pending'){clearTimeout(pollTimer);pollTimer=setTimeout(()=>renderDetail(id),1500);}
   else{clearTimeout(pollTimer);}

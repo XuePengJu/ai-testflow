@@ -23,6 +23,7 @@ class TaskOut(BaseModel):
     status: str
     cases_count: int
     duration_ms: float
+    formats: str = "xlsx,json,xmind"
     created_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     steps: list[StepLogOut] = []
