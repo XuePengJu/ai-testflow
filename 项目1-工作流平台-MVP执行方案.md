@@ -181,7 +181,7 @@ IP 首次访问 ──▶ 创建 guest 用户（expires_at = now + 24h）
 | 密码哈希 | `passlib[bcrypt]` | 业界标准，自带盐，不存明文 |
 | Token | `pyjwt`（JWT HS256） | 无状态、FastAPI 生态最简；不引入 session/Redis 复杂度 |
 | 鉴权方式 | `OAuth2PasswordBearer` | FastAPI 原生支持，`/docs` 里可直接调试探 Token |
-| 依赖新增 | `passlib[bcrypt]>=1.7` `pyjwt>=2.8` | 轻量，无编译依赖 |
+| 依赖新增 | `passlib[bcrypt]>=1.7` `pyjwt>=2.8` `bcrypt<4.1` | 轻量，无编译依赖（bcrypt≥4.1 与 passlib 1.7.x 不兼容，必须 pin） |
 
 ```bash
 pip install "passlib[bcrypt]" pyjwt
@@ -272,6 +272,75 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
 - 兜底：启动时也跑一次（服务重启间隔可能超 1h）
 - **懒清理**：guest 请求进来发现 `expires_at < now` 时同步执行清理再返回 401——把"过期后数据仍存活最长 1h"的窗口收窄到"该访客下次访问即清"
 - 删除动作写 `clean_log` 表（admin 可见"今晨清理了 N 个访客"），面试可讲数据生命周期治理
+
+### 9.3.1 关键实现示例（评审问题的落地代码）
+
+**① guest username 防撞唯一约束**（seq 从 GuestCreationLog 取历史创建数，记录物理删不冲突）：
+
+```python
+seq = db.query(GuestCreationLog).filter(
+    GuestCreationLog.ip_hash == ip_hash).count()
+username = f"guest_{ip_hash}_{seq}"            # 永不重复
+user = User(username=username, role="guest", ip_hash=ip_hash,
+            expires_at=now + timedelta(hours=24),
+            data_dir=f"guest_{ip_hash}_{seq}")
+```
+
+**② 防滥用计数走独立表**（guest 记录被删计数仍在，超限 429）：
+
+```python
+def get_or_create_guest(ip_hash: str, db: Session) -> User:
+    # 未过期的 guest 直接续用
+    guest = db.query(User).filter(User.ip_hash == ip_hash,
+                                  User.role == "guest",
+                                  User.expires_at > now()).first()
+    if guest:
+        return guest
+    # 24h 窗口内创建次数（日志只追加不删，计数才有效）
+    recent = db.query(GuestCreationLog).filter(
+        GuestCreationLog.ip_hash == ip_hash,
+        GuestCreationLog.created_at >= now() - timedelta(hours=24)).count()
+    if recent >= 5:
+        raise HTTPException(429, "该 IP 今日访客体验次数已用完，请注册")
+    # 新建 guest + 追加创建日志
+    ...
+    db.add(GuestCreationLog(ip_hash=ip_hash))
+```
+
+**③ get_current_user 解码后回查 DB**（禁用即时生效 + 过期 guest 懒清理）：
+
+```python
+async def get_current_user(token: str = Depends(oauth2_scheme),
+                           db: Session = Depends(get_db)) -> User:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(401)
+    user = db.get(User, payload["user_id"])     # 每次都查库
+    if not user or not user.is_active:          # admin 禁用 → 下一请求即 401
+        raise HTTPException(401)
+    if user.role == "guest" and user.expires_at < datetime.utcnow():
+        clean_guest(user, db, trigger="lazy")   # 顺手懒清理
+        raise HTTPException(401, "体验已到期，数据已清理")
+    return user
+```
+
+> 代价是每请求多一次 SQLite 主键查询（微秒级，可忽略）；面试讲点：无状态 JWT 吊销难，用轻量回查折中。
+
+**④ XFF 伪造防护（nginx 侧强制重写）**：
+
+```nginx
+# 仅自管反代场景；nginx 覆盖客户端伪造的头
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+```python
+# main.py 启动兜底
+if config.JWT_SECRET == DEFAULT_PLACEHOLDER:
+    if config.ENV == "production":
+        raise RuntimeError("生产环境必须设置 JWT_SECRET")
+    logger.warning("JWT_SECRET 为默认占位值，仅限本地演示")
+```
 
 ### 9.4 API 变更
 
