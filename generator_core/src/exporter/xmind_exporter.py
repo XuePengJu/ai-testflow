@@ -2,11 +2,11 @@
 
 生成 XMind 8（legacy）XML 格式：content.xml + meta.xml + styles.xml + META-INF/manifest.xml。
 
-结构说明：
+结构说明（对齐老板模板 测试用例模板.xmind）：
 - 每个模块作为一个 topic
-- 每个用例作为一个 topic，标题为 `[类型用例]-[优先级]-序号-用例标题`
-- 子节点只保留流程相关字段：前置条件 → 步骤 → 预期结果 → 测试数据
-- 预期结果紧跟步骤，增强流程感
+- 每个用例作为一个 topic：标题 `序号. 操作概括->预期概括`，labels 标注 类型+优先级（如 正向用例/P0）
+- 子节点用 labels 标注字段：前置条件 / 操作步骤（最后一步下挂 预期结果）/ 测试数据
+- 无"步骤"聚合节点，操作步骤直接平铺；预期结果作为最后一步的子节点
 """
 import re
 import time
@@ -26,18 +26,27 @@ def _ts() -> str:
     return str(int(time.time() * 1000))
 
 
-def _topic(title: str, children: list[str] | None = None, root: bool = False) -> str:
+def _topic(
+    title: str,
+    children: list[str] | None = None,
+    root: bool = False,
+    labels: list[str] | None = None,
+) -> str:
     """生成单个 topic XML。
 
     Args:
         title: 节点标题
         children: 子 topic XML 字符串列表
         root: 是否为根节点
+        labels: 节点标签（XMind 中以彩色小标签展示，如 前置条件/操作步骤/预期结果）
     """
     attrs = f'id="{_tid()}" timestamp="{_ts()}"'
     if root:
         attrs += ' structure-class="org.xmind.ui.logic.right"'
     parts = [f"<topic {attrs}>", f"<title>{escape(title)}</title>"]
+    if labels:
+        inner = "".join(f"<label>{escape(l)}</label>" for l in labels)
+        parts.append(f"<labels>{inner}</labels>")
     if children:
         inner = "".join(children)
         parts.append(f'<children><topics type="attached">{inner}</topics></children>')
@@ -52,36 +61,50 @@ def _case_title(c: TestCase) -> str:
 
 
 def _case_topic(c: TestCase, idx: int) -> str:
-    """把一个用例展开成 topic + 子节点。
+    """把一个用例展开成 topic + 子节点，对齐老板模板格式。
 
-    标题格式：[类型用例]-[优先级]-序号-用例标题（不含模块名，模块名由上层模块节点承载）
-    子节点顺序：前置条件 -> 步骤（步骤节点内含 预期结果 作为最后一个子节点） -> 测试数据
+    用例节点：
+      - 标题：`序号. 操作概括->预期概括`（类型/优先级不放标题）
+      - labels：`[类型用例, 优先级]`（如 正向用例 / P0，以彩色标签展示）
+    子节点（labels 标注字段）：
+      - 前置条件（可选）
+      - 操作步骤 1..N，最后一步下挂 预期结果
+      - 测试数据（可选）
     """
     children: list[str] = []
 
     # 前置条件
     if c.pre_condition:
-        children.append(_topic(f"前置条件: {c.pre_condition}"))
+        children.append(_topic(c.pre_condition, labels=["前置条件"]))
 
-    # 步骤（带编号展开为子节点）；预期结果作为步骤的最后一个子节点，
-    # 让"操作了什么 -> 应该是什么样"在同一分支下，关系更清晰
-    if c.steps:
-        step_children = [
-            _topic(f"{i}. {s}") for i, s in enumerate(c.steps, 1) if s
-        ]
-        if c.expected:
-            step_children.append(_topic(f"预期结果: {c.expected}"))
-        children.append(_topic("步骤", children=step_children))
-    elif c.expected:
-        # 无步骤时兜底放同级，不丢数据
-        children.append(_topic(f"预期结果: {c.expected}"))
+    # 操作步骤（带编号平铺），最后一步下挂预期结果
+    steps = [s for s in c.steps if s]
+    exp = c.expected.strip() if c.expected else ""
+    if steps:
+        for i, s in enumerate(steps, 1):
+            sub = None
+            if i == len(steps) and exp:
+                sub = [_topic(exp, labels=["预期结果"])]
+            children.append(_topic(f"{i}. {s}", children=sub, labels=["操作步骤"]))
+    elif exp:
+        # 无步骤时预期结果兜底放同级，不丢数据
+        children.append(_topic(exp, labels=["预期结果"]))
 
     # 测试数据
     if c.test_data:
-        children.append(_topic(f"测试数据: {c.test_data}"))
+        children.append(_topic(c.test_data, labels=["测试数据"]))
 
-    title = f"[{c.case_type.value}用例]-[{c.priority.value}]-{idx}-{_case_title(c)}"
-    return _topic(title, children=children)
+    # 标题：序号. 操作概括->预期概括（预期取第一分句，完整预期在最后一步子节点）
+    exp_short = exp.split("，")[0].split(",")[0].strip() if exp else ""
+    title = f"{idx}. {_case_title(c)}"
+    if exp_short:
+        title += f"->{exp_short}"
+
+    return _topic(
+        title,
+        children=children,
+        labels=[f"{c.case_type.value}用例", c.priority.value],
+    )
 
 
 _CONTENT_HEAD = (
