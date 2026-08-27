@@ -164,9 +164,9 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
 IP 首次访问 ──▶ 创建 guest 用户（expires_at = now + 24h）
             ──▶ 签发 guest JWT（role=guest，exp 与 expires_at 对齐）
             ──▶ 建临时目录 uploads/guest_<hash>/ outputs/guest_<hash>/
-24h 到期（定时任务，每小时扫一次）
+24h 到期（定时任务，每小时扫一次 + 访客访问时懒清理双保险）
             ──▶ 删除该 guest 的 tasks / step_logs / 上传与导出文件 / 临时目录
-            ───▶ 删除 guest 用户记录（或标记 deleted 保留 7 天审计再物理删）
+            ───▶ 物理删除 guest 用户记录，清理动作写入 clean_log（审计）
 ```
 
 - **IP 获取**：`X-Forwarded-For`（nginx 反代场景取第一跳）> `request.client.host`；本地演示即 127.0.0.1
@@ -207,11 +207,31 @@ class User(Base):
 
 # Task 表新增字段（SQLite 迁移脚本处理）
 user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+
+# 防滥用计数（独立于 users 表，不随 guest 删除而丢失，见下）
+class GuestCreationLog(Base):
+    __tablename__ = "guest_creation_log"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ip_hash = Column(String(64), index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    # 只追加不删（或只清 7 天前记录），保证"单 IP 24h ≤ 5 个 guest"可验证
+
+# 清理审计（guest 用户记录本身物理删，审计走这张表，不与 username unique 冲突）
+class CleanLog(Base):
+    __tablename__ = "clean_log"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guest_ip_hash = Column(String(64))
+    deleted_tasks = Column(Integer, default=0)
+    deleted_files = Column(Integer, default=0)
+    trigger = Column(String(16))            # scheduler / manual / lazy（访问时懒清理）
+    cleaned_at = Column(DateTime, default=datetime.utcnow)
 ```
 
 - `email`/`password_hash` 改为可空：访客无邮箱无密码，靠 IP + guest token 识别
 - `Task.user_id` 允许 NULL：存量任务迁移时归到引导创建的默认管理员名下，不丢数据
 - `StepLog` 不加用户字段（通过 task → user 间接归属，避免冗余）
+- **guest username 规则**：`guest_<ip_hash>_<seq>`（seq 按该 ip_hash 历史创建数递增，从 GuestCreationLog 取）——guest 记录**到期物理删除**，审计由 `clean_log` 承担，不再走"软删保留 7 天"路线（软删会撞 username unique，导致同 IP 重建 guest 失败）
+- **防滥用计数独立建表**：`guest_creation_log` 只记录 ip_hash + 时间，不随 guest 清理删除——否则计数器随 guest 记录一起被删，"单 IP 24h ≤ 5"形同虚设；超限返回 429
 - 文件隔离：上传/导出按 `data_dir` 分目录，访客临时目录随 TTL 整目录删除，注册用户目录独立互不影响
 
 ### 9.3 认证流程
@@ -228,17 +248,21 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
 登录 POST /api/auth/login ─────▶ 校验密码 ──▶ 签发 JWT（payload: user_id/username/role，exp 24h）
 受保护接口 ──▶ Authorization: Bearer <token> ──▶ get_current_user 解码校验
                                             ├─ token 无效/过期 ──▶ 401
-                                            ├─ guest 已过期（expires_at < now）──▶ 401 + 前端引导注册
+                                            ├─ 解码后**必须回查 DB**（不是纯无状态）：
+                                            │    ├─ 用户不存在/ is_active=False ──▶ 401（禁用即时生效）
+                                            │    └─ guest 且 expires_at < now ──▶ 401 + 顺带懒清理该 guest + 前端引导注册
                                             └─ 访问他人资源 ───────▶ 404（不暴露存在性）
 ```
 
 **安全细节**：
 - 密码强度：≥8 位且含字母+数字（注册时校验）
-- JWT secret 从 `.env` 读取（`JWT_SECRET`），`.env.example` 提供占位
-- 限速：登录接口失败 5 次锁 10 分钟（内存计数即可，MVP 不引 Redis）
+- JWT secret 从 `.env` 读取（`JWT_SECRET`），`.env.example` 提供占位；**启动时检测**：若为默认占位值则打 WARNING（演示可跑），生产环境拒绝启动
+- 限速：登录接口失败 5 次锁 10 分钟（内存计数即可，MVP 不引 Redis；注意仅在单进程 uvicorn 下有效，多 worker 需换共享存储——MVP 明确单进程部署）
 - 管理员引导：首个注册用户 = admin；后续可用环境变量 `ADMIN_BOOTSTRAP` 预置
-- 访客防滥用：guest 任务上限 10 个 + 单 IP 每 24h 最多新建 5 个 guest 身份（防 IP 切换绕过 TTL）
-- 访客转正：guest 在过期前可「一键转注册」——原 guest 的任务与文件迁入新注册用户目录，数据不丢
+- 访客防滥用：guest 任务上限 10 个 + 单 IP 每 24h 最多新建 5 个 guest 身份（**计数走 `guest_creation_log` 独立表，超限 429**，不随 guest 记录删除失效）
+- 访客转正：guest 在过期前可「一键转正」——原 guest 的任务与文件迁入新注册用户目录，数据不丢
+- **IP 信任边界**：`X-Forwarded-For` 客户端可伪造——只有部署在自管 nginx 后（nginx 重写 XFF 为真实来源）才开启 `uvicorn --proxy-headers` 解析；本地/直连部署一律用 `request.client.host`。防止公网伪造 XFF 无限刷 guest
+- **依赖版本坑**：`passlib 1.7.x` 与 `bcrypt>=4.1` 组合会报 `__about__` 警告/异常，requirements 里 pin `bcrypt<4.1`；bcrypt 仅取密码前 72 字节，注册时顺带校验长度上限
 
 **访客清理任务（TTL 24h）**：
 - `app/jobs/guest_cleaner.py`，APScheduler 每小时执行（随 FastAPI 生命周期启动，不引 Celery）
@@ -246,16 +270,18 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
   - 级联删除该 guest 的 tasks / step_logs（DB 外键 ON DELETE CASCADE 或手动删）
   - `shutil.rmtree(uploads/guest_<hash>/, outputs/guest_<hash>/)`（`ignore_errors=True` 防并发占用）
 - 兜底：启动时也跑一次（服务重启间隔可能超 1h）
-- 删除动作写 `StepLog` 风格的清理日志表（admin 可见"今晨清理了 N 个访客"），面试可讲数据生命周期治理
+- **懒清理**：guest 请求进来发现 `expires_at < now` 时同步执行清理再返回 401——把"过期后数据仍存活最长 1h"的窗口收窄到"该访客下次访问即清"
+- 删除动作写 `clean_log` 表（admin 可见"今晨清理了 N 个访客"），面试可讲数据生命周期治理
 
 ### 9.4 API 变更
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
-| POST | `/api/guest/token` | 无 | 按 IP 建/复用访客身份，返回 guest JWT + 剩余有效时长 |
+| POST | `/api/guest/token` | 无 | 按 IP 建/复用访客身份，返回 guest JWT + 剩余有效时长；超 24h/5 个上限 → 429 |
 | POST | `/api/guest/upgrade` | Bearer + guest | 访客转注册用户（任务与文件迁移到新账户） |
 | POST | `/api/auth/register` | 无 | 注册，返回用户信息（不含 hash） |
 | POST | `/api/auth/login` | 无 | 返回 `access_token` + `token_type` |
+| POST | `/api/auth/change-password` | Bearer | 修改本人密码（旧密码校验，改后旧 token 仍有效至 exp，可接受） |
 | GET | `/api/auth/me` | Bearer | 当前用户信息（guest 含 expires_at 倒计时） |
 | GET | `/api/users` | Bearer + admin | 用户列表（含 guest，标记角色/过期时间/任务数） |
 | PATCH | `/api/users/{id}` | Bearer + admin | 启用/禁用注册用户；禁用 guest = 立即清理其数据 |
@@ -282,10 +308,10 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
 
 自写轻量迁移脚本 `scripts/migrate_v2.py`：
 1. `ALTER TABLE tasks ADD COLUMN user_id INTEGER`（SQLite 支持 ADD COLUMN）
-2. 建表 `users`（email/password_hash 可空，含 ip_hash/expires_at/data_dir），创建默认 admin（用户名 `admin`，密码从环境变量读，默认随机生成打印一次）
+2. 建表 `users` / `guest_creation_log` / `clean_log`（email/password_hash 可空，含 ip_hash/expires_at/data_dir），创建默认 admin（用户名 `admin`，密码从环境变量读，默认随机生成打印一次）
 3. `UPDATE tasks SET user_id = <admin_id> WHERE user_id IS NULL`
 4. 已有 `uploads/`、`outputs/` 平铺文件迁入 `outputs/u_<admin_id>/`
-5. 幂等：检测列已存在则跳过
+5. 幂等：检测列已存在则跳过；**admin 已存在也跳过（不重置密码、不重复打印）**——脚本可安全重复执行
 
 ### 9.7 测试设计（本职专业度，重点写进 README）
 
@@ -295,19 +321,20 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
 |------|------|
 | 注册 | 正常注册 / 用户名重复 409 / 邮箱格式非法 422 / 密码强度不足 422 / 用户名超长 |
 | 登录 | 正确密码 / 密码错误 401（提示模糊化）/ 用户不存在 401（与密码错误同文案，防枚举）/ 禁用用户 403 / 连续错 5 次锁定 |
-| Token | 缺失 Authorization 401 / 格式错误 401 / 过期 401（伪造 exp 验证）/ 篡改签名 401 |
+| Token | 缺失 Authorization 401 / 格式错误 401 / 过期 401（伪造 exp 验证）/ 篡改签名 401 / **用户被禁用后存量 token 立即 401（DB 回查生效）** |
 | 越权 | 用户 A 访问用户 B 的任务详情 404 / 越权下载他人导出文件 404 / user 调 admin 接口 403 / guest 调 admin 接口 403 |
+| 防滥用 | 同 IP 24h 第 6 个 guest → 429（guest 记录已删计数仍在）/ guest 第 11 个任务 → 429 / 伪造 X-Forwarded-For 在直连部署下不影响判 IP |
 | 并发 | 同一账号并发登录多端 token 互不影响（无状态 JWT 天然支持） |
 | 访客生命周期 | 同 IP 首访自动建 guest / 同 IP 二访复用同一 guest / 不同 IP 各自 guest 互相隔离 / guest 任务上限第 11 个 429 / 过期 guest token 401 / 过期 guest 数据与临时目录被清理 / 清理后同 IP 再访新建 guest / 访客转注册后任务与文件完整迁移 |
-| 访客清理任务 | 到期 guest 的 tasks/step_logs 被级联删 / 临时目录（上传+导出）被删 / 未到期 guest 不被误删 / 服务重启后清理兜底执行 / admin 手动清理接口生效并返回数量 |
+| 访客清理任务 | 到期 guest 的 tasks/step_logs 被级联删 / 临时目录（上传+导出）被删 / 未到期 guest 不被误删 / 服务重启后清理兜底执行 / admin 手动清理接口生效并返回数量 / **懒清理：过期 guest 携旧 token 访问 → 401 且数据同步被清** |
 | 角色权限矩阵 | 三角色 × 核心接口状态码全组合（guest/user/admin × 8 接口 = 24 条断言，表驱动参数化跑） |
 
 ### 9.8 实施拆分（V2 迭代）
 
-- T14：User 模型（三级角色 + guest 字段）+ 注册/登录 API + bcrypt/JWT（0.5 天）
-- T15：get_current_user 依赖 + 存量接口加鉴权 + 任务按 user_id 过滤 + 文件按 data_dir 分目录（0.5 天）
-- T16：访客身份：`POST /api/guest/token`（IP→ip_hash 建/复用 guest）+ guest 任务上限 + 访客转注册迁移（0.5 天）
-- T17：访客清理：APScheduler 每小时清理过期 guest（DB 级联 + 临时目录删除）+ 启动兜底 + admin 手动清理接口（0.5 天）
+- T14：User 模型（三级角色 + guest 字段）+ GuestCreationLog/CleanLog 表 + 注册/登录/改密 API + bcrypt/JWT（0.5 天）
+- T15：get_current_user 依赖（**每请求回查 DB：is_active + guest expires_at**）+ 存量接口加鉴权 + 任务按 user_id 过滤 + 文件按 data_dir 分目录（0.5 天）
+- T16：访客身份：`POST /api/guest/token`（IP→ip_hash 建/复用 guest）+ guest 任务上限 + 单 IP 24h 5 个身份上限（guest_creation_log）+ 访客转注册迁移（0.5 天）
+- T17：访客清理：APScheduler 每小时清理过期 guest（DB 级联 + 临时目录删除 + clean_log 审计）+ 启动兜底 + 访问时懒清理 + admin 手动清理接口（0.5 天）
 - T18：迁移脚本 + 引导 admin（0.5 天）
 - T19：前端：登录/注册/游客体验三入口 + 401 拦截 + 顶栏身份徽标与到期倒计时（0.5 天）
 - T20：登录限速 + admin 用户管理页（用户/访客列表、启停、统计看板）（0.5 天）
@@ -320,6 +347,7 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
 - [ ] admin 可查看全部任务、管理用户启停、手动清理访客、看到统计
 - [ ] 密码哈希入库（非明文）、JWT 过期自动登出
 - [ ] **访客：同 IP 免登录自动获得身份；数据/文件隔离在 guest_<ip_hash> 临时目录；24h 后任务、日志、文件全部自动删除且同 IP 再访是全新身份**
-- [ ] 访客任务上限 10 个生效；访客转注册后数据完整迁移不丢
+- [ ] 访客任务上限 10 个生效；同 IP 24h 第 6 个 guest 身份 → 429；访客转注册后数据完整迁移不丢
+- [ ] admin 禁用用户后，该用户**存量 token 立即 401**（get_current_user 回查 DB）
 - [ ] 越权/认证/访客生命周期测试用例集 ≥ 30 条且全部通过
 - [ ] 存量 SQLite 数据迁移后任务不丢失
