@@ -55,7 +55,7 @@ def _case_topic(c: TestCase, idx: int) -> str:
     """把一个用例展开成 topic + 子节点。
 
     标题格式：[类型用例]-[优先级]-序号-用例标题（不含模块名，模块名由上层模块节点承载）
-    子节点顺序：前置条件 -> 步骤 -> 预期结果 -> 测试数据
+    子节点顺序：前置条件 -> 步骤（步骤节点内含 预期结果 作为最后一个子节点） -> 测试数据
     """
     children: list[str] = []
 
@@ -63,15 +63,17 @@ def _case_topic(c: TestCase, idx: int) -> str:
     if c.pre_condition:
         children.append(_topic(f"前置条件: {c.pre_condition}"))
 
-    # 步骤（带编号展开为子节点）
+    # 步骤（带编号展开为子节点）；预期结果作为步骤的最后一个子节点，
+    # 让"操作了什么 -> 应该是什么样"在同一分支下，关系更清晰
     if c.steps:
         step_children = [
             _topic(f"{i}. {s}") for i, s in enumerate(c.steps, 1) if s
         ]
+        if c.expected:
+            step_children.append(_topic(f"预期结果: {c.expected}"))
         children.append(_topic("步骤", children=step_children))
-
-    # 预期结果（紧跟步骤，流程感更强）
-    if c.expected:
+    elif c.expected:
+        # 无步骤时兜底放同级，不丢数据
         children.append(_topic(f"预期结果: {c.expected}"))
 
     # 测试数据
