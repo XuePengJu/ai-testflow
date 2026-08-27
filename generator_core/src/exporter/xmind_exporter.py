@@ -6,7 +6,8 @@ from src.models.testcase import TestCase
 
 
 def _node(title: str, children: list | None = None, notes: str | None = None) -> dict:
-    n = {"id": uuid.uuid4().hex, "title": title}
+    # XMind 标准：每个节点必须有 class: "topic"
+    n = {"id": uuid.uuid4().hex, "title": title, "class": "topic"}
     if notes:
         n["notes"] = {"plain": {"content": notes}}
     if children:
@@ -42,13 +43,21 @@ def export_xmind(cases: list[TestCase], out_path: str) -> None:
         ]
         attached.append(_node(mod, children))
 
+    # XMind 标准结构：sheet -> rootTopic（class:topic）-> children.attached
+    # 之前的版本把 children 直接挂在 sheet 下，缺少 rootTopic，导致 XMind 打不开。
+    root_topic = _node("DBERP 测试用例", children=attached)
     sheet = {
         "id": uuid.uuid4().hex,
         "class": "sheet",
         "title": "DBERP 测试用例",
-        "children": {"attached": attached},
+        "rootTopic": root_topic,
     }
     content = [sheet]
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("content.json", json.dumps(content, ensure_ascii=False))
+        z.writestr("content.json", json.dumps(content, ensure_ascii=False, indent=2))
         z.writestr("metadata.json", json.dumps({"creator": "ai-testcase-generator"}, ensure_ascii=False))
+        # manifest 声明文件清单，增强各版本 XMind 兼容性
+        z.writestr(
+            "manifest.json",
+            json.dumps({"file-entries": {"content.json": {}, "metadata.json": {}}}, ensure_ascii=False),
+        )
