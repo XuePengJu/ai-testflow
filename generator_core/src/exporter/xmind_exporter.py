@@ -8,6 +8,7 @@
 - 子节点只保留流程相关字段：前置条件 → 步骤 → 预期结果 → 测试数据
 - 预期结果紧跟步骤，增强流程感
 """
+import re
 import time
 import uuid
 import zipfile
@@ -44,10 +45,16 @@ def _topic(title: str, children: list[str] | None = None, root: bool = False) ->
     return "".join(parts)
 
 
+def _case_title(c: TestCase) -> str:
+    """用例纯标题：剥离开头的 `[模块名] ` 前缀，避免与模块节点重复。"""
+    t = re.sub(r"^\[[^\]]+\]\s*", "", c.title).strip()
+    return t or c.title
+
+
 def _case_topic(c: TestCase, idx: int) -> str:
     """把一个用例展开成 topic + 子节点。
 
-    标题格式：[类型用例]-[优先级]-序号-用例标题
+    标题格式：[类型用例]-[优先级]-序号-用例标题（不含模块名，模块名由上层模块节点承载）
     子节点顺序：前置条件 -> 步骤 -> 预期结果 -> 测试数据
     """
     children: list[str] = []
@@ -71,7 +78,7 @@ def _case_topic(c: TestCase, idx: int) -> str:
     if c.test_data:
         children.append(_topic(f"测试数据: {c.test_data}"))
 
-    title = f"[{c.case_type.value}用例]-[{c.priority.value}]-{idx}-{c.title}"
+    title = f"[{c.case_type.value}用例]-[{c.priority.value}]-{idx}-{_case_title(c)}"
     return _topic(title, children=children)
 
 
