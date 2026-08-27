@@ -18,6 +18,7 @@ class Task(Base):
     input_ref = Column(Text, default="")       # 上传文件名 或 直接粘贴的规格文本
     formats = Column(String, default="xlsx,json")  # 导出格式，逗号分隔
     status = Column(String, nullable=False, default="pending")  # pending/running/completed/failed
+    user_id = Column(Integer, nullable=True, index=True)        # 归属用户（存量迁移归 admin）
     input_summary = Column(Text, default="")
     cases_count = Column(Integer, default=0)
     duration_ms = Column(Float, default=0.0)
@@ -25,6 +26,15 @@ class Task(Base):
     report_json = Column(Text, default="{}")  # ReviewerAgent 质量报告
     created_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime)
+
+    def user_data_dir(self, db) -> str:
+        """任务归属用户的文件目录；无归属（存量迁移前）返回平铺目录。"""
+        if self.user_id:
+            from app.models.user import User
+            u = db.get(User, self.user_id)
+            if u and u.data_dir:
+                return u.data_dir
+        return ""
 
 
 class StepLog(Base):

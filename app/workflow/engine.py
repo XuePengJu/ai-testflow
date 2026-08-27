@@ -23,13 +23,15 @@ STEPS = [
 ]
 
 
-def _prepare_input(task: Task) -> str:
+def _prepare_input(task: Task, data_dir: str) -> str:
     """返回供 ParserAgent 读取的文件路径；text 类型落盘为 .md。"""
+    base = UPLOAD_DIR / data_dir if data_dir else UPLOAD_DIR
+    base.mkdir(parents=True, exist_ok=True)
     if task.source_type == "text":
-        p = UPLOAD_DIR / f"{task.id}.md"
+        p = base / f"{task.id}.md"
         p.write_text(task.input_ref, encoding="utf-8")
         return str(p)
-    return str(UPLOAD_DIR / task.input_ref)
+    return str(base / task.input_ref)
 
 
 def run_task(task_id: str) -> None:
@@ -43,7 +45,11 @@ def run_task(task_id: str) -> None:
         task.status = "running"
         db.commit()
 
-        input_path = _prepare_input(task)
+        data_dir = task.user_data_dir(db)
+        out_dir = OUTPUT_DIR / data_dir if data_dir else OUTPUT_DIR
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        input_path = _prepare_input(task, data_dir)
         data: dict = {}
 
         for name, title, fn, key in STEPS:
@@ -63,7 +69,7 @@ def run_task(task_id: str) -> None:
                     out, summary = fn(data["cases"])
                 else:  # exporter
                     fmts = [f.strip() for f in task.formats.split(",") if f.strip()]
-                    out, summary = fn(data["cases"], str(OUTPUT_DIR / task.id), fmts)
+                    out, summary = fn(data["cases"], str(out_dir / task.id), fmts)
                 data[key] = out
                 step.status = "completed"
                 step.output_summary = summary

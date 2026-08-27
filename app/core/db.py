@@ -15,6 +15,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 def init_db() -> None:
     """建表（首次运行时调用）。"""
     import app.models.task  # noqa: F401  确保模型注册到 Base
+    import app.models.user  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
 

@@ -145,6 +145,22 @@
   .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:12px 20px;border-radius:12px;font-size:13px;z-index:60;box-shadow:var(--shadow-lg);opacity:0;transition:.25s;pointer-events:none}
   .toast.show{opacity:1}
   .footer{max-width:1180px;margin:0 auto;padding:0 24px 40px;color:var(--sub);font-size:12px;text-align:center;line-height:1.7}
+
+  /* ===== 认证（V2） ===== */
+  .idchip{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600}
+  .idchip .uc{background:var(--brand-soft);color:#4f46e5;border:1px solid #ddd6fe;border-radius:999px;padding:5px 12px}
+  .idchip .uc.guest{background:#fff7ed;color:#c2410c;border-color:#fed7aa}
+  .idchip .uc.admin{background:#f0fdf4;color:#15803d;border-color:#bbf7d0}
+  .idchip .out,.idchip .upb{border:1px solid var(--line);background:#fff;border-radius:9px;padding:5px 11px;font-size:12px;font-weight:600;color:var(--sub);cursor:pointer;font-family:inherit;transition:.15s}
+  .idchip .out:hover{border-color:var(--fail);color:var(--fail)}
+  .idchip .upb{color:var(--brand1);border-color:#c7cbff}
+  .idchip .upb:hover{background:var(--brand-soft)}
+  .auth-tabs{display:flex;background:#f1f3f9;border-radius:11px;padding:4px;gap:4px;margin-bottom:18px}
+  .auth-tabs button{flex:1;border:0;background:transparent;padding:9px;border-radius:8px;font-size:13px;font-weight:600;color:var(--sub);cursor:pointer;font-family:inherit}
+  .auth-tabs button.on{background:#fff;color:var(--brand1);box-shadow:0 1px 3px rgba(15,23,42,.12)}
+  .auth-note{font-size:12px;color:var(--sub);text-align:center;margin-top:14px;line-height:1.7}
+  .guest-btn{margin-top:14px;width:100%;border:1px dashed #c7cbff;background:#fafbff;color:var(--brand1);border-radius:12px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;transition:.18s}
+  .guest-btn:hover{background:var(--brand-soft)}
 </style>
 </head>
 <body>
@@ -161,6 +177,7 @@
       <div class="brand-s">智能体编排 · 测试用例自动生成</div>
     </div>
     <div class="spacer"></div>
+    <div class="idchip" id="identity"></div>
     <div class="mode-pill" title="未配置百炼 API Key 时自动启用兜底生成"><span class="dot"></span>Mock 兜底模式</div>
   </div>
 </header>
@@ -249,11 +266,135 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- 登录 / 注册 / 游客体验 三选一 -->
+<div class="overlay" id="authOverlay" style="z-index:70">
+  <div class="drawer" style="max-width:430px">
+    <div class="drawer-head"><div style="flex:1"><h3 id="authTitle">开始使用</h3></div></div>
+    <div class="auth-tabs" id="authTabs">
+      <button data-m="login" class="on">登录</button>
+      <button data-m="register">注册</button>
+    </div>
+    <div class="field"><label>用户名</label><input type="text" id="aUser" placeholder="用户名"></div>
+    <div class="field" id="aEmailField"><label>邮箱</label><input type="text" id="aEmail" placeholder="name@example.com"></div>
+    <div class="field"><label>密码</label><input type="password" id="aPwd" placeholder="≥8 位，含字母和数字"></div>
+    <button class="submit" id="authBtn" onclick="doAuth()">登录</button>
+    <button class="guest-btn" id="guestBtn" onclick="doGuest()">👤 游客体验（免注册 · 数据保留 24 小时）</button>
+    <div class="auth-note">注册用户数据永久保留 · 首个注册用户自动成为管理员</div>
+  </div>
+</div>
+
 <script>
 const API="/api";
 let kind="api";
 const fmts=new Set(["xlsx","json","xmind"]);
 let pendingFile=null, currentId=null, pollTimer=null;
+
+/* ===== 认证状态（V2） ===== */
+const TOKEN_KEY="aitf_token", USER_KEY="aitf_user";
+let token=localStorage.getItem(TOKEN_KEY)||"";
+let me=null;
+try{me=JSON.parse(localStorage.getItem(USER_KEY)||"null");}catch(e){}
+let authMode="login";   // login / register / upgrade（访客转正）
+
+function saveAuth(t,m){token=t;me=m;localStorage.setItem(TOKEN_KEY,t);localStorage.setItem(USER_KEY,JSON.stringify(m));}
+function clearAuth(){token="";me=null;localStorage.removeItem(TOKEN_KEY);localStorage.removeItem(USER_KEY);}
+function logout(){clearAuth();location.reload();}
+
+async function api(path,opts={}){
+  const headers=Object.assign({},opts.headers||{});
+  if(token)headers["Authorization"]="Bearer "+token;
+  const r=await fetch(path,Object.assign({},opts,{headers}));
+  if(r.status===401){
+    let detail="";try{detail=(await r.clone().json()).detail||"";}catch(e){}
+    clearAuth();
+    showToast(detail||"登录已失效，请重新登录");
+    setTimeout(()=>location.reload(),1200);
+    throw new Error(detail||"401");
+  }
+  return r;
+}
+
+function showAuth(mode){
+  authMode=mode||"login";
+  const guest=me&&me.role==="guest";
+  $("authTabs").style.display=authMode==="upgrade"?"none":"flex";
+  document.querySelectorAll('#authTabs button').forEach(b=>b.classList.toggle('on',b.dataset.m===authMode));
+  $("aEmailField").style.display=(authMode==="login")?"none":"block";
+  $("authTitle").textContent=authMode==="upgrade"?"注册并保留访客数据":(authMode==="register"?"注册账号":"登录");
+  $("authBtn").textContent=authMode==="upgrade"?"转正并保留数据":(authMode==="register"?"注册":"登录");
+  $("guestBtn").style.display=authMode==="upgrade"?"none":"block";
+  $("authOverlay").classList.add("open");
+}
+function closeAuth(){$("authOverlay").classList.remove("open");}
+
+$("authTabs").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+  document.querySelectorAll('#authTabs button').forEach(x=>x.classList.remove('on'));b.classList.add('on');authMode=b.dataset.m;
+  $("aEmailField").style.display=(authMode==="login")?"none":"block";
+  $("authBtn").textContent=authMode==="register"?"注册":"登录";});
+
+async function doAuth(){
+  const u=$("aUser").value.trim(),p=$("aPwd").value,e=$("aEmail").value.trim();
+  if(!u||!p){showToast("请填写用户名和密码");return;}
+  const btn=$("authBtn");btn.disabled=true;btn.innerHTML='<span class="spin"></span>请稍候…';
+  try{
+    let r;
+    if(authMode==="login"){
+      const fd=new URLSearchParams();fd.append("username",u);fd.append("password",p);
+      r=await fetch(API+"/auth/login",{method:"POST",body:fd});
+    }else if(authMode==="register"){
+      r=await fetch(API+"/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({username:u,email:e,password:p})});
+    }else{ // upgrade：访客转正（需登录态 token）
+      const headers={"Content-Type":"application/json"};
+      if(token)headers["Authorization"]="Bearer "+token;
+      r=await fetch(API+"/guest/upgrade",{method:"POST",headers,body:JSON.stringify({username:u,email:e,password:p})});
+    }
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){showToast(d.detail||("失败："+r.status));return;}
+    saveAuth(d.access_token,{username:d.username||u,role:d.role});
+    showToast(authMode==="upgrade"?"转正成功，数据已保留":"登录成功");
+    location.reload();
+  }catch(err){if(String(err.message)!=="401")showToast("网络错误："+err.message);}
+  finally{btn.disabled=false;btn.textContent=authMode==="upgrade"?"转正并保留数据":(authMode==="register"?"注册":"登录");}
+}
+
+async function doGuest(){
+  const btn=$("guestBtn");btn.disabled=true;btn.innerHTML="正在获取访客身份…";
+  try{
+    const r=await fetch(API+"/guest/token",{method:"POST"});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){showToast(d.detail||"获取访客身份失败");return;}
+    saveAuth(d.access_token,{username:d.username,role:"guest",remaining_hours:d.remaining_hours});
+    showToast("已进入游客模式，数据保留 24 小时");
+    location.reload();
+  }catch(e){showToast("网络错误："+e.message);}
+  finally{btn.disabled=false;btn.innerHTML="👤 游客体验（免注册 · 数据保留 24 小时）";}
+}
+
+function renderIdentity(){
+  const el=$("identity");
+  if(!token||!me){el.innerHTML="";el.style.display="none";return;}
+  if(me.role==="guest"){
+    const h=Math.max(0,Math.round(me.remaining_hours||0));
+    el.innerHTML=`<span class="uc guest">访客 · 剩 ${h} 小时</span>
+      <button class="upb" onclick="showAuth('upgrade')">注册保留数据</button>`;
+  }else{
+    const cls=me.role==="admin"?"admin":"";
+    const label=me.role==="admin"?"管理员":"用户";
+    el.innerHTML=`<span class="uc ${cls}">${label} · ${esc(me.username)}</span>`;
+  }
+  el.innerHTML+=`<button class="out" onclick="logout()">退出</button>`;
+  el.style.display="flex";
+}
+
+async function refreshMe(){
+  if(!token){renderIdentity();showAuth();return;}
+  try{
+    const r=await api(API+"/auth/me");
+    if(r.ok){me=await r.json();localStorage.setItem(USER_KEY,JSON.stringify(me));}
+  }catch(e){}
+  renderIdentity();
+}
 
 function $(id){return document.getElementById(id);}
 function showToast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("show"),2200);}
@@ -294,6 +435,7 @@ function fillSample(){
 }
 
 async function createTask(){
+  if(!token){showToast("请先登录或使用游客体验");showAuth();return;}
   const text=$("text").value.trim();
   if(!pendingFile && !text){showToast("请上传文件或粘贴规格文本");return;}
   if(fmts.size===0){showToast("请至少选择一个导出格式");return;}
@@ -305,7 +447,7 @@ async function createTask(){
   fd.append('name',$("name").value.trim());
   const btn=$("submitBtn");btn.disabled=true;btn.innerHTML='<span class="spin"></span>正在提交…';
   try{
-    const r=await fetch(API+'/tasks',{method:'POST',body:fd});
+    const r=await api(API+'/tasks',{method:'POST',body:fd});
     if(!r.ok){const e=await r.text();showToast('提交失败：'+e);return;}
     clearFile();$("text").value='';$("name").value='';
     showToast("任务已提交，正在编排生成");
@@ -315,8 +457,9 @@ async function createTask(){
 }
 
 async function loadTasks(){
+  if(!token){$("taskList").innerHTML='<div class="empty"><div class="em">🔐</div>登录或游客体验后查看任务</div>';return;}
   try{
-    const r=await fetch(API+'/tasks');const tasks=await r.json();
+    const r=await api(API+'/tasks');if(!r.ok)return;const tasks=await r.json();
     const el=$("taskList");
     if(!tasks.length){el.innerHTML='<div class="empty"><div class="em">📭</div>暂无任务，左侧提交一个试试</div>';return;}
     el.innerHTML=tasks.map(t=>`
@@ -341,7 +484,7 @@ async function showDetail(id){
   currentId=id;openDrawer();await renderDetail(id);
 }
 async function renderDetail(id){
-  const r=await fetch(API+'/tasks/'+id);if(!r.ok)return;
+  const r=await api(API+'/tasks/'+id).catch(()=>null);if(!r||!r.ok)return;
   const t=await r.json();
   $("dTitle").textContent=t.name;
   $("dMeta").innerHTML=`<span><b>${statusText(t.status)}</b></span><span>${t.kind==='api'?'接口规格':'业务需求'}</span><span>用例 <b>${t.cases_count}</b> 条</span><span>耗时 <b>${t.duration_ms?t.duration_ms.toFixed(0):'-'}</b>ms</span><span>${fmtTime(t.created_at)}</span>`;
@@ -363,7 +506,7 @@ function openDrawer(){$("overlay").classList.add("open");document.body.style.ove
 async function dl(id,fmt){
   const url=`${API}/tasks/${id}/download?fmt=${fmt}`;
   try{
-    const r=await fetch(url);
+    const r=await api(url);
     if(!r.ok){showToast(`未生成 ${fmt.toUpperCase()} 文件，请重新提交并勾选该格式`);return;}
     const blob=await r.blob();
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${id}.${fmt}`;
@@ -373,6 +516,7 @@ async function dl(id,fmt){
 function closeDetail(){$("overlay").classList.remove("open");document.body.style.overflow='';clearTimeout(pollTimer);currentId=null;}
 
 setInterval(loadTasks,4000);
+refreshMe();
 loadTasks();
 </script>
 </body>
