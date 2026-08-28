@@ -33,6 +33,10 @@ GUEST_MAX_TASKS = int(os.getenv("GUEST_MAX_TASKS", "10"))    # 单访客任务�
 GUEST_DAILY_LIMIT = int(os.getenv("GUEST_DAILY_LIMIT", "5")) # 单 IP 24h 新建 guest 上限
 ADMIN_BOOTSTRAP_PASSWORD = os.getenv("ADMIN_BOOTSTRAP", "")  # 迁移脚本预置 admin 密码
 
+# ============ API 分级加密（V2.1） ============
+# admin 明文（方便 Swagger 调试），user/guest 走 AES-256-GCM；设 0 可整体关闭（本地调试用）
+API_ENCRYPT = os.getenv("API_ENCRYPT", "1") == "1"
+
 def jwt_secret_is_placeholder() -> bool:
     return JWT_SECRET == "change-me-in-production"
 

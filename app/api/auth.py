@@ -11,7 +11,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.core import security
+from app.core import crypto, security
 from app.core.db import get_db
 from app.models.user import User
 
@@ -77,7 +77,7 @@ def _validate_password(pwd: str) -> None:
         raise HTTPException(status_code=422, detail="密码过长（≤72 字节）")
 
 
-@router.post("/register", response_model=UserOut, status_code=201)
+@router.post("/register", status_code=201)
 def register(body: RegisterIn, db: Session = Depends(get_db)):
     _validate_password(body.password)
     if db.query(User).filter(User.username == body.username).first():
@@ -97,7 +97,13 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     db.refresh(user)
     user.data_dir = f"u_{user.id}"  # data_dir 依赖自增 id
     db.commit()
-    return _to_out(user)
+
+    # 注册即登录：直接下发 token + 加密会话密钥（密钥分发通道，响应永远明文）
+    token = security.create_token(user.id, user.username, user.role)
+    out = _to_out(user).model_dump()
+    out["access_token"] = token
+    out["enc_key"] = crypto.derive_key(user.id)
+    return out
 
 
 @router.post("/login")
@@ -119,7 +125,8 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     if user.role == "guest":
         ttl = int((user.expires_at - utcnow()).total_seconds() // 3600) + 1
     token = security.create_token(user.id, user.username, user.role, ttl_hours=ttl)
-    return {"access_token": token, "token_type": "bearer", "role": user.role}
+    return {"access_token": token, "token_type": "bearer", "role": user.role,
+            "enc_key": crypto.derive_key(user.id)}
 
 
 @router.get("/me", response_model=UserOut)

@@ -17,6 +17,7 @@ os.environ["ENV"] = "dev"
 os.environ["DASHSCOPE_API_KEY"] = ""             # 强制 mock 兜底
 os.environ["GUEST_MAX_TASKS"] = "3"              # 调小上限加速用例
 os.environ["GUEST_DAILY_LIMIT"] = "3"
+os.environ["API_ENCRYPT"] = "0"                  # 存量用例走明文；加密场景由 test_crypto 用 monkeypatch 开启
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

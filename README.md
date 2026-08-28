@@ -84,7 +84,22 @@ python main.py              # 等价于 uvicorn main:app --port 8000
 - **访客清理**：APScheduler 每小时扫 + 启动兜底 + 过期即拦，删除动作写 `clean_log` 审计表；越权访问统一 404 防枚举
 - **数据隔离**：上传/导出按用户 `data_dir` 分目录，访客临时目录随 TTL 整目录删除
 
-### 测试设计（55 条自动化用例，`pytest tests/`）
+### API 分级加密（V2.1）
+
+HTTP 明文传输下抓包可直接看到响应数据结构，分级加密防"抓包抄接口"：
+
+| 角色 | 流量形态 |
+|------|---------|
+| **admin** | 全程**明文直通**（Swagger 调试 / 运维排查不受影响） |
+| **user / guest** | JSON 响应**强制加密**为 `{"enc": base64url密文}`，请求体同形加密；抓包只看到密文 |
+
+- **算法**：AES-256-GCM（`nonce(12B)‖密文‖tag(16B)`），GCM 自带完整性校验，篡改即解密失败
+- **密钥分发**：密钥不存数据库，登录/注册/访客签发时由 **HKDF(JWT_SECRET, 用户ID)** 派生下发——免迁移、访客转正不换密钥、多设备一致
+- **前端纯 JS 实现**：不依赖 `crypto.subtle`（HTTP+IP 非安全上下文下浏览器禁用），NIST 标准向量验证 + 与后端 Python `cryptography` 双向互通
+- **明文通道**：login / register / guest/token / upgrade（密钥分发环节）；文件上传下载保持二进制流不加密
+- 开关 `API_ENCRYPT=0` 可整体关闭（本地调试）
+
+### 测试设计（68 条自动化用例，`pytest tests/`）
 
 | 模块 | 覆盖 |
 |------|------|
@@ -93,6 +108,7 @@ python main.py              # 等价于 uvicorn main:app --port 8000
 | 访客生命周期 | 同 IP 复用不发散、任务上限 10 返回 429、过期懒清理、单 IP 第 6 个访客 429、转正数据完整迁移 |
 | 清理任务 | 级联删任务/日志/目录、未到期不误删、手动清理接口、禁用访客立即清数据 |
 | 角色权限矩阵 | user/guest 访问 admin 接口 403、越权访问他人任务 404、admin 自删被拒 |
+| 分级加密 | admin 明文直通、user/guest 响应密文、密文往返还原、加密请求体透明解密、错误密钥 400、篡改密文拒绝、密钥分发通道明文、转正密钥不变 |
 
 ---
 
@@ -151,9 +167,9 @@ ai-testflow/
 ├── examples/                # DBERP 接口规格 / 业务需求样本
 ├── scripts/
 │   └── migrate_v2.py        # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
-├── tests/                   # 55 条认证自动化用例（pytest）
+├── tests/                   # 68 条自动化用例（认证 + 分级加密，pytest）
 ├── app/
-│   ├── core/                # config / db / security(bcrypt+JWT) / utils
+│   ├── core/                # config / db / security(bcrypt+JWT) / crypto(AES-GCM) / middleware(分级加密) / utils
 │   ├── models/              # Task + StepLog / User + GuestCreationLog + CleanLog
 │   ├── schemas/task.py      # Pydantic 响应
 │   ├── services/

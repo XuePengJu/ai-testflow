@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_guest
-from app.core import config, security
+from app.core import config, crypto, security
 from app.core.db import get_db
 from app.models.user import User, GuestCreationLog
 from app.models.task import Task
@@ -48,7 +48,8 @@ def guest_token(request: Request, db: Session = Depends(get_db)):
         remaining = (guest.expires_at - utcnow()).total_seconds() / 3600
         token = security.create_token(guest.id, guest.username, "guest", ttl_hours=int(remaining) + 1)
         return {"access_token": token, "token_type": "bearer", "role": "guest",
-                "username": guest.username, "remaining_hours": round(remaining, 2)}
+                "username": guest.username, "remaining_hours": round(remaining, 2),
+                "enc_key": crypto.derive_key(guest.id)}
 
     # 2) 防滥用：24h 窗口创建计数（独立表，guest 删除后计数仍在）
     recent = db.query(GuestCreationLog).filter(
@@ -75,7 +76,8 @@ def guest_token(request: Request, db: Session = Depends(get_db)):
     token = security.create_token(guest.id, guest.username, "guest",
                                   ttl_hours=config.GUEST_TTL_HOURS)
     return {"access_token": token, "token_type": "bearer", "role": "guest",
-            "username": guest.username, "remaining_hours": float(config.GUEST_TTL_HOURS)}
+            "username": guest.username, "remaining_hours": float(config.GUEST_TTL_HOURS),
+            "enc_key": crypto.derive_key(guest.id)}
 
 
 @router.post("/upgrade")
@@ -118,5 +120,7 @@ def guest_upgrade(body: UpgradeIn,
                 src.rmdir()
 
     token = security.create_token(guest.id, guest.username, "user")
+    # 转正后 user_id 不变 → 派生密钥不变，前端无需换密钥
     return {"access_token": token, "token_type": "bearer", "role": "user",
-            "username": guest.username, "moved_files": moved}
+            "username": guest.username, "moved_files": moved,
+            "enc_key": crypto.derive_key(guest.id)}

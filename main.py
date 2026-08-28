@@ -46,6 +46,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# API 分级加密（admin 明文 / user+guest AES-256-GCM）——最后注册 = 最外层
+from app.core.middleware import ApiCryptoMiddleware  # noqa: E402
+app.add_middleware(ApiCryptoMiddleware)
+
 app.include_router(tasks.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(guest.router, prefix="/api")
