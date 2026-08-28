@@ -1,5 +1,5 @@
 """用户 / 访客防滥用计数 / 清理审计 数据模型（V2）。"""
-from datetime import datetime
+from app.core.utils import utcnow
 
 from sqlalchemy import (
     Column, String, Integer, Boolean, DateTime,
@@ -21,7 +21,7 @@ class User(Base):
     expires_at = Column(DateTime, nullable=True)                 # 仅 guest：now + 24h
     data_dir = Column(String(128), default="")                   # u_<id> / guest_<ip_hash>_<seq>
     is_active = Column(Boolean, default=True)                    # 软禁用
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     last_login_at = Column(DateTime)
 
 
@@ -34,7 +34,7 @@ class GuestCreationLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     ip_hash = Column(String(64), index=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=utcnow, index=True)
 
 
 class CleanLog(Base):
@@ -47,4 +47,4 @@ class CleanLog(Base):
     deleted_tasks = Column(Integer, default=0)
     deleted_files = Column(Integer, default=0)
     trigger = Column(String(16), default="")   # scheduler / manual / lazy / disable
-    cleaned_at = Column(DateTime, default=datetime.utcnow, index=True)
+    cleaned_at = Column(DateTime, default=utcnow, index=True)

@@ -4,7 +4,7 @@
 """
 import json
 import time
-from datetime import datetime
+from app.core.utils import utcnow
 
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR
 from app.core.db import SessionLocal
@@ -55,7 +55,7 @@ def run_task(task_id: str) -> None:
         for name, title, fn, key in STEPS:
             step = StepLog(
                 task_id=task_id, name=name, title=title,
-                status="running", started_at=datetime.utcnow(),
+                status="running", started_at=utcnow(),
             )
             db.add(step)
             db.commit()
@@ -73,13 +73,13 @@ def run_task(task_id: str) -> None:
                 data[key] = out
                 step.status = "completed"
                 step.output_summary = summary
-                step.finished_at = datetime.utcnow()
+                step.finished_at = utcnow()
                 step.duration_ms = round((time.time() - s0) * 1000, 1)
                 db.commit()
             except Exception as e:  # noqa: BLE001
                 step.status = "failed"
                 step.error = str(e)
-                step.finished_at = datetime.utcnow()
+                step.finished_at = utcnow()
                 step.duration_ms = round((time.time() - s0) * 1000, 1)
                 task.status = "failed"
                 db.commit()
@@ -90,7 +90,7 @@ def run_task(task_id: str) -> None:
         task.cases_count = len(cases)
         task.cases_json = cases_to_json(cases)
         task.report_json = json.dumps(data["report"], ensure_ascii=False)
-        task.finished_at = datetime.utcnow()
+        task.finished_at = utcnow()
         task.duration_ms = round((time.time() - t0) * 1000, 1)
         db.commit()
     finally:

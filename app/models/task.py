@@ -1,5 +1,5 @@
 """任务与步骤日志的数据模型（SQLAlchemy）。"""
-from datetime import datetime
+from app.core.utils import utcnow
 
 from sqlalchemy import (
     Column, String, Integer, Text, DateTime, Float, ForeignKey,
@@ -24,7 +24,7 @@ class Task(Base):
     duration_ms = Column(Float, default=0.0)
     cases_json = Column(Text, default="[]")   # 生成用例列表的 JSON
     report_json = Column(Text, default="{}")  # ReviewerAgent 质量报告
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     finished_at = Column(DateTime)
 
     def user_data_dir(self, db) -> str:

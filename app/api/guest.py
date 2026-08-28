@@ -1,6 +1,8 @@
 """访客身份：免注册按 IP 建/复用 + 防滥用 + 一键转正。"""
 import hashlib
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from app.core.utils import utcnow
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
@@ -40,10 +42,10 @@ def guest_token(request: Request, db: Session = Depends(get_db)):
     # 1) 未过期 guest 直接复用（数据续用）
     guest = db.query(User).filter(
         User.ip_hash == ip_hash, User.role == "guest",
-        User.expires_at > datetime.utcnow(),
+        User.expires_at > utcnow(),
     ).first()
     if guest:
-        remaining = (guest.expires_at - datetime.utcnow()).total_seconds() / 3600
+        remaining = (guest.expires_at - utcnow()).total_seconds() / 3600
         token = security.create_token(guest.id, guest.username, "guest", ttl_hours=int(remaining) + 1)
         return {"access_token": token, "token_type": "bearer", "role": "guest",
                 "username": guest.username, "remaining_hours": round(remaining, 2)}
@@ -51,7 +53,7 @@ def guest_token(request: Request, db: Session = Depends(get_db)):
     # 2) 防滥用：24h 窗口创建计数（独立表，guest 删除后计数仍在）
     recent = db.query(GuestCreationLog).filter(
         GuestCreationLog.ip_hash == ip_hash,
-        GuestCreationLog.created_at >= datetime.utcnow() - timedelta(hours=24),
+        GuestCreationLog.created_at >= utcnow() - timedelta(hours=24),
     ).count()
     if recent >= config.GUEST_DAILY_LIMIT:
         raise HTTPException(status_code=429,
@@ -59,7 +61,7 @@ def guest_token(request: Request, db: Session = Depends(get_db)):
 
     # 3) 新建 guest：username 带 seq 防撞唯一约束（记录物理删也不冲突）
     seq = db.query(GuestCreationLog).filter(GuestCreationLog.ip_hash == ip_hash).count()
-    expires_at = datetime.utcnow() + timedelta(hours=config.GUEST_TTL_HOURS)
+    expires_at = utcnow() + timedelta(hours=config.GUEST_TTL_HOURS)
     guest = User(
         username=f"guest_{ip_hash}_{seq}", role="guest",
         ip_hash=ip_hash, expires_at=expires_at,
@@ -98,7 +100,7 @@ def guest_upgrade(body: UpgradeIn,
     guest.ip_hash = None
     guest.expires_at = None
     guest.data_dir = f"u_{guest.id}"
-    guest.last_login_at = datetime.utcnow()
+    guest.last_login_at = utcnow()
     db.commit()
 
     # 文件迁移：uploads/outputs 下 guest 目录 → u_<id>/

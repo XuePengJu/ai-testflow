@@ -2,6 +2,8 @@
 import shutil
 from datetime import datetime, timedelta
 
+from app.core.utils import utcnow
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -95,7 +97,7 @@ def manual_clean(admin: User = Depends(require_admin), db: Session = Depends(get
 
 @router.get("/admin/stats")
 def stats(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    now = datetime.utcnow()
+    now = utcnow()
     return {
         "registered_users": db.query(User).filter(User.role != "guest").count(),
         "active_guests": db.query(User).filter(

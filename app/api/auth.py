@@ -3,6 +3,8 @@ import re
 import time
 from datetime import datetime
 
+from app.core.utils import utcnow
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
@@ -61,7 +63,7 @@ class UserOut(BaseModel):
 def _to_out(user: User) -> UserOut:
     remaining = None
     if user.role == "guest" and user.expires_at:
-        remaining = max(0.0, (user.expires_at - datetime.utcnow()).total_seconds() / 3600)
+        remaining = max(0.0, (user.expires_at - utcnow()).total_seconds() / 3600)
     return UserOut(
         id=user.id, username=user.username, email=user.email, role=user.role,
         is_active=user.is_active, expires_at=user.expires_at, remaining_hours=remaining,
@@ -111,11 +113,11 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     if user.role == "guest":
         raise HTTPException(status_code=403, detail="访客无需登录，请使用游客体验入口")
 
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = utcnow()
     db.commit()
     ttl = None
     if user.role == "guest":
-        ttl = int((user.expires_at - datetime.utcnow()).total_seconds() // 3600) + 1
+        ttl = int((user.expires_at - utcnow()).total_seconds() // 3600) + 1
     token = security.create_token(user.id, user.username, user.role, ttl_hours=ttl)
     return {"access_token": token, "token_type": "bearer", "role": user.role}
 

@@ -1,5 +1,7 @@
 """密码哈希与 JWT 签发/校验。"""
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from app.core.utils import utcnow
 
 import jwt
 from passlib.context import CryptContext
@@ -28,8 +30,8 @@ def create_token(user_id: int, username: str, role: str,
         "sub": str(user_id),
         "username": username,
         "role": role,
-        "exp": datetime.utcnow() + timedelta(hours=ttl),
-        "iat": datetime.utcnow(),
+        "exp": utcnow() + timedelta(hours=ttl),
+        "iat": utcnow(),
     }
     return jwt.encode(payload, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
 

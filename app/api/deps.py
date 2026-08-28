@@ -1,5 +1,5 @@
 """鉴权依赖：get_current_user（解码后回查 DB）+ require_admin。"""
-from datetime import datetime
+from app.core.utils import utcnow
 
 import jwt as pyjwt
 from fastapi import Depends, HTTPException
@@ -32,7 +32,7 @@ async def get_current_user(
         # 禁用/删除即时生效：无状态 JWT 的吊销用轻量回查折中
         raise HTTPException(status_code=401, detail="账号不可用")
 
-    if user.role == "guest" and user.expires_at and user.expires_at < datetime.utcnow():
+    if user.role == "guest" and user.expires_at and user.expires_at < utcnow():
         clean_guest(db, user, trigger="lazy")  # 懒清理：过期即清
         raise HTTPException(status_code=401, detail="体验已到期，数据已清理，注册后可长期保留")
 

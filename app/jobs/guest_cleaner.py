@@ -5,7 +5,7 @@
 """
 import logging
 import shutil
-from datetime import datetime
+from app.core.utils import utcnow
 
 from sqlalchemy.orm import Session
 
@@ -51,7 +51,7 @@ def clean_guest(db: Session, guest: User, trigger: str) -> dict:
 
 def clean_expired(db: Session, trigger: str = "scheduler") -> list[dict]:
     """删除所有过期 guest。启动兜底 / 定时任务 / admin 手动触发共用。"""
-    now = datetime.utcnow()
+    now = utcnow()
     guests = db.query(User).filter(
         User.role == "guest", User.expires_at < now,
     ).all()

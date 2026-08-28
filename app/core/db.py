@@ -6,7 +6,8 @@ from app.core.config import DB_PATH
 
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
-    connect_args={"check_same_thread": False},
+    # timeout=30：后台任务/调度器/请求并发写时给足锁等待，避免 "database is locked"
+    connect_args={"check_same_thread": False, "timeout": 30},
 )
 Base = declarative_base()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
