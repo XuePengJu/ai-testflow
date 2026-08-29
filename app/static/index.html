@@ -92,6 +92,19 @@
   @keyframes spin{to{transform:rotate(360deg)}}
 
   /* ===== 任务列表 ===== */
+  /* ===== 分类树（多级 + 拖拽） ===== */
+  .cattree{border:1px solid var(--line);border-radius:12px;padding:8px;margin-bottom:14px;background:#fbfcfe}
+  .catrow{display:flex;align-items:center;gap:7px;padding:6px 10px;border-radius:8px;font-size:13px;cursor:grab;user-select:none;transition:.12s}
+  .catrow:hover{background:#eef0f7}
+  .catrow.sel{background:var(--brand-soft);color:#4f46e5;font-weight:700}
+  .catrow.drop{outline:2px dashed var(--brand1);background:var(--brand-soft)}
+  .catrow .cnt{margin-left:auto;font-size:11px;color:var(--sub)}
+  .catrow .catops{display:none;gap:2px}
+  .catrow:hover .catops{display:flex}
+  .catrow .catops button{border:0;background:none;cursor:pointer;font-size:12px;color:var(--sub);padding:1px 3px;border-radius:4px}
+  .catrow .catops button:hover{background:#fff;color:var(--brand1)}
+  .task{cursor:grab}
+  .task.dragging{opacity:.45}
   .list-head{display:flex;align-items:center;margin-bottom:14px}
   .list-head h2{margin:0}
   .refresh{border:1px solid var(--line);background:#fff;border-radius:9px;padding:6px 12px;font-size:12px;font-weight:600;color:var(--sub);cursor:pointer;transition:.15s}
@@ -253,8 +266,10 @@
       <div class="list-head">
         <h2>任务列表</h2>
         <div class="spacer" style="flex:1"></div>
+        <button class="refresh" onclick="newCat(null)">＋ 新建分类</button>
         <button class="refresh" onclick="loadTasks()">↻ 刷新</button>
       </div>
+      <div id="catTree" class="cattree" style="display:none"></div>
       <div id="taskList"><div class="empty"><div class="em">📋</div>加载中…</div></div>
     </section>
   </div>
@@ -855,14 +870,28 @@ async function createTask(){
   finally{btn.disabled=false;btn.innerHTML='🚀 提交并生成';}
 }
 
+let lastTasks=[];   // 当前用户全部任务（分类树计数与过滤用）
+
 async function loadTasks(){
-  if(!token){$("taskList").innerHTML='<div class="empty"><div class="em">🔐</div>登录或游客体验后查看任务</div>';return;}
+  if(!token){$("taskList").innerHTML='<div class="empty"><div class="em">🔐</div>登录或游客体验后查看任务</div>';$("catTree").style.display='none';return;}
   try{
     const r=await api(API+'/tasks');if(!r.ok)return;const tasks=await r.json();
+    lastTasks=tasks;loadCats();
+    // 分类过滤：all=全部 / none=未分类 / 数字=该分类及其子孙
+    let shown=tasks;
+    if(selCat==='none')shown=tasks.filter(t=>t.category_id==null);
+    else if(selCat!=='all'){
+      const ids=catWithDescendants(Number(selCat));
+      shown=tasks.filter(t=>t.category_id&&ids.has(t.category_id));
+    }
     const el=$("taskList");
-    if(!tasks.length){el.innerHTML='<div class="empty"><div class="em">📭</div>暂无任务，左侧提交一个试试</div>';return;}
-    el.innerHTML=tasks.map(t=>`
-      <div class="task" onclick="showDetail('${t.id}')">
+    const head=selCat==='all'?'':`<div style="font-size:12px;color:var(--sub);margin-bottom:8px">已按分类过滤（共 ${shown.length} 条）<a href="javascript:void(0)" style="color:var(--brand1)" onclick="selCat='all';loadTasks()">查看全部</a></div>`;
+    if(!shown.length){el.innerHTML=head+'<div class="empty"><div class="em">📭</div>该分类下暂无任务<br><span style="font-size:12px;color:var(--sub)">提示：把下面的任务卡片拖到左侧分类树上即可归类</span></div>';return;}
+    el.innerHTML=head+shown.map(t=>`
+      <div class="task" draggable="true"
+        ondragstart="dragData={type:'task',id:'${t.id}'};this.classList.add('dragging')"
+        ondragend="dragData=null;this.classList.remove('dragging')"
+        onclick="showDetail('${t.id}')">
         <div class="ava">${t.kind==='api'?'🔌':'📄'}</div>
         <div class="body">
           <div class="tn">${esc(t.name)}</div>
@@ -876,6 +905,95 @@ async function loadTasks(){
         <span class="badge ${t.status}">${statusText(t.status)}</span>
       </div>`).join('');
   }catch(e){/* ignore */}
+}
+
+/* ===== 任务分类树（V2.3：多级分类 + 拖拽归类/移动） ===== */
+let cats=[];          // 当前用户分类：[{id,name,parent_id,task_count}]
+let selCat='all';     // all / none(未分类) / 分类id
+let dragData=null;    // {type:'task'|'cat', id}
+
+function catWithDescendants(id){
+  const ids=new Set([id]);let changed=true;
+  while(changed){changed=false;
+    cats.forEach(c=>{if(c.parent_id&&ids.has(c.parent_id)&&!ids.has(c.id)){ids.add(c.id);changed=true;}});}
+  return ids;
+}
+function catDepth(c){let d=0,p=c.parent_id;while(p!=null){const pc=cats.find(x=>x.id===p);if(!pc)break;p=pc.parent_id;d++;}return d;}
+
+async function loadCats(){
+  if(!token)return;
+  const r=await api(API+'/categories').catch(()=>null);
+  if(r&&r.ok)cats=await r.json();
+  renderCatTree();
+}
+
+function renderCatTree(){
+  const el=$("catTree");
+  if(!token){el.style.display='none';return;}
+  el.style.display='block';
+  const noneCount=lastTasks.filter(t=>t.category_id==null).length;
+  const row=(id,icon,label,cnt,depth,ops)=>`
+    <div class="catrow ${String(selCat)===String(id)?'sel':''}" data-cat="${id}"
+      style="padding-left:${10+depth*20}px" ${id!=='all'&&id!=='none'?'draggable="true" ondragstart="dragData={type:\'cat\',id:'+id+'}"':''}
+      onclick="selCat='${id}';loadTasks()">
+      <span>${icon}</span><span>${label}</span><span class="cnt">${cnt}</span>
+      <span class="catops">${ops||''}</span>
+    </div>`;
+  const sorted=[...cats].sort((a,b)=>catDepth(a)-catDepth(b)||a.id-b.id);
+  el.innerHTML=
+    row('all','🗂️','全部任务',lastTasks.length,0)+
+    row('none','📥','未分类',noneCount,0)+
+    sorted.map(c=>row(c.id,'📂',esc(c.name),c.task_count,catDepth(c)+1,
+      `<button title="新建子分类" onclick="event.stopPropagation();newCat(${c.id})">＋</button>`+
+      `<button title="重命名" onclick="event.stopPropagation();renameCat(${c.id},'${esc(c.name).replace(/'/g,"\\'")}')">✎</button>`+
+      `<button title="删除分类" onclick="event.stopPropagation();delCat(${c.id})">🗑</button>`)).join('');
+  bindCatDnD();
+}
+
+function bindCatDnD(){
+  document.querySelectorAll('#catTree .catrow').forEach(r=>{
+    r.addEventListener('dragover',e=>{if(dragData){e.preventDefault();r.classList.add('drop');}});
+    r.addEventListener('dragleave',()=>r.classList.remove('drop'));
+    r.addEventListener('drop',async e=>{
+      e.preventDefault();e.stopPropagation();r.classList.remove('drop');
+      const d=dragData;dragData=null;if(!d)return;
+      const target=r.dataset.cat;
+      if(d.type==='task'){
+        if(target==='all')return;                       // 拖回"全部"不做归类
+        const cid=target==='none'?null:Number(target);  // 拖到"未分类"=移出分类
+        const rr=await api(`${API}/categories/move-task/${d.id}`,{method:'PUT',
+          headers:{"Content-Type":"application/json"},body:JSON.stringify({category_id:cid})});
+        if(rr.ok){showToast('已归类');loadTasks();}else showToast('归类失败');
+      }else if(d.type==='cat'){
+        if(target==='all'||target==='none'||Number(target)===d.id)return;
+        const rr=await api(`${API}/categories/${d.id}`,{method:'PATCH',
+          headers:{"Content-Type":"application/json"},body:JSON.stringify({parent_id:Number(target)})});
+        const dd=await rr.json().catch(()=>({}));
+        if(rr.ok){showToast('分类已移动');loadCats();}else showToast(dd.detail||'移动失败');
+      }
+    });
+  });
+}
+
+async function newCat(pid){
+  if(!token){showToast("请先登录或使用游客体验");showAuth();return;}
+  const name=prompt('分类名称（支持多级，如：DBERP系统 / 采购模块）：');
+  if(!name||!name.trim())return;
+  const r=await api(API+'/categories',{method:'POST',
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name.trim(),parent_id:pid})});
+  if(r.ok)loadCats();else showToast((await r.json().catch(()=>({}))).detail||'创建失败');
+}
+async function renameCat(id,old){
+  const name=prompt('重命名分类：',old);
+  if(!name||!name.trim()||name===old)return;
+  const r=await api(`${API}/categories/${id}`,{method:'PATCH',
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name.trim()})});
+  if(r.ok)loadCats();else showToast((await r.json().catch(()=>({}))).detail||'改名失败');
+}
+async function delCat(id){
+  if(!confirm('删除该分类？\n其子分类将一并删除，分类下的任务移回「未分类」（任务本身不会被删除）'))return;
+  const r=await api(`${API}/categories/${id}`,{method:'DELETE'});
+  if(r.ok){if(String(selCat)===String(id))selCat='all';loadTasks();}else showToast('删除失败');
 }
 
 const STEP_ICON={解析规格:'🔍',AI生成用例:'✨',质量校验:'🛡️',导出文件:'📦'};

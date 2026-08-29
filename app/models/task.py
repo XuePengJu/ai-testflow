@@ -19,6 +19,7 @@ class Task(Base):
     formats = Column(String, default="xlsx,json")  # 导出格式，逗号分隔
     status = Column(String, nullable=False, default="pending")  # pending/running/completed/failed
     user_id = Column(Integer, nullable=True, index=True)        # 归属用户（存量迁移归 admin）
+    category_id = Column(Integer, nullable=True, index=True)    # 归属分类（NULL=未分类）
     input_summary = Column(Text, default="")
     cases_count = Column(Integer, default=0)
     duration_ms = Column(Float, default=0.0)
