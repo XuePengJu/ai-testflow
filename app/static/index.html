@@ -297,6 +297,20 @@
   </div>
 </div>
 
+<!-- 个人中心（V2.2：账户信息 + 改密 / 切换账户 / 退出） -->
+<div class="overlay" id="profileOverlay">
+  <div class="drawer" style="max-width:430px">
+    <div class="drawer-head"><div style="flex:1"><h3>个人中心</h3></div>
+      <button class="close" onclick="closeProfile()" title="关闭">✕</button></div>
+    <div id="profileInfo" style="background:#f8f9fc;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:16px;font-size:13px;line-height:2"></div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="submit" id="profilePwdBtn" onclick="closeProfile();openPwd()">修改密码</button>
+      <button class="guest-btn" onclick="switchAccount()">🔄 切换账户</button>
+      <button class="out" style="width:100%" onclick="logout()">退出登录</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* AES-256-GCM 纯 JS 实现（无 Web Crypto 依赖，HTTP 非安全上下文可用）
    格式与后端 Python cryptography 互通：base64url(nonce(12)||密文||tag(16)) */
@@ -546,6 +560,7 @@ document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
   if($("authOverlay").classList.contains("open"))closeAuth();
   else if($("pwdOverlay").classList.contains("open"))closePwd();
+  else if($("profileOverlay").classList.contains("open"))closeProfile();
 });
 
 /* ===== 修改密码（V2.2，后端 /api/auth/change-password 已有） ===== */
@@ -570,6 +585,28 @@ async function doChangePwd(){
   }catch(err){if(String(err.message)!=="401")showToast("网络错误："+err.message);}
   finally{btn.disabled=false;btn.textContent="确认修改";}
 }
+
+/* ===== 个人中心（V2.2）：账户信息 + 改密 / 切换账户 / 退出 ===== */
+function openProfile(){
+  const box=$("profileInfo");
+  if(me.role==="guest"){
+    const h=Math.max(0,(me.remaining_hours||0)).toFixed(1);
+    box.innerHTML=`<b>${esc(me.username)}</b><br>
+      角色：访客（体验身份）<br>
+      邮箱：—<br>
+      数据保留：剩余约 <b>${h} 小时</b>，到期自动清理<br>
+      <span style="color:var(--sub)">升级为注册用户可永久保留数据</span>`;
+  }else{
+    box.innerHTML=`<b>${esc(me.username)}</b><br>
+      角色：${me.role==="admin"?"管理员":"普通用户"}<br>
+      邮箱：${esc(me.email||"—")}`;
+  }
+  $("profilePwdBtn").style.display=me.role==="guest"?"none":"block";
+  $("profileOverlay").classList.add("open");
+}
+function closeProfile(){$("profileOverlay").classList.remove("open");}
+$("profileOverlay").addEventListener("click",e=>{if(e.target===$("profileOverlay"))closeProfile();});
+function switchAccount(){logout();}   // 清登录态 → reload 后自动弹出登录框，即"切换账户"
 
 $("authTabs").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll('#authTabs button').forEach(x=>x.classList.remove('on'));b.classList.add('on');authMode=b.dataset.m;
@@ -620,13 +657,12 @@ function renderIdentity(){
   if(!token||!me){el.innerHTML=`<button class="upb" onclick="showAuth()">登录 / 注册</button>`;el.style.display="flex";return;}
   if(me.role==="guest"){
     const h=Math.max(0,Math.round(me.remaining_hours||0));
-    el.innerHTML=`<span class="uc guest">访客 · 剩 ${h} 小时</span>
+    el.innerHTML=`<span class="uc guest" style="cursor:pointer" title="个人中心" onclick="openProfile()">访客 · 剩 ${h} 小时</span>
       <button class="upb" onclick="showAuth('upgrade')">注册保留数据</button>`;
   }else{
     const cls=me.role==="admin"?"admin":"";
     const label=me.role==="admin"?"管理员":"用户";
-    el.innerHTML=`<span class="uc ${cls}">${label} · ${esc(me.username)}</span>
-      <button class="upb" onclick="openPwd()">改密</button>`;
+    el.innerHTML=`<span class="uc ${cls}" style="cursor:pointer" title="个人中心" onclick="openProfile()">${label} · ${esc(me.username)}</span>`;
   }
   el.innerHTML+=`<button class="out" onclick="logout()">退出</button>`;
   el.style.display="flex";
