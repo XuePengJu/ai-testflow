@@ -284,6 +284,19 @@
   </div>
 </div>
 
+<!-- 修改密码（V2.2：登录后头部「改密」入口） -->
+<div class="overlay" id="pwdOverlay">
+  <div class="drawer" style="max-width:430px">
+    <div class="drawer-head"><div style="flex:1"><h3>修改密码</h3></div>
+      <button class="close" onclick="closePwd()" title="关闭">✕</button></div>
+    <div class="field"><label>旧密码</label><input type="password" id="pOld" placeholder="当前密码" autocomplete="current-password"></div>
+    <div class="field"><label>新密码</label><input type="password" id="pNew" placeholder="≥8 位，含字母和数字" autocomplete="new-password"></div>
+    <div class="field"><label>确认新密码</label><input type="password" id="pNew2" placeholder="再次输入新密码" autocomplete="new-password"></div>
+    <button class="submit" id="pwdBtn" onclick="doChangePwd()">确认修改</button>
+    <div class="auth-note">修改成功后需使用新密码重新登录</div>
+  </div>
+</div>
+
 <script>
 /* AES-256-GCM 纯 JS 实现（无 Web Crypto 依赖，HTTP 非安全上下文可用）
    格式与后端 Python cryptography 互通：base64url(nonce(12)||密文||tag(16)) */
@@ -468,16 +481,19 @@ async function api(path,opts={}){
   const headers=Object.assign({},opts.headers||{});
   if(token)headers["Authorization"]="Bearer "+token;
   let o=opts;
+  const keep401=!!opts.keep401;              // true：401 不强制登出，由调用方处理（如改密"旧密码错误"）
+  if(keep401){o=Object.assign({},o);delete o.keep401;}
   if(cryptoOn()){
     // JSON 请求体加密；FormData（文件上传）保持明文
     if(opts.body&&typeof opts.body==="string"){
       headers["Content-Type"]="application/json";
-      o=Object.assign({},opts,{body:JSON.stringify({enc:aesGcmEncrypt(encKey,opts.body)})});
+      o=Object.assign({},o,{body:JSON.stringify({enc:aesGcmEncrypt(encKey,opts.body)})});
     }
   }
   o=Object.assign({},o,{headers});
   const r=await fetch(path,o);
   if(r.status===401){
+    if(keep401)return r;
     let detail="";
     try{
       let d=await r.clone().json();
@@ -527,8 +543,33 @@ function closeAuth(){$("authOverlay").classList.remove("open");}
 $("authOverlay").addEventListener("click",e=>{if(e.target===$("authOverlay"))closeAuth();});
 /* ESC 键关闭弹窗 */
 document.addEventListener("keydown",e=>{
-  if(e.key==="Escape"&&$("authOverlay").classList.contains("open"))closeAuth();
+  if(e.key!=="Escape")return;
+  if($("authOverlay").classList.contains("open"))closeAuth();
+  else if($("pwdOverlay").classList.contains("open"))closePwd();
 });
+
+/* ===== 修改密码（V2.2，后端 /api/auth/change-password 已有） ===== */
+function openPwd(){["pOld","pNew","pNew2"].forEach(i=>$(i).value="");$("pwdOverlay").classList.add("open");}
+function closePwd(){$("pwdOverlay").classList.remove("open");}
+$("pwdOverlay").addEventListener("click",e=>{if(e.target===$("pwdOverlay"))closePwd();});
+
+async function doChangePwd(){
+  const o=$("pOld").value,n=$("pNew").value,n2=$("pNew2").value;
+  if(!o||!n||!n2){showToast("请填写完整");return;}
+  if(n!==n2){showToast("两次输入的新密码不一致");return;}
+  if(n.length<8||!(/[a-zA-Z]/.test(n)&&/\d/.test(n))){showToast("新密码需 ≥8 位且含字母和数字");return;}
+  const btn=$("pwdBtn");btn.disabled=true;btn.innerHTML='<span class="spin"></span>请稍候…';
+  try{
+    const r=await api(API+"/auth/change-password",{method:"POST",keep401:true,
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({old_password:o,new_password:n})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){showToast(d.detail||("失败："+r.status));return;}
+    showToast("密码修改成功，请重新登录");
+    setTimeout(logout,1200);   // 登出清 token → 引导用新密码重登
+  }catch(err){if(String(err.message)!=="401")showToast("网络错误："+err.message);}
+  finally{btn.disabled=false;btn.textContent="确认修改";}
+}
 
 $("authTabs").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll('#authTabs button').forEach(x=>x.classList.remove('on'));b.classList.add('on');authMode=b.dataset.m;
@@ -584,7 +625,8 @@ function renderIdentity(){
   }else{
     const cls=me.role==="admin"?"admin":"";
     const label=me.role==="admin"?"管理员":"用户";
-    el.innerHTML=`<span class="uc ${cls}">${label} · ${esc(me.username)}</span>`;
+    el.innerHTML=`<span class="uc ${cls}">${label} · ${esc(me.username)}</span>
+      <button class="upb" onclick="openPwd()">改密</button>`;
   }
   el.innerHTML+=`<button class="out" onclick="logout()">退出</button>`;
   el.style.display="flex";
