@@ -182,7 +182,9 @@ ai-testflow/
 │   │   └── guest_cleaner.py # 访客清理（定时 + 懒清理 + 审计）
 │   └── static/index.html    # 轻量前端（登录/注册/游客三入口）
 ├── uploads/  outputs/       # 上传 / 导出目录（按用户分目录，已 gitignore）
-└── 项目1-工作流平台-MVP执行方案.md
+└── docs/                    # 项目文档（需求 + 技术方案）
+    ├── PRD.md               # 产品需求文档
+    └── 项目1-工作流平台-MVP执行方案.md  # 技术实现方案
 ```
 
 ---
