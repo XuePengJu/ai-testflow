@@ -332,10 +332,17 @@
       <button class="close" onclick="closeMgmt()" title="关闭">✕</button></div>
     <div class="stat-row" id="mgmtStats"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 2px">
-      <div class="sec-title" style="margin:0">账户列表</div>
-      <button class="op" style="border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--sub)" onclick="cleanGuests()">清理过期访客</button>
+      <div class="sec-title" style="margin:0">注册用户</div>
     </div>
-    <div style="overflow-x:auto"><table class="mtable" id="mgmtTable"></table></div>
+    <div style="overflow-x:auto"><table class="mtable" id="mgmtUsers"></table></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 2px">
+      <div class="sec-title" style="margin:0">活跃访客（临时数据 24h 自动清理）</div>
+      <div style="display:flex;gap:8px">
+        <button style="border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--sub)" onclick="cleanGuests()">清理过期访客</button>
+        <button style="border:1px solid #fecaca;background:#fff5f5;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--fail)" onclick="cleanAllGuests()">清空全部访客</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto"><table class="mtable" id="mgmtGuests"></table></div>
   </div>
 </div>
 
@@ -654,23 +661,39 @@ async function loadMgmt(){
       `<div class="stat-cell"><b>${st.cleaned_24h}</b><span>24h 清理</span></div>`+
       `<div class="stat-cell"><b>${st.total_tasks}</b><span>任务总数</span></div>`;
     const rows=await ru.json();
-    $("mgmtTable").innerHTML=`<tr><th>ID</th><th>用户名</th><th>角色</th><th>状态</th><th>任务数</th><th>注册时间</th><th>操作</th></tr>`+
-      rows.map(u=>{
-        const role={admin:"管理员",user:"用户",guest:"访客"}[u.role]||u.role;
-        let status,ops;
-        if(u.role==="guest"){
-          status=u.expires_at?`剩余 ${Math.max(0,Math.round((new Date(u.expires_at)-Date.now())/36e5))} 小时`:"—";
-          ops=`<button class="op del" onclick="toggleUser(${u.id},'${esc(u.username)}')">清理</button>`;
-        }else{
-          status=u.is_active?"<b style='color:#16a34a'>正常</b>":"<span style='color:var(--fail)'>已禁用</span>";
-          const self=u.id===me.id;
-          ops=self?"<span style='color:var(--sub);font-size:12px'>当前账户</span>":
-            `<button class="op" onclick="toggleUser(${u.id},'${esc(u.username)}')">${u.is_active?"禁用":"启用"}</button>`+
-            `<button class="op del" onclick="delUser(${u.id},'${esc(u.username)}')">删除</button>`;
-        }
+    const users=rows.filter(u=>u.role!=="guest");
+    const guests=rows.filter(u=>u.role==="guest");
+
+    // 注册用户表
+    $("mgmtUsers").innerHTML=`<tr><th>ID</th><th>用户名</th><th>角色</th><th>状态</th><th>任务数</th><th>注册时间</th><th>操作</th></tr>`+
+      (users.length?users.map(u=>{
+        const role={admin:"管理员",user:"用户"}[u.role]||u.role;
+        const status=u.is_active?"<b style='color:#16a34a'>正常</b>":"<span style='color:var(--fail)'>已禁用</span>";
+        const self=u.id===me.id;
+        const ops=self?"<span style='color:var(--sub);font-size:12px'>当前账户</span>":
+          `<button class="op" onclick="toggleUser(${u.id},'${esc(u.username)}')">${u.is_active?"禁用":"启用"}</button>`+
+          `<button class="op del" onclick="delUser(${u.id},'${esc(u.username)}')">删除</button>`;
         return `<tr><td>${u.id}</td><td><b>${esc(u.username)}</b></td><td>${role}</td><td>${status}</td><td>${u.tasks}</td><td>${fmtTime(u.created_at)||"—"}</td><td>${ops}</td></tr>`;
-      }).join("");
+      }).join(""):`<tr><td colspan="7" style="color:var(--sub);text-align:center">暂无注册用户</td></tr>`);
+
+    // 活跃访客表（临时数据）
+    $("mgmtGuests").innerHTML=`<tr><th>访客身份</th><th>剩余时长</th><th>任务数</th><th>操作</th></tr>`+
+      (guests.length?guests.map(u=>{
+        const h=Math.max(0,Math.round((new Date(u.expires_at)-Date.now())/36e5));
+        return `<tr><td title="${esc(u.username)}"><b>${esc(u.username.length>22?u.username.slice(0,22)+"…":u.username)}</b></td>`+
+          `<td>剩余 ${h} 小时</td><td>${u.tasks}</td>`+
+          `<td><button class="op del" onclick="toggleUser(${u.id},'${esc(u.username)}')">清理</button></td></tr>`;
+      }).join(""):`<tr><td colspan="4" style="color:var(--sub);text-align:center">当前没有活跃访客（访客点击「游客体验」后出现在这里）</td></tr>`);
   }catch(err){if(String(err.message)!=="401")showToast("网络错误："+err.message);}
+}
+
+async function cleanAllGuests(){
+  if(!confirm("确定清空全部活跃访客？\n所有访客的任务、日志与文件将立即删除（无论是否到期），不可恢复！"))return;
+  const r=await api(API+"/admin/guests/clean-all",{method:"POST"});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){showToast(d.detail||"清理失败");return;}
+  showToast(d.cleaned?`已清空 ${d.cleaned} 个访客`:"当前没有访客可清理");
+  loadMgmt();
 }
 
 async function toggleUser(id,name){

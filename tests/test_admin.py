@@ -141,6 +141,26 @@ def test_admin_manual_clean(client, accounts):
     assert "cleaned" in r.json()
 
 
+def test_admin_clean_all_guests(client, accounts):
+    """清空全部访客：未到期访客也被强制清理，且仅 admin 可调用。"""
+    # 建 2 个访客
+    g1 = client.post("/api/guest/token").json()
+    g2 = client.post("/api/guest/token").json()   # 同 IP 复用同一访客，但另一 IP 场景已由 test_guest 覆盖
+    # user 无权限
+    assert client.post("/api/admin/guests/clean-all",
+                       headers=_hdr(accounts["user"]["token"])).status_code == 403
+    # admin 强制清理（无论是否到期）
+    r = client.post("/api/admin/guests/clean-all", headers=_hdr(accounts["admin"]["token"]))
+    assert r.status_code == 200
+    assert r.json()["cleaned"] >= 1
+    # 清理后访客 token 立即失效
+    assert client.get("/api/auth/me", headers=_hdr(g1["access_token"])).status_code == 401
+    assert client.get("/api/auth/me", headers=_hdr(g2["access_token"])).status_code == 401
+    # 列表中不再有 guest
+    users = client.get("/api/users", headers=_hdr(accounts["admin"]["token"])).json()
+    assert all(u["role"] != "guest" for u in users)
+
+
 def test_admin_tasks_all(client, accounts):
     r = client.get("/api/tasks?all=true", headers=_hdr(accounts["admin"]["token"]))
     assert r.status_code == 200

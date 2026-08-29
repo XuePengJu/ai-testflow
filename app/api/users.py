@@ -95,6 +95,14 @@ def manual_clean(admin: User = Depends(require_admin), db: Session = Depends(get
     return {"cleaned": len(stats), "detail": stats}
 
 
+@router.post("/admin/guests/clean-all")
+def clean_all_guests(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """强制清理全部活跃访客（无论是否到期）——管理员主动批量清理入口。"""
+    guests = db.query(User).filter(User.role == "guest").all()
+    stats = [clean_guest(db, g, trigger="force") for g in guests]
+    return {"cleaned": len(stats), "detail": stats}
+
+
 @router.get("/admin/stats")
 def stats(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     now = utcnow()
