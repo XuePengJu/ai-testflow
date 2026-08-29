@@ -269,7 +269,8 @@
 <!-- 登录 / 注册 / 游客体验 三选一 -->
 <div class="overlay" id="authOverlay" style="z-index:70">
   <div class="drawer" style="max-width:430px">
-    <div class="drawer-head"><div style="flex:1"><h3 id="authTitle">开始使用</h3></div></div>
+    <div class="drawer-head"><div style="flex:1"><h3 id="authTitle">开始使用</h3></div>
+      <button class="close" onclick="closeAuth()" title="关闭">✕</button></div>
     <div class="auth-tabs" id="authTabs">
       <button data-m="login" class="on">登录</button>
       <button data-m="register">注册</button>
@@ -522,6 +523,13 @@ function showAuth(mode){
 }
 function closeAuth(){$("authOverlay").classList.remove("open");}
 
+/* 点击弹窗外空白区域关闭（登录弹窗无不可丢失数据，符合主流 Modal 惯例） */
+$("authOverlay").addEventListener("click",e=>{if(e.target===$("authOverlay"))closeAuth();});
+/* ESC 键关闭弹窗 */
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&$("authOverlay").classList.contains("open"))closeAuth();
+});
+
 $("authTabs").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   document.querySelectorAll('#authTabs button').forEach(x=>x.classList.remove('on'));b.classList.add('on');authMode=b.dataset.m;
   $("aEmailField").style.display=(authMode==="login")?"none":"block";
@@ -568,7 +576,7 @@ async function doGuest(){
 
 function renderIdentity(){
   const el=$("identity");
-  if(!token||!me){el.innerHTML="";el.style.display="none";return;}
+  if(!token||!me){el.innerHTML=`<button class="upb" onclick="showAuth()">登录 / 注册</button>`;el.style.display="flex";return;}
   if(me.role==="guest"){
     const h=Math.max(0,Math.round(me.remaining_hours||0));
     el.innerHTML=`<span class="uc guest">访客 · 剩 ${h} 小时</span>
