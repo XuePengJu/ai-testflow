@@ -17,6 +17,12 @@ if _ENV_PATH.exists():
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 MODEL_NAME = os.getenv("MODEL_NAME", "qwen-plus")
 
+# 魔搭社区 ModelScope 免费推理（OpenAI 兼容）
+# 注册 modelscope.cn → 绑定阿里云+实名 → 访问令牌页创建（格式 ms-xxxx）
+MODELSCOPE_API_KEY = os.getenv("MODELSCOPE_API_KEY", "")
+MODELSCOPE_BASE_URL = os.getenv("MODELSCOPE_BASE_URL", "https://api-inference.modelscope.cn/v1")
+MODELSCOPE_MODEL = os.getenv("MODELSCOPE_MODEL", "Qwen/Qwen3.8-27B")
+
 # 路径支持环境变量覆盖（测试隔离：AITF_ROOT_DIR 指向临时目录，避免污染真实数据）
 _ROOT = Path(os.getenv("AITF_ROOT_DIR", str(BASE_DIR)))
 UPLOAD_DIR = _ROOT / "uploads"

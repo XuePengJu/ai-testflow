@@ -19,6 +19,19 @@ PROVIDERS: dict[str, dict] = {
             {"id": "qwen-vl-max", "label": "qwen-vl-max · 图文最强", "vision": True},
         ],
     },
+    "modelscope": {
+        "label": "魔搭社区 · ModelScope 免费推理",
+        "base_url": "https://api-inference.modelscope.cn/v1",
+        "note": "注册即送每日2000次免费调用；需绑定阿里云+实名认证才开通推理额度",
+        "models": [
+            {"id": "Qwen/Qwen3.8-27B", "label": "Qwen3.8-27B · 最新代(思考默认开)", "vision": False},
+            {"id": "Qwen/Qwen3.8-Flash-Next", "label": "Qwen3.8-Flash-Next · 强Agent编码(激活6B)", "vision": False},
+            {"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct", "label": "Qwen3-Coder-30B · 轻量编码兜底", "vision": False},
+            {"id": "Qwen/Qwen3-VL-8B-Instruct", "label": "Qwen3-VL-8B · 图文理解", "vision": True},
+            {"id": "DeepSeek/DeepSeek-V4-Flash-0731", "label": "DeepSeek-V4-Flash · 备选", "vision": False},
+            {"id": "ZhipuAI/GLM-5.2", "label": "GLM-5.2 · 备选", "vision": False},
+        ],
+    },
     "zhipu": {
         "label": "智谱 GLM · API 按量",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",

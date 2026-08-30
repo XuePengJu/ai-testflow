@@ -59,7 +59,7 @@ class OpenAICompatClient:
         self.api_key = api_key
         self.model = model
 
-    def chat(self, messages: list, temperature: float = 0.3, max_tokens: int = 4096) -> str:
+    def chat(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192) -> str:
         data = _post_chat(self.base_url, self.api_key, {
             "model": self.model, "messages": messages,
             "temperature": temperature, "max_tokens": max_tokens,
@@ -76,6 +76,8 @@ class OpenAICompatClient:
                 )
             else:
                 content = str(content)
+        # 防御：部分厂商会把思考过程以 <think>...</think> 混入 content，去除避免污染生成结果
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
         return content
 
     def generate(self, prompt: str) -> str:
@@ -153,11 +155,23 @@ def resolve_effective(db: Session, user: User | None) -> dict:
             return _row_to_cfg(platform[slot], 0), "platform"
         return None, None
 
-    text_cfg, src = pick("text")
-    vision_cfg, vsrc = pick("vision")
-
-    # 服务器环境变量兜底（老部署 DASHSCOPE_API_KEY）：只补 text 槽
-    if text_cfg is None and config.DASHSCOPE_API_KEY:
+    # 生效优先级（方案3：魔搭 env 兜底 高于 平台默认 GLM）：
+    #   用户自配(user) > 魔搭 env 兜底 > 平台默认(DB, GLM) > 百炼 env 兜底 > mock
+    text_cfg, src = None, None
+    if "text" in own:
+        text_cfg, src = _row_to_cfg(own["text"], user.id), "user"
+    elif config.MODELSCOPE_API_KEY:
+        text_cfg = {
+            "provider": "modelscope",
+            "provider_label": provider_label("modelscope"),
+            "base_url": config.MODELSCOPE_BASE_URL,
+            "model": config.MODELSCOPE_MODEL,
+            "api_key": config.MODELSCOPE_API_KEY,
+        }
+        src = "env"
+    elif "text" in platform:
+        text_cfg, src = _row_to_cfg(platform["text"], 0), "platform"
+    elif config.DASHSCOPE_API_KEY:
         text_cfg = {
             "provider": "bailian",
             "provider_label": provider_label("bailian"),
@@ -166,6 +180,8 @@ def resolve_effective(db: Session, user: User | None) -> dict:
             "api_key": config.DASHSCOPE_API_KEY,
         }
         src = "env"
+
+    vision_cfg, vsrc = pick("vision")
 
     if text_cfg is None:
         return {"source": "mock", "text": None, "vision": None}

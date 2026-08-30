@@ -4,6 +4,7 @@
 """
 import pytest
 
+from app.core import config
 from app.core.db import SessionLocal
 from app.models.llm_config import LLMConfig
 from app.models.user import User
@@ -102,7 +103,10 @@ def test_invalid_slot_rejected(client, accounts):
 
 # ---------- 生效优先级：user > platform > mock ----------
 
-def test_effective_priority(client, accounts):
+def test_effective_priority(client, accounts, monkeypatch):
+    # 隔离服务器 env 兜底 key，确保下面只验证 user / platform 两层
+    monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "")
+    monkeypatch.setattr(config, "DASHSCOPE_API_KEY", "")
     tok = accounts["user"]["token"]
     # alice 已配 text（roundtrip 用例）
     client.put("/api/llm/config", headers=_h(tok), json={
@@ -139,6 +143,13 @@ def test_effective_priority(client, accounts):
     assert eff3["source"] == "platform"
     assert eff3["text"]["model"] == "glm-4.5"
     assert eff3["vision"]["model"] == "qwen-vl-plus"
+
+    # 方案3：魔搭 env 兜底应高于平台默认 GLM（GLM 仍保留，仅作魔搭缺失时的兜底）
+    monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "ms-test-dummy")
+    eff4 = client.get("/api/llm/effective", headers=_h(btok)).json()
+    assert eff4["source"] == "env"
+    assert eff4["text"]["provider"] == "modelscope"
+    assert eff4["text"]["model"] == config.MODELSCOPE_MODEL
 
 
 def test_platform_config_admin_only(client, accounts):
