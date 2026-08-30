@@ -8,4 +8,5 @@
 //        例：window.API_BASE = "https://ai-testflow-api.your-domain.com";
 //
 // 推荐（免备案方案）：把下面改成 Cloudflare 隧道给你的后端 HTTPS 地址。
-window.API_BASE = "";
+// 当前为 Cloudflare 快速隧道（临时地址，重连会变；稳定后替换为命名隧道/品牌域名）。
+window.API_BASE = "https://rom-realtors-banner-dom.trycloudflare.com";
