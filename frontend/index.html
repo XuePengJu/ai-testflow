@@ -519,8 +519,9 @@ function aesGcmDecrypt(keyB64,payloadB64){
 }
 
 </script>
+<script src="./config.js"></script>
 <script>
-const API="/api";
+const API=(window.API_BASE||"")+"/api";
 let kind="api";
 const fmts=new Set(["xlsx","json","xmind"]);
 let pendingFile=null, currentId=null, pollTimer=null;

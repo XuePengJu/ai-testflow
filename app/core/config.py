@@ -43,8 +43,8 @@ def jwt_secret_is_placeholder() -> bool:
 # 内置的用例生成核心库（已整合，使项目自包含、clone 即跑）
 GENERATOR_CORE_DIR = BASE_DIR / "generator_core"
 
-# 前端静态目录
-STATIC_DIR = BASE_DIR / "app" / "static"
+# 前端静态目录（前后端分离后，前端独立部署到 Vercel，这里仅作本地/同源兜底）
+STATIC_DIR = BASE_DIR / "frontend"
 
 
 def is_mock() -> bool:

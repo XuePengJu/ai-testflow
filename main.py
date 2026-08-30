@@ -7,6 +7,7 @@
 V2：认证 + 多用户（guest/user/admin）。反代部署时才开 --proxy-headers。
 """
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -39,9 +40,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI 测试工作流平台", version="0.2.0", lifespan=lifespan)
 
+# CORS：生产用 CORS_ORIGINS 环境变量限定前端域名（逗号分隔）；缺省 "*"（本地演示）
+_cors_raw = os.getenv("CORS_ORIGINS", "*").strip()
+_cors_origins = ["*"] if _cors_raw == "*" else [o.strip() for o in _cors_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
