@@ -39,6 +39,17 @@
   .mode-pill{font-size:12px;color:#7c3aed;background:var(--brand-soft);border:1px solid #ddd6fe;
              padding:5px 12px;border-radius:999px;font-weight:600;display:flex;align-items:center;gap:6px}
   .mode-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--brand2)}
+  .mode-pill.live .dot{background:#10b981}
+  .llm-slot{border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:14px;background:#fcfcfe}
+  .llm-slot h4{margin:0 0 4px;font-size:14px}
+  .llm-slot .sub{font-size:12px;color:var(--sub);margin-bottom:10px}
+  .llm-note{font-size:11px;color:var(--sub);margin-top:6px;line-height:1.6}
+  .llm-btnrow{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .llm-btnrow .submit{flex:1;padding:9px 0;font-size:13px}
+  .mini-btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text)}
+  .mini-btn:hover{border-color:var(--brand2);color:var(--brand2)}
+  .test-ok{color:#059669;font-weight:600}
+  .test-err{color:var(--fail);font-weight:600}
 
   /* ===== 布局 ===== */
   .wrap{max-width:1180px;margin:0 auto;padding:28px 24px 60px;display:grid;grid-template-columns:420px 1fr;gap:24px;align-items:start}
@@ -204,7 +215,8 @@
     </div>
     <div class="spacer"></div>
     <div class="idchip" id="identity"></div>
-    <div class="mode-pill" title="未配置百炼 API Key 时自动启用兜底生成"><span class="dot"></span>Mock 兜底模式</div>
+    <div class="mode-pill" id="modelPill" style="cursor:pointer" title="点击配置模型 API Key"
+         onclick="openLlm()"><span class="dot"></span><span id="modelPillText">加载中…</span></div>
   </div>
 </header>
 
@@ -256,7 +268,7 @@
       </div>
 
       <button class="submit" id="submitBtn" onclick="createTask()">🚀 提交并生成</button>
-      <div class="hint">无百炼 API Key 时自动走 <b>mock 兜底</b>，无需联网即可演示完整编排流程（解析 → 生成 → 校验 → 导出）。</div>
+      <div class="hint" id="submitHint">未配置模型 API Key 时自动走 <b>mock 兜底</b>，无需联网即可演示完整编排流程（解析 → 生成 → 校验 → 导出）。</div>
     </section>
   </div>
 
@@ -333,10 +345,27 @@
     <div id="profileInfo" style="background:#f8f9fc;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:16px;font-size:13px;line-height:2"></div>
     <div style="display:flex;flex-direction:column;gap:10px">
       <button class="submit" id="profilePwdBtn" onclick="closeProfile();openPwd()">修改密码</button>
+      <button class="submit" id="profileLlmBtn" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)" onclick="closeProfile();openLlm()">⚙ 模型配置（API Key）</button>
       <button class="submit" id="profileMgmtBtn" style="display:none;background:linear-gradient(135deg,#0ea5e9,#6366f1)" onclick="closeProfile();openMgmt()">👥 用户管理</button>
       <button class="guest-btn" onclick="switchAccount()">🔄 切换账户</button>
       <button class="danger-btn" onclick="logout()">退出登录</button>
     </div>
+  </div>
+</div>
+
+<!-- 模型配置（V2.4：双槽位 + 厂商预设 + 连通测试） -->
+<div class="overlay" id="llmOverlay">
+  <div class="drawer" style="max-width:600px">
+    <div class="drawer-head"><div style="flex:1"><h3>模型配置</h3></div>
+      <button class="close" onclick="closeLlm()" title="关闭">✕</button></div>
+    <div id="llmScopeRow" style="display:none;margin-bottom:14px">
+      <div class="seg" id="llmScopeSeg" style="display:flex">
+        <button data-scope="self" class="on" style="flex:1">我的配置</button>
+        <button data-scope="platform" style="flex:1">平台默认（未配置用户的兜底）</button>
+      </div>
+    </div>
+    <div id="llmSlots"></div>
+    <div class="auth-note">API Key 经 AES-256-GCM 加密落库，不回显明文 · 生效优先级：我的配置 &gt; 平台默认 &gt; 服务器环境变量 &gt; mock 兜底</div>
   </div>
 </div>
 
@@ -613,6 +642,7 @@ document.addEventListener("keydown",e=>{
   else if($("pwdOverlay").classList.contains("open"))closePwd();
   else if($("profileOverlay").classList.contains("open"))closeProfile();
   else if($("mgmtOverlay").classList.contains("open"))closeMgmt();
+  else if($("llmOverlay").classList.contains("open"))closeLlm();
 });
 
 /* ===== 修改密码（V2.2，后端 /api/auth/change-password 已有） ===== */
@@ -1035,8 +1065,149 @@ async function dl(id,fmt){
 }
 function closeDetail(){$("overlay").classList.remove("open");document.body.style.overflow='';clearTimeout(pollTimer);currentId=null;}
 
+/* ===== 模型配置（V2.4 FR-I）：双槽位 + 厂商预设 + 连通测试 ===== */
+let llmProviders={},llmEff=null,llmScope="self",llmCfgs={text:null,vision:null};
+
+async function loadLlmMeta(){
+  if(!token){renderModelPill();return;}
+  try{
+    const [pr,ef]=await Promise.all([
+      api(API+"/llm/providers").catch(()=>null),
+      api(API+"/llm/effective").catch(()=>null)
+    ]);
+    if(pr&&pr.ok)llmProviders=await pr.json();
+    if(ef&&ef.ok)llmEff=await ef.json();
+  }catch(e){}
+  renderModelPill();
+}
+
+function renderModelPill(){
+  const pill=$("modelPill"),txt=$("modelPillText"),hint=$("submitHint");
+  const srcLabel={user:"我的配置",platform:"平台默认",env:"服务器配置",mock:"mock 兜底"};
+  if(!token||!llmEff||llmEff.source==="mock"){
+    pill.classList.remove("live");
+    txt.textContent="Mock 兜底模式";
+    pill.title="未配置模型 API Key，点击去配置真实模型";
+    if(hint)hint.innerHTML=`当前 <b>mock 兜底</b>（未配置真实模型）· <a href="javascript:void(0)" style="color:var(--brand1)" onclick="openLlm()">配置 API Key 启用真实生成</a> · 未配置时无需联网即可演示完整编排流程。`;
+  }else{
+    pill.classList.add("live");
+    const t=llmEff.text,v=llmEff.vision;
+    txt.textContent=t?`${t.model} · ${String(t.provider_label||"").split(" ")[0]}`:"模型";
+    pill.title=`当前模型：${t?t.model:""}（${srcLabel[llmEff.source]||llmEff.source}）`;
+    if(hint)hint.innerHTML=`当前模型：<b>${esc(t.model)} · ${esc(t.provider_label)}</b>（${srcLabel[llmEff.source]||llmEff.source}）${v?` · 图像识别：<b>${esc(v.model)}</b>`:" · 未配置图像识别模型（配置后含截图文档可两段式解析）"} · <a href="javascript:void(0)" style="color:var(--brand1)" onclick="openLlm()">修改</a>`;
+  }
+}
+
+function openLlm(){
+  if(!token||!me){showToast("请先登录后配置模型");showAuth();return;}
+  if(me.role==="guest"){showToast("访客使用平台默认模型，注册后可配置自己的 API Key");return;}
+  llmScope="self";
+  $("llmScopeRow").style.display=(me.role==="admin")?"block":"none";
+  document.querySelectorAll('#llmScopeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.scope==='self'));
+  $("llmOverlay").classList.add("open");
+  loadLlmConfigs();
+}
+function closeLlm(){$("llmOverlay").classList.remove("open");}
+$("llmOverlay").addEventListener("click",e=>{if(e.target===$("llmOverlay"))closeLlm();});
+$("llmScopeSeg").addEventListener("click",e=>{const b=e.target.closest('button');if(!b)return;
+  document.querySelectorAll('#llmScopeSeg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  llmScope=b.dataset.scope;loadLlmConfigs();});
+
+function llmBase(){return llmScope==="platform"?API+"/llm/platform-config":API+"/llm/config";}
+
+async function loadLlmConfigs(){
+  const r=await api(llmBase()).catch(()=>null);
+  llmCfgs={text:null,vision:null};
+  if(r&&r.ok){(await r.json()).forEach(c=>{llmCfgs[c.slot]=c;});}
+  renderLlmSlots();
+}
+
+function renderLlmSlots(){
+  const el=$("llmSlots");
+  const mk=(slot)=>{
+    const c=llmCfgs[slot]||{};
+    const prov=c.provider||"bailian";
+    const p=llmProviders[prov]||{};
+    const models=(p.models||[]).map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
+    const isVis=slot==="vision";
+    return `<div class="llm-slot">
+      <h4>${isVis?"图像识别模型（可选）":"默认模型（文本）"}</h4>
+      <div class="sub">${isVis?"看截图/流程图 → 转成文字描述 → 交给默认模型（两段式视觉理解）":"生成测试用例的主力模型，选推理能力强的"}</div>
+      <div class="field"><label>厂商预设（选中后只需填 API Key）</label>
+        <select id="llmProv-${slot}" onchange="llmProvChange('${slot}')">
+          ${Object.entries(llmProviders).map(([k,v])=>`<option value="${k}" ${k===prov?"selected":""}>${esc(v.label)}</option>`).join("")}
+        </select></div>
+      <div class="field"><label>Base URL（预设自动带出，可改）</label>
+        <input type="text" id="llmUrl-${slot}" value="${esc(c.base_url||p.base_url||"")}" placeholder="https://example.com/v1"></div>
+      <div class="field"><label>模型${isVis?"（需支持图像输入）":""}</label>
+        <input type="text" id="llmModel-${slot}" list="llmModels-${slot}" value="${esc(c.model||"")}" placeholder="${isVis?"qwen-vl-plus":"qwen-plus"}">
+        <datalist id="llmModels-${slot}">${models}</datalist></div>
+      <div class="field"><label>API Key${c.api_key_masked?`（已保存 ${esc(c.api_key_masked)}，留空则保留）`:""}</label>
+        <input type="password" id="llmKey-${slot}" placeholder="sk-..." autocomplete="new-password"></div>
+      <div id="llmTest-${slot}" class="llm-note"></div>
+      <div class="llm-btnrow">
+        <button class="submit" style="background:linear-gradient(135deg,#6366f1,#8b5cf6)" onclick="llmSave('${slot}')">保存</button>
+        <button class="mini-btn" onclick="llmTest('${slot}')">⚡ 测试连通</button>
+        <button class="mini-btn" onclick="llmClear('${slot}')">清除</button>
+      </div>
+      <div class="llm-note">${p.note?esc(p.note)+" · ":""}${isVis?"未配置时含图片的文档会忽略截图，按纯文字处理":"配置图像识别模型后可解析技术文档里的截图"}</div>
+    </div>`;
+  };
+  el.innerHTML=mk("text")+mk("vision");
+}
+
+function llmProvChange(slot){
+  const p=llmProviders[$("llmProv-"+slot).value]||{};
+  $("llmUrl-"+slot).value=p.base_url||"";
+  if(p.models&&p.models.length){
+    const pick=slot==="vision"?(p.models.find(m=>m.vision)||p.models[0]):p.models[0];
+    $("llmModel-"+slot).value=pick.id;
+  }
+  const note=$("llmTest-"+slot);if(note)note.textContent="";
+}
+
+async function llmSave(slot){
+  const provider=$("llmProv-"+slot).value;
+  const base_url=$("llmUrl-"+slot).value.trim();
+  const model=$("llmModel-"+slot).value.trim();
+  const key=$("llmKey-"+slot).value.trim();
+  if(!base_url||!model){showToast("Base URL 与模型不能为空");return;}
+  if(slot==="text"&&!key&&!(llmCfgs[slot]&&llmCfgs[slot].api_key_masked)){
+    showToast("默认模型必须填写 API Key");return;
+  }
+  const body={slot,provider,base_url,model};
+  if(key)body.api_key=key;   // 留空 = 保留已保存的 Key
+  const r=await api(llmBase(),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){showToast("已保存");$("llmKey-"+slot).value="";loadLlmConfigs();loadLlmMeta();}
+  else showToast(d.detail||("保存失败："+r.status));
+}
+
+async function llmTest(slot){
+  const box=$("llmTest-"+slot);
+  box.textContent="测试中…";
+  const body={provider:$("llmProv-"+slot).value,
+    base_url:$("llmUrl-"+slot).value.trim(),model:$("llmModel-"+slot).value.trim(),
+    api_key:$("llmKey-"+slot).value.trim()};
+  if(!body.base_url||!body.model){box.innerHTML='<span class="test-err">Base URL 与模型不能为空</span>';return;}
+  const r=await api(API+"/llm/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){box.innerHTML=`<span class="test-err">${esc(d.detail||("失败："+r.status))}</span>`;return;}
+  box.innerHTML=d.ok
+    ?`<span class="test-ok">✓ 连通正常（${d.latency_ms}ms）：${esc(String(d.reply||"").slice(0,40))}</span>`
+    :`<span class="test-err">✗ ${esc(d.error)}</span>`;
+}
+
+async function llmClear(slot){
+  if(!confirm(`清除${slot==="vision"?"图像识别模型":"默认模型"}配置？`))return;
+  const r=await api(`${llmBase()}/${slot}`,{method:"DELETE"});
+  if(r.ok){showToast("已清除");loadLlmConfigs();loadLlmMeta();}
+  else showToast("清除失败");
+}
+
 setInterval(loadTasks,4000);
 refreshMe();
+loadLlmMeta();
 loadTasks();
 </script>
 </body>

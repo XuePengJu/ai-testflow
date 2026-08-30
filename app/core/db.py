@@ -18,6 +18,7 @@ def init_db() -> None:
     import app.models.task  # noqa: F401  确保模型注册到 Base
     import app.models.user  # noqa: F401
     import app.models.category  # noqa: F401
+    import app.models.llm_config  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
 

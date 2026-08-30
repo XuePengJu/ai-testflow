@@ -33,9 +33,9 @@ def lib_parse(kind: str, input_path: str) -> list[RequirementUnit]:
     return parse_markdown(input_path)
 
 
-def lib_generate(units: list[RequirementUnit]) -> list[TestCase]:
-    """按策略生成测试用例（无 Key 自动走 mock 兜底）。"""
-    return CaseGenerator().generate(units)
+def lib_generate(units: list[RequirementUnit], client=None) -> list[TestCase]:
+    """按策略生成测试用例。client=平台注入的真实模型（V2.4）；None → mock/dashscope 兜底。"""
+    return CaseGenerator(client=client).generate(units)
 
 
 def lib_export(cases: list[TestCase], output_path: str, formats: list[str]) -> dict:

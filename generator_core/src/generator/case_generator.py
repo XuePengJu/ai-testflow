@@ -8,7 +8,10 @@ from src.generator.mock_generator import mock_generate
 
 
 class CaseGenerator:
-    def __init__(self):
+    def __init__(self, client=None):
+        """client：平台注入的 LLM 客户端（V2.4，OpenAI 兼容）。
+        注入时优先使用；否则回退旧逻辑（dashscope SDK / mock）。"""
+        self.injected = client
         self.use_mock = settings.is_mock()
         self.client = None if self.use_mock else BailianClient()
 
@@ -61,6 +64,11 @@ class CaseGenerator:
         return out
 
     def generate_for_unit(self, unit: RequirementUnit) -> list[TestCase]:
+        if self.injected is not None:
+            # 平台注入的真实模型（V2.4）：OpenAI 兼容调用
+            prompt = self._build_prompt(unit)
+            text = self.injected.generate(prompt)
+            return self._parse_llm(text)
         if self.use_mock or self.client is None:
             return mock_generate(unit)
         prompt = self._build_prompt(unit)
