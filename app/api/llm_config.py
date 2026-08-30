@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.db import get_db
-from app.core.providers import PROVIDERS, is_provider
+from app.core.providers import PROVIDERS, is_provider, FREE_PROVIDERS
 from app.models.llm_config import LLMConfig
 from app.models.user import User
 from app.schemas.llm_config import LLMConfigIn, LLMConfigOut, LLMTestIn
@@ -102,7 +102,9 @@ def put_config(body: LLMConfigIn,
         raise HTTPException(403, detail="访客使用平台默认模型，注册后可配置自己的 API Key")
     row = _upsert(db, user.id, body)
     if body.slot == "text" and not row.api_key_enc:
-        raise HTTPException(400, detail="默认文本模型必须配置 API Key")
+        # 免费厂商且服务端已配 Key → 允许不填 Key（平台提供）
+        if not (body.provider in FREE_PROVIDERS and llm_service._server_key(body.provider)):
+            raise HTTPException(400, detail="默认文本模型必须配置 API Key（免费模型由平台提供时可不填）")
     return _to_out(row)
 
 
@@ -134,7 +136,9 @@ def put_platform(body: LLMConfigIn,
                  admin: User = Depends(require_admin)):
     row = _upsert(db, 0, body)
     if body.slot == "text" and not row.api_key_enc:
-        raise HTTPException(400, detail="平台默认文本模型必须配置 API Key")
+        # 免费厂商且服务端已配 Key → 允许不填 Key（平台提供）
+        if not (body.provider in FREE_PROVIDERS and llm_service._server_key(body.provider)):
+            raise HTTPException(400, detail="平台默认文本模型必须配置 API Key（免费模型由平台提供时可不填）")
     return _to_out(row)
 
 

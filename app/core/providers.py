@@ -97,6 +97,11 @@ PROVIDERS: dict[str, dict] = {
 }
 
 
+# 免费厂商：平台/用户可"只选模型、不填 Key"，由服务端环境变量 Key 兜底
+# （modelscope → MODELSCOPE_API_KEY；zhipu/zhipu_coding → ZHIPU_API_KEY）
+FREE_PROVIDERS = {"modelscope", "zhipu", "zhipu_coding"}
+
+
 def provider_label(provider: str) -> str:
     p = PROVIDERS.get(provider)
     return p["label"] if p else (provider or "自定义")

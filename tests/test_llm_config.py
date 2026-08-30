@@ -95,6 +95,39 @@ def test_text_slot_requires_key(client, accounts, db_session):
     assert r.status_code == 400 and "API Key" in r.json()["detail"]
 
 
+def test_free_provider_no_key_allowed(client, accounts, db_session, monkeypatch):
+    """免费厂商(魔搭)允许不填 API Key，保存后 effective 解析出服务端 Key 可用。"""
+    monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "ms-test-dummy")
+    monkeypatch.setattr(config, "DASHSCOPE_API_KEY", "")
+    tok = accounts["user"]["token"]
+    u = _alice(db_session)
+    db_session.query(LLMConfig).filter(LLMConfig.user_id == u.id).delete()
+    db_session.commit()
+    # 个人配置选魔搭免费模型，不传 api_key → 应放行（200）
+    r = client.put("/api/llm/config", headers=_h(tok), json={
+        "slot": "text", "provider": "modelscope",
+        "base_url": config.MODELSCOPE_BASE_URL, "model": config.MODELSCOPE_MODEL})
+    assert r.status_code == 200, r.text
+    eff = client.get("/api/llm/effective", headers=_h(tok)).json()
+    assert eff["source"] == "user"
+    assert eff["text"]["provider"] == "modelscope"
+    assert eff["text"]["model"] == config.MODELSCOPE_MODEL
+    assert "api_key" not in eff["text"]      # 对外视图无 Key
+
+
+def test_free_provider_no_server_key_rejected(client, accounts, db_session, monkeypatch):
+    """免费厂商但服务端未配 Key 时，空 Key 仍被拒绝（避免静默不可用）。"""
+    monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "")
+    tok = accounts["user"]["token"]
+    u = _alice(db_session)
+    db_session.query(LLMConfig).filter(LLMConfig.user_id == u.id).delete()
+    db_session.commit()
+    r = client.put("/api/llm/config", headers=_h(tok), json={
+        "slot": "text", "provider": "modelscope",
+        "base_url": config.MODELSCOPE_BASE_URL, "model": config.MODELSCOPE_MODEL})
+    assert r.status_code == 400 and "API Key" in r.json()["detail"]
+
+
 def test_invalid_slot_rejected(client, accounts):
     r = client.put("/api/llm/config", headers=_h(accounts["user"]["token"]), json={
         "slot": "foo", "provider": "bailian", "base_url": _URL, "model": "m"})
@@ -144,10 +177,14 @@ def test_effective_priority(client, accounts, monkeypatch):
     assert eff3["text"]["model"] == "glm-4.5"
     assert eff3["vision"]["model"] == "qwen-vl-plus"
 
-    # 方案3：魔搭 env 兜底应高于平台默认 GLM（GLM 仍保留，仅作魔搭缺失时的兜底）
+    # 平台默认对免费厂商(魔搭)允许不填 Key，解析时由服务端 Key 兜底；
+    # 平台默认成为模型选择的唯一权威来源（徽标与模型管理页一致）
     monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "ms-test-dummy")
+    client.put("/api/llm/platform-config", headers=_h(atok), json={
+        "slot": "text", "provider": "modelscope",
+        "base_url": config.MODELSCOPE_BASE_URL, "model": config.MODELSCOPE_MODEL})
     eff4 = client.get("/api/llm/effective", headers=_h(btok)).json()
-    assert eff4["source"] == "env"
+    assert eff4["source"] == "platform"
     assert eff4["text"]["provider"] == "modelscope"
     assert eff4["text"]["model"] == config.MODELSCOPE_MODEL
 

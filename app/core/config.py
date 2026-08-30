@@ -23,6 +23,10 @@ MODELSCOPE_API_KEY = os.getenv("MODELSCOPE_API_KEY", "")
 MODELSCOPE_BASE_URL = os.getenv("MODELSCOPE_BASE_URL", "https://api-inference.modelscope.cn/v1")
 MODELSCOPE_MODEL = os.getenv("MODELSCOPE_MODEL", "Qwen/Qwen3.8-27B")
 
+# 智谱 GLM 免费模型服务端 Key（glm-4.7-flash / glm-4.6v-flash 等长期免费）
+# 平台默认选 GLM 免费模型时，由本环境变量兜底，无需在界面填写 Key
+ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY", "")
+
 # 路径支持环境变量覆盖（测试隔离：AITF_ROOT_DIR 指向临时目录，避免污染真实数据）
 _ROOT = Path(os.getenv("AITF_ROOT_DIR", str(BASE_DIR)))
 UPLOAD_DIR = _ROOT / "uploads"

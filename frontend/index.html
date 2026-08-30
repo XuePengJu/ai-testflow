@@ -368,7 +368,7 @@
       </div>
     </div>
     <div id="llmSlots"></div>
-    <div class="auth-note">API Key 经 AES-256-GCM 加密落库，不回显明文 · 生效优先级：我的配置 &gt; 平台默认 &gt; 服务器环境变量 &gt; mock 兜底</div>
+    <div class="auth-note">API Key 经 AES-256-GCM 加密落库，不回显明文 · 平台默认下的免费模型由平台提供，无需填写密钥 · 生效优先级：我的配置 &gt; 平台默认（免费模型）&gt; 百炼环境变量 &gt; mock 兜底</div>
   </div>
 </div>
 
@@ -1104,11 +1104,16 @@ function renderModelPill(){
 function openLlm(){
   if(!token||!me){showToast("请先登录后配置模型");showAuth();return;}
   if(me.role==="guest"){showToast("访客使用平台默认模型，注册后可配置自己的 API Key");return;}
-  llmScope="self";
   $("llmScopeRow").style.display=(me.role==="admin")?"block":"none";
-  document.querySelectorAll('#llmScopeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.scope==='self'));
   $("llmOverlay").classList.add("open");
-  loadLlmConfigs();
+  // 默认 tab：未配置个人模型 → 平台默认（免费模型选择器）；否则我的配置
+  (async()=>{
+    let selfHas=false;
+    try{const r=await api(API+"/llm/config");if(r.ok){(await r.json()).forEach(c=>{if(c.slot==="text")selfHas=true;});}}catch(e){}
+    llmScope=(me.role==="admin"&&!selfHas)?"platform":"self";
+    document.querySelectorAll('#llmScopeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.scope===llmScope));
+    loadLlmConfigs();
+  })();
 }
 function closeLlm(){$("llmOverlay").classList.remove("open");}
 $("llmOverlay").addEventListener("click",e=>{if(e.target===$("llmOverlay"))closeLlm();});
@@ -1127,6 +1132,10 @@ async function loadLlmConfigs(){
 
 function renderLlmSlots(){
   const el=$("llmSlots");
+  if(llmScope==="platform"){
+    el.innerHTML=renderPlatformFree();
+    return;
+  }
   const mk=(slot)=>{
     const c=llmCfgs[slot]||{};
     const prov=c.provider||"bailian";
@@ -1157,6 +1166,52 @@ function renderLlmSlots(){
     </div>`;
   };
   el.innerHTML=mk("text")+mk("vision");
+}
+
+/* 平台默认：免费模型选择器（只选模型，不暴露 API Key / Base URL） */
+function freeModels(slot){
+  const vis=slot==="vision";
+  const out=[];
+  for(const pk of ["modelscope","zhipu"]){
+    const p=llmProviders[pk]; if(!p)continue;
+    (p.models||[]).forEach(m=>{
+      const isVis=!!m.vision;
+      if(vis?isVis:!isVis) out.push({provider:pk, model:m.id, label:`${p.label.split(" ")[0]} · ${m.label}`});
+    });
+  }
+  return out;
+}
+function renderPlatformFree(){
+  const card=(slot)=>{
+    const isVis=slot==="vision";
+    const opts=freeModels(slot);
+    const cur=llmCfgs[slot]||{};
+    const sel=opts.find(o=>o.provider===cur.provider&&o.model===cur.model);
+    const val=(sel?`${sel.provider}::${sel.model}`:(opts[0]?`${opts[0].provider}::${opts[0].model}`:""));
+    return `<div class="llm-slot">
+      <h4>${isVis?"多模态模型（图文 / 视觉）":"文本模型（默认）"}</h4>
+      <div class="sub">${isVis?"用于解析技术文档里的截图/流程图（两段式视觉理解）":"生成测试用例的主力模型，推荐推理强的"}</div>
+      <div class="field"><label>选择平台免费模型</label>
+        <select id="llmFree-${slot}">
+          ${opts.map(o=>`<option value="${o.provider}::${esc(o.model)}" ${(`${o.provider}::${o.model}`)===val?"selected":""}>${esc(o.label)}</option>`).join("")}
+        </select></div>
+      <div class="llm-btnrow">
+        <button class="submit" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)" onclick="llmSaveFree('${slot}')">保存${isVis?"视觉":"文本"}模型</button>
+      </div>
+      <div class="llm-note">${isVis?"未配置时含图片的文档按纯文字处理":"由平台免费额度提供，无需填写任何密钥"}</div>
+    </div>`;
+  };
+  return `<div class="auth-note">以下模型由平台免费提供，直接选择即可，无需填写 API Key 或 Base URL。</div>`+card("text")+card("vision");
+}
+async function llmSaveFree(slot){
+  const sel=$("llmFree-"+slot); if(!sel||!sel.value){showToast("请先选择模型");return;}
+  const [provider,model]=sel.value.split("::");
+  const p=llmProviders[provider]||{};
+  const body={slot, provider, base_url:p.base_url||"", model, api_key:""};
+  const r=await api(llmBase(),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){showToast("已保存（平台免费模型）");loadLlmConfigs();loadLlmMeta();}
+  else showToast(d.detail||("保存失败："+r.status));
 }
 
 function llmProvChange(slot){

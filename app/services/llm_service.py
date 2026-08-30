@@ -12,7 +12,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.core import config, crypto
-from app.core.providers import provider_label
+from app.core.providers import provider_label, FREE_PROVIDERS
 from app.models.llm_config import LLMConfig
 from app.models.user import User
 
@@ -120,6 +120,19 @@ def mask_key(api_key: str) -> str:
     return f"****{tail}"
 
 
+def _server_key(provider: str) -> str:
+    """免费厂商(modelscope / zhipu)的服务端兜底 Key。
+
+    平台默认或个人配置选择免费模型且未填 Key 时，由平台环境变量提供 Key，
+    界面无需暴露密钥。
+    """
+    if provider == "modelscope":
+        return config.MODELSCOPE_API_KEY
+    if provider in ("zhipu", "zhipu_coding"):
+        return config.ZHIPU_API_KEY
+    return ""
+
+
 # ============ 生效配置解析 ============
 
 def _row_to_cfg(row: LLMConfig, owner_id: int) -> dict:
@@ -127,6 +140,9 @@ def _row_to_cfg(row: LLMConfig, owner_id: int) -> dict:
         api_key = decrypt_key(row.api_key_enc, owner_id) if row.api_key_enc else ""
     except ValueError:
         api_key = ""   # JWT_SECRET 变更等导致解不开 → 视为无 Key
+    # 免费厂商且未存 Key → 由服务端环境变量兜底（界面不暴露密钥）
+    if not api_key and row.provider in FREE_PROVIDERS:
+        api_key = _server_key(row.provider)
     return {
         "provider": row.provider,
         "provider_label": provider_label(row.provider),
@@ -139,8 +155,13 @@ def _row_to_cfg(row: LLMConfig, owner_id: int) -> dict:
 def resolve_effective(db: Session, user: User | None) -> dict:
     """返回 {"source", "text", "vision"}。
 
-    source: user（用户自配） / platform（admin 平台默认） / env（服务器 .env 兜底） / mock
+    source: user（用户自配） / platform（admin 平台默认） / env（百炼 .env 兜底） / mock
     text / vision: None 表示该槽位不可用（text 为 None → mock 生成）。
+
+    生效优先级：
+        用户自配(user) > 平台默认(platform，免费厂商由服务端 Key 兜底) > 百炼 env > mock
+    平台默认对免费厂商(魔搭 / GLM)可不填 Key，解析时由服务端环境变量补全，
+    因此"平台默认"是模型选择的唯一权威来源，徽标与模型管理页展示完全一致。
     """
     if user is not None:
         own = {r.slot: r for r in db.query(LLMConfig).filter(LLMConfig.user_id == user.id).all()}
@@ -155,20 +176,10 @@ def resolve_effective(db: Session, user: User | None) -> dict:
             return _row_to_cfg(platform[slot], 0), "platform"
         return None, None
 
-    # 生效优先级（方案3：魔搭 env 兜底 高于 平台默认 GLM）：
-    #   用户自配(user) > 魔搭 env 兜底 > 平台默认(DB, GLM) > 百炼 env 兜底 > mock
+    # 文本槽优先级：用户自配 > 平台默认 > 百炼 env 兜底
     text_cfg, src = None, None
     if "text" in own:
         text_cfg, src = _row_to_cfg(own["text"], user.id), "user"
-    elif config.MODELSCOPE_API_KEY:
-        text_cfg = {
-            "provider": "modelscope",
-            "provider_label": provider_label("modelscope"),
-            "base_url": config.MODELSCOPE_BASE_URL,
-            "model": config.MODELSCOPE_MODEL,
-            "api_key": config.MODELSCOPE_API_KEY,
-        }
-        src = "env"
     elif "text" in platform:
         text_cfg, src = _row_to_cfg(platform["text"], 0), "platform"
     elif config.DASHSCOPE_API_KEY:
@@ -186,7 +197,7 @@ def resolve_effective(db: Session, user: User | None) -> dict:
     if text_cfg is None:
         return {"source": "mock", "text": None, "vision": None}
 
-    # text 槽有 Key 才真正可用
+    # text 槽有 Key 才真正可用（免费厂商已由服务端 Key 兜底）
     if not text_cfg.get("api_key"):
         return {"source": "mock", "text": None, "vision": None}
 
