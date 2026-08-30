@@ -2,8 +2,8 @@
 
 | 文档信息 | |
 |---|---|
-| 文档版本 | v2.3 |
-| 状态 | 已发布（V2.3 已上线，V2.4 规划中） |
+| 文档版本 | v2.4 |
+| 状态 | 已发布（V2.3 已上线；V2.4 模型接入配置开发中） |
 | 关联文档 | 《项目1-工作流平台-MVP执行方案.md》（技术实现方案，本文档只写"做什么"，不写"怎么做"） |
 | 更新日期 | 2026-08-29 |
 
@@ -171,6 +171,30 @@
 - **点击过滤**：点击分类节点只显示该分类及全部子孙分类下的任务，可一键回到全部
 - **数据隔离**：每个用户独立的分类树（访客亦然），不可见/不可改/不可归他人分类
 
+### FR-I 模型接入配置（多厂商 LLM Provider）【V2.4 规划】
+
+> 解决「平台只能 mock 跑」的问题：让每个用户都能在界面上配置自己的大模型 API Key，真实调用 LLM 生成用例。
+
+- **厂商预设（选即用）**：内置主流大厂的 OpenAI 兼容端点，选中预设后**只需填 API Key，无需手动配 Base URL**：
+
+  | 厂商预设 | Base URL（自动带出） | 典型模型 | 备注 |
+  |---|---|---|---|
+  | 阿里百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | qwen-plus / qwen-max / qwen-turbo | Token 包同端点 |
+  | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | glm-4.5 / glm-4-flash | 另含 **Coding Plan 专用端点** `/api/coding/paas/v4` 可选 |
+  | 腾讯混元 | `https://api.hunyuan.cloud.tencent.com/v1` | hunyuan-turbos / hunyuan-lite | |
+  | DeepSeek | `https://api.deepseek.com/v1` | deepseek-chat / deepseek-reasoner | |
+  | Kimi（月之暗面） | `https://api.moonshot.cn/v1` | kimi-k2 系列 | |
+  | 豆包（火山方舟） | `https://ark.cn-beijing.volces.com/api/v3` | 按接入点 ID 填 | |
+  | 自定义 | 用户自填 | 任意 | 任何 OpenAI 兼容端点 |
+
+  > 套餐说明：各家的 token 包 / Coding Plan 不改变接入方式——同一套 API、不同计费的 Key；仅智谱 Coding Plan 使用专用端点，已做成预设选项。
+
+- **配置入口**：顶栏「设置」→「模型配置」。**每个用户独立配置**（Key 自管、用量隔离、互不可见）；admin 可额外设置**平台默认配置**（对未配置的用户生效）。
+- **配置项**：厂商预设 / Base URL（预设自动带出、可改）/ API Key / 模型名 / （可选）温度；提供「测试连通」按钮（发一条最小请求验证 Key 有效性）。
+- **Key 安全**：API Key 以 AES-256-GCM 加密落库（复用 FR-G 加密体系）；接口回显一律脱敏（`sk-****abcd`）；日志不落 Key。
+- **生效优先级**：用户自己的配置 > admin 平台默认 > mock 兜底。任务提交区常驻显示当前生效模型（如「qwen-plus · 阿里百炼」或「mock 模式（未配置）」）。
+- **协议**：统一走 **OpenAI 兼容协议**（`POST /chat/completions`）；现有 dashscope SDK 原生调用改造为 HTTP 直连（去除 SDK 依赖，一个 client 通吃所有厂商）。Anthropic（Claude 系）messages 协议如需支持另加 adapter，列为可选二期。
+
 ---
 
 ## 4. 非功能需求
@@ -194,8 +218,9 @@
 | V2.1 | API 分级流量加密（AES-256-GCM）+ 前端登录/注册/游客三入口 | ✅ 已上线 |
 | **V2.2** | **个人中心（FR-A6）+ 修改密码（FR-A5）+ 切换账户（FR-A7）+ 用户管理面板（FR-F 前端）+ 访客定向/批量清理 + PRD 文档独立** | ✅ 已上线 |
 | **V2.3** | **任务多级分类 + 自由拖拽归类（FR-H）** | ✅ 已上线 |
-| V2.4（规划） | React + TS 前端重写（当前为原生 HTML 过渡版） | 📋 规划 |
-| V2.5（规划） | 定时执行 + Allure 报告 + 部署阿里云在线演示 | 📋 规划 |
+| **V2.4（开发中）** | **模型接入配置（FR-I）：多厂商预设（百炼/智谱/混元/DeepSeek/Kimi/豆包）+ 用户级 API Key 管理 + 真实 LLM 调用（OpenAI 兼容协议）** | 🚧 开发中 |
+| V2.5（规划） | React + TS 前端重写（当前为原生 HTML 过渡版） | 📋 规划 |
+| V2.6（规划） | 定时执行 + Allure 报告 + 部署阿里云在线演示 | 📋 规划 |
 
 ---
 
