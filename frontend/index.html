@@ -944,7 +944,7 @@ function renderCatTree(){
   el.innerHTML=
     row('all','🗂️','全部任务',lastTasks.length,0)+
     row('none','📥','未分类',noneCount,0)+
-    sorted.map(c=>row(c.id,'📂',esc(c.name),c.task_count,catDepth(c)+1,
+    sorted.map(c=>row(c.id,'📂',esc(c.name),c.task_count,catDepth(c),
       `<button title="新建子分类" onclick="event.stopPropagation();newCat(${c.id})">＋</button>`+
       `<button title="重命名" onclick="event.stopPropagation();renameCat(${c.id},'${esc(c.name).replace(/'/g,"\\'")}')">✎</button>`+
       `<button title="删除分类" onclick="event.stopPropagation();delCat(${c.id})">🗑</button>`)).join('');
@@ -966,9 +966,11 @@ function bindCatDnD(){
           headers:{"Content-Type":"application/json"},body:JSON.stringify({category_id:cid})});
         if(rr.ok){showToast('已归类');loadTasks();}else showToast('归类失败');
       }else if(d.type==='cat'){
-        if(target==='all'||target==='none'||Number(target)===d.id)return;
+        if(target==='all'||Number(target)===d.id)return;
+        // 拖到"未分类"= 移到顶级（parent_id=null）；拖到其他分类 = 变为其子级
+        const npid=target==='none'?null:Number(target);
         const rr=await api(`${API}/categories/${d.id}`,{method:'PATCH',
-          headers:{"Content-Type":"application/json"},body:JSON.stringify({parent_id:Number(target)})});
+          headers:{"Content-Type":"application/json"},body:JSON.stringify({parent_id:npid})});
         const dd=await rr.json().catch(()=>({}));
         if(rr.ok){showToast('分类已移动');loadCats();}else showToast(dd.detail||'移动失败');
       }
