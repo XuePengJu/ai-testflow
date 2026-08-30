@@ -22,11 +22,12 @@ PROVIDERS: dict[str, dict] = {
     "zhipu": {
         "label": "智谱 GLM · API 按量",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "note": "普通 API Key（按量计费）",
+        "note": "普通 API Key（按量计费）；glm-4.7-flash / glm-4.6v-flash 长期免费",
         "models": [
-            {"id": "glm-4.5", "label": "glm-4.5", "vision": False},
+            {"id": "glm-4.7-flash", "label": "glm-4.7-flash · 免费主力(200K)", "vision": False},
+            {"id": "glm-4.5-flash", "label": "glm-4.5-flash · 免费", "vision": False},
             {"id": "glm-4.5-air", "label": "glm-4.5-air · 轻量", "vision": False},
-            {"id": "glm-4v-plus", "label": "glm-4v-plus · 图文理解", "vision": True},
+            {"id": "glm-4.6v-flash", "label": "glm-4.6v-flash · 免费视觉(图/视频)", "vision": True},
         ],
     },
     "zhipu_coding": {
