@@ -47,8 +47,17 @@ def _upsert(db: Session, owner_id: int, body: LLMConfigIn) -> LLMConfig:
     row.base_url = body.base_url.strip()
     row.model = body.model.strip()
 
-    if body.api_key is None:
-        pass                          # 未提供 → 保留原 Key
+    if body.provider in FREE_PROVIDERS:
+        # 免费厂商：以服务端环境变量 Key 为准；仅当用户显式提供 Key 时才存自定义 Key
+        if body.api_key is not None and body.api_key.strip():
+            k = body.api_key.strip()
+            row.api_key_enc = llm_service.encrypt_key(k, owner_id)
+            row.api_key_tail = k[-4:] if len(k) > 4 else "****"
+        else:
+            row.api_key_enc = ""      # 清空旧 Key，解析时由服务端 Key 兜底
+            row.api_key_tail = ""
+    elif body.api_key is None:
+        pass                          # 非免费厂商未提供 → 保留原 Key
     elif body.api_key.strip() == "":
         row.api_key_enc = ""          # 显式传空 → 清除
         row.api_key_tail = ""

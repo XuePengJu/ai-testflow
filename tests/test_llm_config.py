@@ -128,6 +128,29 @@ def test_free_provider_no_server_key_rejected(client, accounts, db_session, monk
     assert r.status_code == 400 and "API Key" in r.json()["detail"]
 
 
+def test_free_provider_switch_clears_old_key(client, accounts, db_session, monkeypatch):
+    """切换到免费厂商(不传 Key)应清空原厂商残留 Key，避免 provider 与 Key 不匹配。"""
+    monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "ms-test-dummy")
+    monkeypatch.setattr(config, "DASHSCOPE_API_KEY", "")
+    tok = accounts["user"]["token"]
+    u = _alice(db_session)
+    # 先存一个非免费厂商(bailian)带 Key
+    client.put("/api/llm/config", headers=_h(tok), json={
+        "slot": "text", "provider": "bailian", "base_url": _URL,
+        "model": "qwen-plus", "api_key": "sk-old-9999"})
+    # 切换到魔搭免费模型，不传 Key
+    r = client.put("/api/llm/config", headers=_h(tok), json={
+        "slot": "text", "provider": "modelscope",
+        "base_url": config.MODELSCOPE_BASE_URL, "model": config.MODELSCOPE_MODEL})
+    assert r.status_code == 200, r.text
+    row = db_session.query(LLMConfig).filter(
+        LLMConfig.user_id == u.id, LLMConfig.slot == "text").first()
+    assert row.provider == "modelscope"
+    assert row.api_key_enc == ""      # 旧 bailian Key 已清空
+    eff = client.get("/api/llm/effective", headers=_h(tok)).json()
+    assert eff["text"]["provider"] == "modelscope"
+
+
 def test_invalid_slot_rejected(client, accounts):
     r = client.put("/api/llm/config", headers=_h(accounts["user"]["token"]), json={
         "slot": "foo", "provider": "bailian", "base_url": _URL, "model": "m"})
