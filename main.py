@@ -73,6 +73,17 @@ def index():
     return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
 
 
+@app.get("/config.js")
+def config_js():
+    """前端 API 基址配置（本地同源伺服，避免 404 导致 API_BASE 缺失）"""
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse(
+        (STATIC_DIR / "config.js").read_text(encoding="utf-8"),
+        media_type="application/javascript",
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
 
