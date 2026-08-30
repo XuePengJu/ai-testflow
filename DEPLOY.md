@@ -13,14 +13,17 @@
 
 ---
 
-## 当前状态（2026-08-30）
+## 当前状态（2026-08-30 已落地）
 
-- 后端已上线阿里云并 `active`：`/health` 正常。
-- 后端经 **Cloudflare 快速隧道**（免登录、临时地址）暴露为公网 HTTPS：
-  `https://rom-realtors-banner-dom.trycloudflare.com`
-  - 验证：`/health` → `{"status":"ok"}`，`/docs` → 200，CORS 预检 `allow-origin: *`。
-  - ⚠️ 快速隧道为 account-less、无 SLA，**进程重启后地址会变**。稳定方案见「二-3 命名隧道 + 品牌域名」，上线后只需改 `frontend/config.js` 一行。
-- 前端 `config.js` 已指向上述隧道地址并推送 GitHub；在 Vercel 导入仓库即可完成部署（见「一」）。
+- 前端：Vercel 部署 `ai-testflow`，默认域 `ai-testflow.vercel.app`，品牌域 `ai.clickscope.in`（Cloudflare 灰云指 `cname.vercel-dns.com`）。
+- 后端：已上线阿里云并 `active`（`systemctl is-active ai-testflow` → active）。
+- 后端经 **Cloudflare 命名隧道** `ai-testflow` 暴露为稳定品牌 HTTPS 子域名：
+  `https://api.clickscope.in`
+  - 隧道配置文件 `/root/.cloudflared/config.yml`（ingress: `api.clickscope.in` → `http://localhost:8000`）。
+  - systemd 服务 `cloudflared` 常驻（`enable` 并 `active`），重启不变地址。
+  - 验证：`/health` → `{"status":"ok"}`，`/docs` → 200。
+- 前端 `config.js` 的 `window.API_BASE = "https://api.clickscope.in"`，后端 `CORS_ORIGINS = https://ai.clickscope.in,https://ai-testflow.vercel.app`。
+- 临时的快速隧道（`rom-realtors-banner-dom.trycloudflare.com`）已停用。
 
 ---
 
