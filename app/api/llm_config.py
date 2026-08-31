@@ -3,7 +3,7 @@
 - GET  /api/llm/providers        厂商预设列表（登录即可见）
 - GET  /api/llm/effective        当前生效模型（任务页展示）
 - GET/PUT/DELETE /api/llm/config[/{slot}]  个人配置（user/admin；guest 403）
-- GET/PUT/DELETE /api/llm/platform-config[/{slot}]  平台默认（admin 专属）
+- GET/PUT/DELETE /api/llm/platform-config[/{slot}]  平台默认（GET 所有登录用户只读；PUT/DELETE admin）
 - POST /api/llm/test             连通测试（不落库）
 """
 from fastapi import APIRouter, Depends, HTTPException
@@ -97,8 +97,6 @@ def get_effective(db: Session = Depends(get_db),
 @router.get("/llm/config")
 def get_config(db: Session = Depends(get_db),
                user: User = Depends(get_current_user)):
-    if user.role == "guest":
-        raise HTTPException(403, detail="访客使用平台默认模型，注册后可配置自己的 API Key")
     rows = db.query(LLMConfig).filter(LLMConfig.user_id == user.id).all()
     return [_to_out(r) for r in rows]
 
@@ -107,8 +105,6 @@ def get_config(db: Session = Depends(get_db),
 def put_config(body: LLMConfigIn,
                db: Session = Depends(get_db),
                user: User = Depends(get_current_user)):
-    if user.role == "guest":
-        raise HTTPException(403, detail="访客使用平台默认模型，注册后可配置自己的 API Key")
     row = _upsert(db, user.id, body)
     if body.slot == "text" and not row.api_key_enc:
         # 免费厂商且服务端已配 Key → 允许不填 Key（平台提供）
@@ -130,11 +126,11 @@ def delete_config(slot: str,
     return None
 
 
-# ---------- 平台默认（admin） ----------
+# ---------- 平台默认（GET 所有登录用户只读可见；PUT/DELETE 仅 admin） ----------
 
 @router.get("/llm/platform-config", response_model=list[LLMConfigOut])
 def get_platform(db: Session = Depends(get_db),
-                 admin: User = Depends(require_admin)):
+                 user: User = Depends(get_current_user)):
     rows = db.query(LLMConfig).filter(LLMConfig.user_id == 0).all()
     return [_to_out(r) for r in rows]
 
@@ -162,6 +158,65 @@ def delete_platform(slot: str,
         db.delete(row)
         db.commit()
     return None
+
+
+# ---------- 生效模型可用性测试（不落库） ----------
+
+_ERR_LABEL = {
+    "auth": "API Key 已过期或无效",
+    "rate_limit": "限流 · 请稍后再试",
+    "quota": "额度已用尽",
+    "network": "网络错误 · 请稍后再试",
+    "server": "模型服务异常 · 请稍后再试",
+    "not_configured": "未配置或未生效",
+    "other": "调用失败",
+}
+
+
+def _classify_error(msg: str) -> str:
+    """从 LLMError 文本归类错误类型（HTTP 状态码优先）。"""
+    import re
+    m = re.search(r"HTTP (\d{3})", msg)
+    if m:
+        code = int(m.group(1))
+        if code in (401, 403):
+            return "auth"
+        if code == 429:
+            return "rate_limit"
+        if code == 402:
+            return "quota"
+        if code >= 500:
+            return "server"
+        return "other"
+    if "网络错误" in msg or "Timeout" in msg or "timed out" in msg.lower():
+        return "network"
+    return "other"
+
+
+@router.post("/llm/test-default/{slot}")
+def test_default_slot(slot: str,
+                      db: Session = Depends(get_db),
+                      user: User = Depends(get_current_user)):
+    """测试当前生效模型可用性（服务端解析配置并持有 Key，客户端无需提供；结果不落库）。
+
+    - 所有登录角色可用（含访客）：解析优先级与 resolve_effective 一致（我的配置 > 平台默认）
+    - 错误归类：auth / rate_limit / quota / network / server / not_configured / other
+    """
+    if slot not in ("text", "vision"):
+        raise HTTPException(400, detail="slot 只能是 text 或 vision")
+    eff = llm_service.resolve_effective(db, user)
+    cfg = eff["text"] if slot == "text" else eff["vision"]
+    if not cfg:
+        return {"ok": False, "err_type": "not_configured",
+                "error_label": _ERR_LABEL["not_configured"],
+                "error": "该槽位未配置或未生效（服务器未配对应厂商 Key）", "model": None}
+    result = llm_service.test_connectivity(cfg["base_url"], cfg["api_key"], cfg["model"])
+    out = {**result, "model": cfg["model"], "provider_label": cfg["provider_label"]}
+    if not out.get("ok"):
+        et = _classify_error(out.get("error", ""))
+        out["err_type"] = et
+        out["error_label"] = _ERR_LABEL.get(et, _ERR_LABEL["other"])
+    return out
 
 
 # ---------- 连通测试 ----------

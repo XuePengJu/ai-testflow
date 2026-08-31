@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI 测试工作流平台</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <style>
   :root{
     --bg:#f5f6fb; --card:#ffffff; --line:#ebedf3; --text:#0f172a; --sub:#64748b;
@@ -36,6 +37,17 @@
   .brand-t{font-size:17px;font-weight:700;letter-spacing:.2px}
   .brand-s{font-size:12px;color:var(--sub);margin-top:1px}
   .topbar .spacer{flex:1}
+
+  /* ===== 隧道慢速提示条 ===== */
+  .tunnel-tip-wrap{max-width:1180px;margin:14px auto 0;padding:0 24px}
+  @media(max-width:920px){.tunnel-tip-wrap{padding:0 16px}}
+  .tunnel-tip{position:relative;padding:11px 44px 11px 16px;background:#fff7ed;border:1px solid #fed7aa;
+    border-radius:12px;color:#9a3412;font-size:13px;line-height:1.5;display:flex;align-items:center;gap:8px;
+    box-shadow:var(--shadow)}
+  .tunnel-tip .ti-ico{flex-shrink:0}
+  .tunnel-tip .ti-close{position:absolute;top:50%;right:10px;transform:translateY(-50%);border:none;
+    background:transparent;color:#9a3412;font-size:15px;cursor:pointer;width:24px;height:24px;border-radius:6px;line-height:1}
+  .tunnel-tip .ti-close:hover{background:#fed7aa}
   .mode-pill{font-size:12px;color:#7c3aed;background:var(--brand-soft);border:1px solid #ddd6fe;
              padding:5px 12px;border-radius:999px;font-weight:600;display:flex;align-items:center;gap:6px}
   .mode-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--brand2)}
@@ -223,6 +235,14 @@
   </div>
 </header>
 
+<div class="tunnel-tip-wrap" id="tunnelTipWrap">
+  <div class="tunnel-tip">
+    <span class="ti-ico">⚠️</span>
+    <span>当前通过 cloudflared 隧道代理访问，接口响应可能较慢（约 1–3 秒），请耐心等待数据加载。</span>
+    <button class="ti-close" onclick="dismissTunnelTip()" title="关闭提示">✕</button>
+  </div>
+</div>
+
 <div class="wrap">
   <!-- 左：提交 -->
   <div class="submit-col">
@@ -363,8 +383,8 @@
       <button class="close" onclick="closeLlm()" title="关闭">✕</button></div>
     <div id="llmScopeRow" style="display:none;margin-bottom:14px">
       <div class="seg" id="llmScopeSeg" style="display:flex">
-        <button data-scope="self" class="on" style="flex:1">我的配置</button>
-        <button data-scope="platform" style="flex:1">平台默认（未配置用户的兜底）</button>
+        <button data-scope="self" class="on" style="flex:1">我的配置（自定义）</button>
+        <button data-scope="platform" style="flex:1">平台默认模型</button>
       </div>
     </div>
     <div id="llmSlots"></div>
@@ -569,7 +589,7 @@ let authMode="login";   // login / register / upgrade（访客转正）
 function saveAuth(t,m){token=t;me=m;localStorage.setItem(TOKEN_KEY,t);localStorage.setItem(USER_KEY,JSON.stringify(m));
   if(m.enc_key){encKey=m.enc_key;localStorage.setItem(ENCKEY_KEY,m.enc_key);}}
 function clearAuth(){token="";me=null;encKey="";localStorage.removeItem(TOKEN_KEY);localStorage.removeItem(USER_KEY);localStorage.removeItem(ENCKEY_KEY);}
-function logout(){clearAuth();location.reload();}
+function logout(){try{sessionStorage.setItem('atf_manual_logout','1');}catch(e){}clearAuth();location.reload();}
 
 /* 分级加密：user/guest 的 JSON 流量走 AES-256-GCM；admin 明文（服务端按角色直通） */
 function cryptoOn(){return !!(token&&encKey&&me&&me.role!=="admin");}
@@ -819,6 +839,16 @@ async function doGuest(){
   finally{btn.disabled=false;btn.innerHTML="👤 游客体验（免注册 · 数据保留 24 小时）";}
 }
 
+async function enterGuestSilently(){
+  try{
+    const r=await fetch(API+"/guest/token",{method:"POST"});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){renderIdentity();showAuth();return;}
+    saveAuth(d.access_token,{username:d.username,role:"guest",remaining_hours:d.remaining_hours,enc_key:d.enc_key});
+    await refreshMe();
+    loadTasks();
+  }catch(e){renderIdentity();showAuth();}
+}
 function renderIdentity(){
   const el=$("identity");
   if(!token||!me){el.innerHTML=`<button class="upb" onclick="showAuth()">登录 / 注册</button>`;el.style.display="flex";return;}
@@ -836,7 +866,13 @@ function renderIdentity(){
 }
 
 async function refreshMe(){
-  if(!token){renderIdentity();showAuth();return;}
+  if(!token){
+    // 主动退出/切换账户 → 重载后弹登录框，不再自动进访客；首次打开网站仍静默进访客
+    let manual=false;
+    try{manual=sessionStorage.getItem('atf_manual_logout')==='1';sessionStorage.removeItem('atf_manual_logout');}catch(e){}
+    if(manual){renderIdentity();showAuth();return;}
+    enterGuestSilently();return;
+  }
   try{
     const r=await api(API+"/auth/me");
     if(r.ok){me=await r.json();localStorage.setItem(USER_KEY,JSON.stringify(me));}
@@ -1069,7 +1105,22 @@ async function dl(id,fmt){
 function closeDetail(){$("overlay").classList.remove("open");document.body.style.overflow='';clearTimeout(pollTimer);currentId=null;}
 
 /* ===== 模型配置（V2.4 FR-I）：双槽位 + 厂商预设 + 连通测试 ===== */
-let llmProviders={},llmEff=null,llmScope="self",llmCfgs={text:null,vision:null};
+let llmProviders={},llmEff=null,llmScope="self",llmCfgs={text:null,vision:null},llmHealth={text:null,vision:null};
+
+/* 测试当前生效模型可用性（服务端解析配置并持有 Key，结果仅存本页内存，刷新即清） */
+async function llmTestDefault(slot){
+  const box=$("llmHealth-"+slot); if(box)box.textContent="测试中…";
+  try{
+    const r=await api(API+"/llm/test-default/"+slot,{method:"POST"});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){if(box)box.textContent="测试失败："+(d.detail||r.status);return;}
+    llmHealth[slot]=d;
+    renderModelPill();
+    if(box)box.innerHTML=d.ok
+      ?`✅ 可用 · ${d.latency_ms}ms · ${esc(d.model||"")}`
+      :`❌ ${esc(d.error_label||"调用失败")} <span style="color:#94a3b8">${esc(d.error||"")}</span>`;
+  }catch(e){if(box)box.textContent="测试失败："+e.message;}
+}
 
 async function loadLlmMeta(){
   if(!token){renderModelPill();return;}
@@ -1086,31 +1137,44 @@ async function loadLlmMeta(){
 
 function renderModelPill(){
   const pill=$("modelPill"),txt=$("modelPillText"),hint=$("submitHint");
-  const srcLabel={user:"我的配置",platform:"平台默认",env:"服务器配置",mock:"mock 兜底"};
-  if(!token||!llmEff||llmEff.source==="mock"){
+  const srcLabel={user:'我的配置',platform:'平台默认',env:'服务器配置',mock:'mock 兜底'};
+  if(!token||!llmEff||llmEff.source==='mock'){
     pill.classList.remove("live");
-    txt.textContent="Mock 兜底模式";
-    pill.title="未配置模型 API Key，点击去配置真实模型";
-    if(hint)hint.innerHTML=`当前 <b>mock 兜底</b>（未配置真实模型）· <a href="javascript:void(0)" style="color:var(--brand1)" onclick="openLlm()">配置 API Key 启用真实生成</a> · 未配置时无需联网即可演示完整编排流程。`;
+    pill.style.background="";
+    txt.textContent='未配置模型 · 演示数据';
+    pill.title='未配置真实模型，使用演示数据（点击可配置自己的 API Key 启用真实生成）';
+    if(hint)hint.innerHTML=`当前 <b>未配置模型</b>（使用演示数据）· <a href='javascript:void(0)' style='color:var(--brand1)' onclick='openLlm()'>配置 API Key 启用真实生成</a> · 未配置时无需联网即可演示完整编排流程。`;
   }else{
     pill.classList.add("live");
     const t=llmEff.text,v=llmEff.vision;
-    txt.textContent=t?`${t.model} · ${String(t.provider_label||"").split(" ")[0]}`:"模型";
-    pill.title=`当前模型：${t?t.model:""}（${srcLabel[llmEff.source]||llmEff.source}）`;
-    if(hint)hint.innerHTML=`当前模型：<b>${esc(t.model)} · ${esc(t.provider_label)}</b>（${srcLabel[llmEff.source]||llmEff.source}）${v?` · 图像识别：<b>${esc(v.model)}</b>`:" · 未配置图像识别模型（配置后含截图文档可两段式解析）"} · <a href="javascript:void(0)" style="color:var(--brand1)" onclick="openLlm()">修改</a>`;
+    const src=srcLabel[llmEff.source]||'模型';
+    const ht=llmHealth.text;
+    if(ht&&!ht.ok){
+      // 最近一次可用性测试失败（仅本页会话内记忆，刷新即清）
+      txt.textContent=`${t?t.model:"模型"} · ${src} ⚠️ ${ht.error_label||"不可用"}`;
+      pill.style.background="linear-gradient(135deg,#f59e0b,#ef4444)";
+      pill.title=`最近测试失败：${ht.error_label||ht.error||"不可用"}（${ht.model||""}）`;
+      if(hint)hint.innerHTML=`⚠️ 模型可用性测试失败：<b>${esc(ht.error_label||ht.error||"不可用")}</b>${ht.model?`（${esc(ht.model)}）`:''} · <a href='javascript:void(0)' style='color:var(--brand1)' onclick='openLlm()'>查看详情</a> · 重新测试后会自动更新`;
+    }else{
+      pill.style.background="";
+      txt.textContent=t?`${t.model} · ${src}`:'模型';
+      pill.title=`当前模型：${t?t.model:''}（${src}）`;
+      if(hint)hint.innerHTML=`当前模型：<b>${esc(t.model)} · ${esc(t.provider_label)}</b>（${src}）${v?` · 图像识别：<b>${esc(v.model)}</b>`:' · 未配置图像识别模型（配置后含截图文档可两段式解析）'} · <a href='javascript:void(0)' style='color:var(--brand1)' onclick='openLlm()'>修改</a>`;
+    }
   }
 }
 
 function openLlm(){
   if(!token||!me){showToast("请先登录后配置模型");showAuth();return;}
-  if(me.role==="guest"){showToast("访客使用平台默认模型，注册后可配置自己的 API Key");return;}
-  $("llmScopeRow").style.display=(me.role==="admin")?"block":"none";
+  $("llmScopeRow").style.display="block";   // 所有登录用户都能看到「我的配置 / 平台默认模型」两个 tab
   $("llmOverlay").classList.add("open");
-  // 默认 tab：未配置个人模型 → 平台默认（免费模型选择器）；否则我的配置
+  // 默认 tab：未配置个人模型 → 停在「平台默认模型」tab（与右上角 pill 一致）；否则「我的配置」
   (async()=>{
     let selfHas=false;
     try{const r=await api(API+"/llm/config");if(r.ok){(await r.json()).forEach(c=>{if(c.slot==="text")selfHas=true;});}}catch(e){}
-    llmScope=(me.role==="admin"&&!selfHas)?"platform":"self";
+    // 拉取当前生效模型（含平台默认），保证弹窗与 pill 完全一致
+    try{const r=await api(API+"/llm/effective");if(r.ok)llmEff=await r.json();}catch(e){}
+    llmScope=selfHas?"self":"platform";
     document.querySelectorAll('#llmScopeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.scope===llmScope));
     loadLlmConfigs();
   })();
@@ -1133,7 +1197,8 @@ async function loadLlmConfigs(){
 function renderLlmSlots(){
   const el=$("llmSlots");
   if(llmScope==="platform"){
-    el.innerHTML=renderPlatformFree();
+    // 管理员可编辑平台默认（免费模型选择器）；普通用户/访客只读展示，不能改
+    el.innerHTML=(me.role==="admin")?renderPlatformFree():renderPlatformReadOnly();
     return;
   }
   const mk=(slot)=>{
@@ -1197,11 +1262,38 @@ function renderPlatformFree(){
         </select></div>
       <div class="llm-btnrow">
         <button class="submit" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)" onclick="llmSaveFree('${slot}')">保存${isVis?"视觉":"文本"}模型</button>
+        <button class="mini-btn" onclick="llmTestDefault('${slot}')">⚡ 测试可用性</button>
       </div>
+      <div id="llmHealth-${slot}" class="llm-note"></div>
       <div class="llm-note">${isVis?"未配置时含图片的文档按纯文字处理":"由平台免费额度提供，无需填写任何密钥"}</div>
     </div>`;
   };
   return `<div class="auth-note">以下模型由平台免费提供，直接选择即可，无需填写 API Key 或 Base URL。</div>`+card("text")+card("vision");
+}
+
+/* 平台默认：普通用户 / 访客只读展示（平台统一提供，不能改，只能看） */
+function renderPlatformReadOnly(){
+  const slot=(s)=>{
+    const isVis=s==="vision";
+    const c=llmCfgs[s];   // 直接用平台默认配置（GET 已对所有登录用户开放）
+    const usable=isVis?!!(llmEff&&llmEff.vision):!!(llmEff&&llmEff.text);
+    if(c){
+      return `<div class="llm-slot">
+        <h4>${isVis?"多模态模型（图文 / 视觉）":"文本模型（默认）"}${usable?"":` <span style="color:#d97706;font-size:12px;font-weight:600">（暂未生效：服务器未配该厂商 Key）</span>`}</h4>
+        <div class="sub">${isVis?"用于解析技术文档里的截图/流程图（两段式视觉理解）":"生成测试用例的主力模型"}</div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 14px;background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px 14px">
+          <span style="color:#64748b">厂商</span><b>${esc(c.provider_label||c.provider||"—")}</b>
+          <span style="color:#64748b">模型</span><b>${esc(c.model||"—")}</b>
+          <span style="color:#64748b">Base URL</span><b style="word-break:break-all">${esc(c.base_url||"—")}</b>
+        </div>
+        <div class="llm-btnrow"><button class="mini-btn" onclick="llmTestDefault('${s}')">⚡ 测试可用性</button></div>
+        <div id="llmHealth-${s}" class="llm-note"></div>
+      </div>`;
+    }
+    return `<div class="llm-slot"><h4>${isVis?"多模态模型（图文 / 视觉）":"文本模型（默认）"}</h4>
+      <div class="llm-note">平台未配置${isVis?"视觉":""}默认模型</div></div>`;
+  };
+  return `<div class="auth-note">以下为<b>平台默认模型</b>（你的兜底），由平台统一提供，<b>你无需也不能修改</b>。如需使用自己的模型，请在「我的配置」中填写并保存，将自动覆盖平台默认。</div>`+slot("text")+slot("vision");
 }
 async function llmSaveFree(slot){
   const sel=$("llmFree-"+slot); if(!sel||!sel.value){showToast("请先选择模型");return;}
@@ -1267,6 +1359,21 @@ setInterval(loadTasks,4000);
 refreshMe();
 loadLlmMeta();
 loadTasks();
+
+// 隧道慢速提示条：关闭后记住状态，刷新不再弹
+function dismissTunnelTip(){
+  var w=document.getElementById('tunnelTipWrap');
+  if(w) w.style.display='none';
+  try{localStorage.setItem('atf_tunnel_tip_closed','1');}catch(e){}
+}
+(function(){
+  try{
+    if(localStorage.getItem('atf_tunnel_tip_closed')==='1'){
+      var w=document.getElementById('tunnelTipWrap');
+      if(w) w.style.display='none';
+    }
+  }catch(e){}
+})();
 </script>
 </body>
 </html>

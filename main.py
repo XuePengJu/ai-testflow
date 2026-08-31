@@ -84,6 +84,15 @@ def config_js():
     )
 
 
+@app.get("/favicon.svg")
+@app.get("/favicon.ico")
+def favicon():
+    """站点图标（与左上角 logo 同款：渐变方块 + 白色机器人脸）"""
+    from fastapi.responses import FileResponse
+
+    return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
+
+
 if __name__ == "__main__":
     import uvicorn
 
