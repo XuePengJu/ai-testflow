@@ -25,6 +25,7 @@ def _to_out(db: Session, task: Task) -> TaskOut:
     return TaskOut(
         id=task.id, name=task.name, kind=task.kind, source_type=task.source_type,
         status=task.status, cases_count=task.cases_count, duration_ms=task.duration_ms,
+        formats=task.formats, category_id=task.category_id,
         created_at=task.created_at, finished_at=task.finished_at,
         steps=[
             StepLogOut(

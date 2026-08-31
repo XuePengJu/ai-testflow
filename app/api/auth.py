@@ -98,6 +98,10 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     user.data_dir = f"u_{user.id}"  # data_dir 依赖自增 id
     db.commit()
 
+    # 新账号播种示例分类与示例任务（失败不影响注册）
+    from app.services.sample_seeder import seed_sample_tasks
+    seed_sample_tasks(db, user)
+
     # 注册即登录：直接下发 token + 加密会话密钥（密钥分发通道，响应永远明文）
     token = security.create_token(user.id, user.username, user.role)
     out = _to_out(user).model_dump()

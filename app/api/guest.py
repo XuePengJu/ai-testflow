@@ -73,6 +73,10 @@ def guest_token(request: Request, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(guest)
 
+    # 新访客播种示例分类与示例任务（失败不影响发 token）
+    from app.services.sample_seeder import seed_sample_tasks
+    seed_sample_tasks(db, guest)
+
     token = security.create_token(guest.id, guest.username, "guest",
                                   ttl_hours=config.GUEST_TTL_HOURS)
     return {"access_token": token, "token_type": "bearer", "role": "guest",
