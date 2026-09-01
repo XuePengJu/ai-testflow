@@ -32,7 +32,7 @@
     position:sticky; top:0; z-index:40; backdrop-filter:saturate(180%) blur(12px);
     background:rgba(255,255,255,.72); border-bottom:1px solid var(--line);
   }
-  .topbar-inner{max-width:1180px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:14px}
+  .topbar-inner{max-width:1400px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:14px}
   .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--brand1),var(--brand2));
         display:grid;place-items:center;box-shadow:0 6px 16px rgba(99,102,241,.35)}
   .logo svg{width:22px;height:22px}
@@ -41,7 +41,7 @@
   .topbar .spacer{flex:1}
 
   /* ===== 隧道慢速提示条 ===== */
-  .tunnel-tip-wrap{max-width:1180px;margin:14px auto 0;padding:0 24px}
+  .tunnel-tip-wrap{max-width:1400px;margin:14px auto 0;padding:0 24px}
   @media(max-width:920px){.tunnel-tip-wrap{padding:0 16px}}
   .tunnel-tip{position:relative;padding:11px 44px 11px 16px;background:#fff7ed;border:1px solid #fed7aa;
     border-radius:12px;color:#9a3412;font-size:13px;line-height:1.5;display:flex;align-items:center;gap:8px;
@@ -66,7 +66,7 @@
   .test-err{color:var(--fail);font-weight:600}
 
   /* ===== 布局 ===== */
-  .wrap{max-width:1180px;margin:0 auto;padding:28px 24px 60px;display:grid;grid-template-columns:420px 1fr;gap:24px;align-items:start}
+  .wrap{max-width:1400px;margin:0 auto;padding:28px 24px 60px;display:grid;grid-template-columns:420px 1fr;gap:24px;align-items:start}
   @media(max-width:920px){.wrap{grid-template-columns:1fr}}
 
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:22px}
@@ -119,9 +119,15 @@
   .submit .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:7px}
   @keyframes spin{to{transform:rotate(360deg)}}
 
-  /* ===== 任务列表 ===== */
-  /* ===== 分类树（多级 + 拖拽） ===== */
-  .cattree{border:1px solid var(--line);border-radius:12px;padding:8px;margin-bottom:14px;background:#fbfcfe}
+  /* ===== 任务列表（一个整体卡片，内部左右两栏：左分类 / 右任务列表） ===== */
+  .list-split{display:grid;grid-template-columns:210px 1fr;gap:18px;align-items:start}
+  @media(max-width:920px){.list-split{grid-template-columns:1fr}}
+  .cat-col{min-width:0}
+  .sub-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .sub-head h3{margin:0;font-size:13px;font-weight:700;color:var(--text)}
+  /* ===== 分类树（多级 + 拖拽，左栏吸顶） ===== */
+  .cattree{border:1px solid var(--line);border-radius:12px;padding:8px;background:#fbfcfe;max-height:62vh;overflow:auto;position:sticky;top:88px}
+  @media(max-width:920px){.cattree{position:static}}
   .catrow{display:flex;align-items:center;gap:7px;padding:6px 10px;border-radius:8px;font-size:13px;cursor:grab;user-select:none;transition:.12s}
   .catrow:hover{background:#eef0f7}
   .catrow.sel{background:var(--brand-soft);color:#4f46e5;font-weight:700}
@@ -236,7 +242,7 @@
   .sec-title{font-size:13px;font-weight:700;color:var(--sub);letter-spacing:.4px;text-transform:uppercase;margin:4px 0 12px}
   .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:12px 20px;border-radius:12px;font-size:13px;z-index:100;box-shadow:var(--shadow-lg);opacity:0;transition:.25s;pointer-events:none}
   .toast.show{opacity:1}
-  .footer{max-width:1180px;margin:0 auto;padding:0 24px 40px;color:var(--sub);font-size:12px;text-align:center;line-height:1.7}
+  .footer{max-width:1400px;margin:0 auto;padding:0 24px 40px;color:var(--sub);font-size:12px;text-align:center;line-height:1.7}
 
   /* ===== 认证（V2） ===== */
   .idchip{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600}
@@ -348,17 +354,28 @@
     </section>
   </div>
 
-  <!-- 右：列表 -->
+  <!-- 右：任务列表（一个整体卡片：大标题「任务列表」+ 内部左右分栏，左分类 / 右任务列表） -->
   <div>
     <section class="card">
+      <!-- 大标题：任务列表 + 刷新 -->
       <div class="list-head">
         <h2>任务列表</h2>
         <div class="spacer" style="flex:1"></div>
-        <button class="refresh" onclick="newCat(null)">＋ 新建分类</button>
         <button class="refresh" onclick="loadTasks()">↻ 刷新</button>
       </div>
-      <div id="catTree" class="cattree" style="display:none"></div>
-      <div id="taskList"><div class="empty"><div class="em">📋</div>加载中…</div></div>
+      <!-- 内部左右两栏 -->
+      <div class="list-split">
+        <!-- 左栏：分类（二级标题） -->
+        <div class="cat-col">
+          <div class="sub-head">
+            <h3>分类</h3>
+            <button class="refresh" onclick="newCat(null)">＋ 新建</button>
+          </div>
+          <div id="catTree" class="cattree" style="display:none"></div>
+        </div>
+        <!-- 右栏：任务卡片流 -->
+        <div id="taskList"><div class="empty"><div class="em">📋</div>加载中…</div></div>
+      </div>
     </section>
   </div>
 </div>
@@ -1029,7 +1046,7 @@ async function loadTasks(){
     }
     const el=$("taskList");
     const head=selCat==='all'?'':`<div style="font-size:12px;color:var(--sub);margin-bottom:8px">已按分类过滤（共 ${shown.length} 条）<a href="javascript:void(0)" style="color:var(--brand1)" onclick="selCat='all';loadTasks()">查看全部</a></div>`;
-    if(!shown.length){el.innerHTML=head+'<div class="empty"><div class="em">📭</div>该分类下暂无任务<br><span style="font-size:12px;color:var(--sub)">提示：把下面的任务卡片拖到左侧分类树上即可归类</span></div>';return;}
+    if(!shown.length){el.innerHTML=head+'<div class="empty"><div class="em">📭</div>该分类下暂无任务<br><span style="font-size:12px;color:var(--sub)">提示：把右侧任务卡片拖到左侧分类即可归类</span></div>';return;}
     el.innerHTML=head+shown.map(t=>`
       <div class="task" draggable="true"
         ondragstart="dragData={type:'task',id:'${t.id}'};this.classList.add('dragging')"
