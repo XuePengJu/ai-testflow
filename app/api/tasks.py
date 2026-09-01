@@ -1,4 +1,5 @@
 """任务管理 REST 端点（V2：登录 + 数据隔离）。"""
+import json
 import os
 import uuid
 from datetime import datetime
@@ -18,7 +19,21 @@ from app.workflow.engine import run_task
 router = APIRouter()
 
 
-def _to_out(db: Session, task: Task) -> TaskOut:
+def _parse_cases(cases_json: str | None) -> list[dict]:
+    """cases_json 字段是 Task 模型里的 Text 列，存储原始 JSON 字符串。
+
+    返回结构化用例列表。解析失败时兜底返回 []，不让单条脏数据把整个详情接口炸掉。
+    """
+    if not cases_json:
+        return []
+    try:
+        obj = json.loads(cases_json)
+        return obj if isinstance(obj, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
     steps = (
         db.query(StepLog).filter_by(task_id=task.id).order_by(StepLog.id).all()
     )
@@ -35,6 +50,8 @@ def _to_out(db: Session, task: Task) -> TaskOut:
             )
             for s in steps
         ],
+        # 仅详情接口为 True：77 条用例 ≈ 几十 KB，列表页不背这个 payload
+        cases=_parse_cases(task.cases_json) if include_cases else [],
     )
 
 
@@ -116,7 +133,8 @@ def list_tasks(db: Session = Depends(get_db),
 @router.get("/tasks/{task_id}", response_model=TaskOut)
 def get_task(task_id: str, db: Session = Depends(get_db),
              user: User = Depends(get_current_user)):
-    return _to_out(db, _own_task(db, task_id, user))
+    """任务详情：默认带上结构化用例（用于网页思维导图 + 测试用例 tab）。"""
+    return _to_out(db, _own_task(db, task_id, user), include_cases=True)
 
 
 @router.get("/tasks/{task_id}/download")

@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI 测试工作流平台</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<!-- 思维导图本地依赖（不走 CDN，离线可用） -->
+<link rel="stylesheet" href="./vendor/mind-elixir/MindElixir.css">
 <style>
   :root{
     --bg:#f5f6fb; --card:#ffffff; --line:#ebedf3; --text:#0f172a; --sub:#64748b;
@@ -153,16 +155,61 @@
   /* ===== 详情抽屉 ===== */
   .overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(3px);z-index:50;display:none;align-items:flex-end;justify-content:center}
   .overlay.open{display:flex}
-  .drawer{background:#fff;width:100%;max-width:760px;max-height:92vh;overflow:auto;border-radius:20px 20px 0 0;padding:26px 28px 32px;animation:rise .28s cubic-bezier(.2,.8,.2,1)}
+  .drawer{background:#fff;width:100%;max-width:94vw;max-height:96vh;overflow:auto;border-radius:20px 20px 0 0;padding:16px 24px 28px;animation:rise .28s cubic-bezier(.2,.8,.2,1)}
   @media(min-width:720px){.overlay{align-items:center}.drawer{border-radius:20px;animation:pop .28s cubic-bezier(.2,.8,.2,1)}}
   @keyframes rise{from{transform:translateY(40px);opacity:.6}to{transform:none;opacity:1}}
   @keyframes pop{from{transform:scale(.96);opacity:.6}to{transform:none;opacity:1}}
-  .drawer-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:6px}
-  .drawer-head h3{margin:0;font-size:18px;font-weight:700}
+  .drawer-head{display:flex;align-items:center;gap:12px;margin-bottom:2px}
+  .drawer-head h3{margin:0;font-size:15px;font-weight:700}
   .drawer-head .close{border:0;background:#f1f3f9;width:32px;height:32px;border-radius:9px;cursor:pointer;font-size:17px;color:var(--sub);flex:none}
   .drawer-head .close:hover{background:#fee2e2;color:var(--fail)}
-  .dmeta{font-size:12px;color:var(--sub);margin:8px 0 20px;display:flex;gap:14px;flex-wrap:wrap}
+  .dmeta{font-size:11px;color:var(--sub);margin:3px 0 10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   .dmeta b{color:var(--text)}
+
+  /* ===== 详情抽屉 · 3 tab (测试用例 / 思维导图 / 工作流步骤) ===== */
+  .dtabs{display:flex;gap:4px;background:#f1f3f9;border-radius:11px;padding:4px;margin:0 0 10px}
+  .dtab{flex:1;border:0;background:transparent;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;color:var(--sub);transition:.15s;display:flex;align-items:center;justify-content:center;gap:6px}
+  .dtab:hover{color:var(--text)}
+  .dtab.on{background:#fff;color:var(--brand1);box-shadow:0 1px 3px rgba(15,23,42,.08)}
+  .dtab .ct{font-size:11px;background:#e0e7ff;color:#4338ca;border-radius:9px;padding:1px 7px;font-weight:700}
+  .dtab-pane{display:none}
+  .dtab-pane.on{display:block}
+
+  /* 测试用例 tab · 模块分组卡片 */
+  .case-module{background:#fafbfc;border:1px solid #e5e7eb;border-radius:11px;padding:13px 14px;margin-bottom:12px}
+  .case-module h4{margin:0 0 10px;font-size:13px;font-weight:700;color:var(--brand1);display:flex;align-items:center;gap:8px}
+  .case-module h4 .mc{font-size:11px;color:var(--sub);background:#fff;border:1px solid #e5e7eb;border-radius:9px;padding:1px 8px;font-weight:600}
+  .case-card{background:#fff;border:1px solid #e5e7eb;border-radius:9px;padding:10px 12px;margin-bottom:8px}
+  .case-card:last-child{margin-bottom:0}
+  .case-card .ctitle{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .case-card .cid{font-size:11px;font-weight:700;color:#4338ca;background:#e0e7ff;border-radius:6px;padding:1px 7px}
+  .case-card .cname{font-size:13px;font-weight:600;color:var(--text);flex:1}
+  .ctype{font-size:11px;font-weight:600;color:#0891b2;background:#cffafe;border-radius:6px;padding:1px 7px;white-space:nowrap}
+  .cpri{font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;white-space:nowrap}
+  .cpri.P0{color:#dc2626;background:#fee2e2}
+  .cpri.P1{color:#d97706;background:#fef3c7}
+  .cpri.P2{color:#059669;background:#d1fae5}
+  .case-card .crow{display:flex;font-size:12px;line-height:1.55;margin:3px 0;gap:10px}
+  .case-card .crow .lbl{flex:none;color:var(--sub);font-weight:600;min-width:54px}
+  .case-card .crow .val{flex:1;color:#334155;white-space:pre-wrap;word-break:break-word}
+  .case-card .step-item{padding:3px 0;border-bottom:1px dashed #f1f5f9}
+  .case-card .step-item:last-child{border-bottom:0}
+  .case-empty{text-align:center;color:var(--sub);font-size:13px;padding:32px 16px;background:#fafbfc;border:1px dashed #e5e7eb;border-radius:11px}
+  /* 用例表格（横向铺满宽度，替代卡片竖排） */
+  .case-table-wrap{overflow-x:auto}
+  .case-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;background:#fff}
+  .case-table th{background:#f1f3f9;color:var(--sub);font-weight:700;font-size:12px;text-align:left;padding:9px 10px;border:1px solid #e5e7eb;white-space:nowrap}
+  .case-table td{padding:8px 10px;border:1px solid #e5e7eb;vertical-align:top;color:#334155;line-height:1.55}
+  .case-table tbody tr:hover td{background:#fafbff}
+  .case-table .ct-id{font-weight:700;color:#4338ca;white-space:nowrap;text-align:center}
+  .case-table .ct-name{font-weight:600;color:var(--text);word-break:break-word}
+  .case-table .ct-text{white-space:pre-wrap;word-break:break-word}
+  .case-table .dash{color:#cbd5e1}
+
+  /* 思维导图 tab · mind-elixir 容器 */
+  .map-host{width:100%;height:82vh;min-height:480px;border:1px solid #e5e7eb;border-radius:11px;background:#fafbfc;overflow:hidden}
+  .map-host .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--sub);font-size:13px}
+  .map-host .empty .ico{font-size:34px;margin-bottom:8px;opacity:.6}
 
   .stepper{display:flex;flex-direction:column;gap:0;position:relative;margin:4px 0 22px}
   .step{display:grid;grid-template-columns:42px 1fr;gap:14px;padding-bottom:18px;position:relative}
@@ -180,6 +227,12 @@
   .dl-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
   .dl{font-size:13px;font-weight:600;color:var(--brand1);text-decoration:none;border:1px solid #c7cbff;background:#fafbff;border-radius:11px;padding:10px 16px;transition:.15s;display:inline-flex;align-items:center;gap:7px}
   .dl:hover{background:linear-gradient(135deg,var(--brand1),var(--brand2));color:#fff;border-color:transparent;box-shadow:0 6px 16px rgba(99,102,241,.3)}
+  /* 测试用例 tab 顶部工具行：右侧放导出 Excel 按钮 */
+  .cases-bar{display:flex;justify-content:flex-end;margin-bottom:10px}
+  .cases-bar .dl{font-size:12px;padding:8px 14px}
+  /* 思维导图 tab · 「导出 XMind」按钮注入到 mind-elixir 右下角工具栏，排在「最大化」按钮左边 */
+  .map-container .mind-elixir-toolbar.rb .map-dl{display:inline-flex;align-items:center;height:16px;font-size:12px;font-weight:600;line-height:1;padding:0 8px;border:1px solid var(--main-color);color:var(--main-color);border-radius:4px;background:var(--panel-bgcolor);cursor:pointer;vertical-align:-.15em;user-select:none;white-space:nowrap}
+  .map-container .mind-elixir-toolbar.rb .map-dl:hover{background:var(--main-color);color:var(--panel-bgcolor)}
   .sec-title{font-size:13px;font-weight:700;color:var(--sub);letter-spacing:.4px;text-transform:uppercase;margin:4px 0 12px}
   .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:12px 20px;border-radius:12px;font-size:13px;z-index:100;box-shadow:var(--shadow-lg);opacity:0;transition:.25s;pointer-events:none}
   .toast.show{opacity:1}
@@ -320,10 +373,30 @@
       <button class="close" onclick="closeDetail()">✕</button>
     </div>
     <div class="dmeta" id="dMeta"></div>
-    <div class="sec-title">工作流步骤（四 Agent 编排）</div>
-    <div class="stepper" id="dSteps"></div>
-    <div class="sec-title">导出文件</div>
-    <div class="dl-row" id="dDl"></div>
+
+    <!-- 3 tab：默认停在「思维导图」（xmind 预览核心），另外两个放次要位置 -->
+    <div class="dtabs" id="dTabs" role="tablist">
+      <button class="dtab on" data-pane="mindmap" role="tab">🧠 思维导图（预览 xmind）</button>
+      <button class="dtab"    data-pane="cases"   role="tab">📋 测试用例 <span class="ct" id="ctCases"></span></button>
+      <button class="dtab"    data-pane="steps"   role="tab">⚙️ 工作流步骤</button>
+    </div>
+
+    <!-- tab 内容：思维导图（mind-elixir 渲染 + tags 胶囊，默认展开） -->
+    <div class="dtab-pane on" id="pane-mindmap">
+      <div id="map" class="map-host"></div>
+    </div>
+    <!-- tab 内容：测试用例 -->
+    <div class="dtab-pane" id="pane-cases">
+      <div class="cases-bar">
+        <a class="dl" href="javascript:void(0)" onclick="dl(window.currentTaskId,'xlsx')">⬇ 导出 Excel (XLSX)</a>
+      </div>
+      <div id="dCases"></div>
+    </div>
+    <!-- tab 内容：工作流步骤（原 stepper，分析步骤降级为次要） -->
+    <div class="dtab-pane" id="pane-steps">
+      <div class="stepper" id="dSteps"></div>
+    </div>
+
   </div>
 </div>
 
@@ -1072,11 +1145,29 @@ const STEP_ICON={解析规格:'🔍',AI生成用例:'✨',质量校验:'🛡️'
 async function showDetail(id){
   currentId=id;openDrawer();await renderDetail(id);
 }
+
+/* dev-only auto-open: 仅当 URL 带 #auto 时生效（生产 URL 不会有，正常进入不影响）
+   用于本地验证：diag.html 登录后跳到 ?taskId=#auto，自动打开最近一条任务的详情 + mindmap tab */
+async function devAutoOpen(){
+  try{
+    const tasks = await fetch(API+'/tasks',{headers:{'Authorization':'Bearer '+(localStorage.getItem(TOKEN_KEY)||'')}}).then(r=>r.json());
+    if(Array.isArray(tasks)&&tasks.length){
+      const t = tasks.find(x=>x.status==='completed'&&x.cases_count>0) || tasks[0];
+      await showDetail(t.id);
+    }
+  }catch(e){}
+}
+if(location.hash==='#auto' && window.localStorage && localStorage.getItem(TOKEN_KEY)){
+  setTimeout(devAutoOpen, 200);  // 等 config.js + DOM ready
+}
 async function renderDetail(id){
   const r=await api(API+'/tasks/'+id).catch(()=>null);if(!r||!r.ok)return;
   const t=await r.json();
   $("dTitle").textContent=t.name;
   $("dMeta").innerHTML=`<span><b>${statusText(t.status)}</b></span><span>${t.kind==='api'?'接口规格':'业务需求'}</span><span>用例 <b>${t.cases_count}</b> 条</span><span>耗时 <b>${t.duration_ms?t.duration_ms.toFixed(0):'-'}</b>ms</span><span>${fmtTime(t.created_at)}</span>`;
+  $("ctCases").textContent=t.cases_count||0;
+
+  // 工作流步骤（次要 tab #pane-steps）
   $("dSteps").innerHTML=t.steps.map(s=>`
     <div class="step ${s.status}">
       <div class="ring">${s.status==='completed'?'✓':s.status==='failed'?'!':(STEP_ICON[s.name]||'•')}</div>
@@ -1086,10 +1177,89 @@ async function renderDetail(id){
         ${s.error?`<div class="serr">${esc(s.error)}</div>`:''}
       </div>
     </div>`).join('');
-  const all=(t.formats||'xlsx,json,xmind').split(',').filter(Boolean);
-  $("dDl").innerHTML=all.map(f=>`<a class="dl" href="javascript:void(0)" onclick="dl('${t.id}','${f}')">⬇ 下载 ${f.toUpperCase()}</a>`).join('');
+
+  // 测试用例 tab #pane-cases（核心 · 默认展开）
+  renderCasesPane(t.cases||[]);
+
+  // 思维导图数据准备：每次 renderDetail 都构造最新数据
+  pendingCasesForMindmap = t.cases || [];
+  // 下载：脑图工具栏只放 XMIND，测试用例 tab 放 Excel
+  window.currentTaskId = t.id;
+  // 默认停在第一个 tab（思维导图），打开详情即用当前任务数据渲染
+  switchDrawerTab('mindmap');
+
+  // tab 切换按钮：先解绑旧 listener（防止多次调用 renderDetail 时重复绑定导致内存泄漏）
+  document.querySelectorAll('#dTabs .dtab').forEach(btn=>{
+    btn.onclick = ()=>switchDrawerTab(btn.dataset.pane);
+  });
+
   if(t.status==='running'||t.status==='pending'){clearTimeout(pollTimer);pollTimer=setTimeout(()=>renderDetail(id),1500);}
   else{clearTimeout(pollTimer);}
+}
+
+/* ===== 测试用例 tab 渲染 · 模块分组卡片 ===== */
+function renderCasesPane(cases){
+  const box=$("dCases");
+  if(!cases.length){
+    box.innerHTML=`<div class="case-empty">暂无结构化用例数据 · 任务生成完成后会自动填充</div>`;
+    return;
+  }
+  // 按 module 分组
+  const groups={};
+  cases.forEach(c=>{
+    const m=c.module||c.module_name||'未分类';
+    (groups[m]=groups[m]||[]).push(c);
+  });
+  box.innerHTML = Object.keys(groups).map(mod=>{
+    const list = groups[mod].sort((a,b)=>{
+      const ax=a.case_id||'',bx=b.case_id||'';
+      return ax.localeCompare(bx,undefined,{numeric:true});
+    });
+    const rows = list.map(c=>`
+      <tr>
+        <td class="ct-id">${esc(c.case_id||'-')}</td>
+        <td class="ct-name">${esc(c.title||'(无标题)')}</td>
+        <td>${c.case_type?`<span class="ctype">${esc(c.case_type)}</span>`:'<span class="dash">-</span>'}</td>
+        <td>${c.priority?`<span class="cpri ${esc(c.priority)}">${esc(c.priority)}</span>`:'<span class="dash">-</span>'}</td>
+        <td class="ct-text">${c.pre_condition?esc(c.pre_condition):'<span class="dash">-</span>'}</td>
+        <td class="ct-text">${c.test_data?esc(c.test_data):'<span class="dash">-</span>'}</td>
+        <td class="ct-text">${(c.steps&&c.steps.length)?c.steps.map((s,i)=>`${i+1}. ${esc(s)}`).join('\n'):'<span class="dash">-</span>'}</td>
+        <td class="ct-text">${c.expected?esc(c.expected):'<span class="dash">-</span>'}</td>
+      </tr>`).join('');
+    return `
+      <div class="case-module">
+        <h4>${esc(mod)}<span class="mc">${list.length} 条</span></h4>
+        <div class="case-table-wrap">
+          <table class="case-table">
+            <colgroup>
+              <col style="width:76px">
+              <col style="width:17%">
+              <col style="width:66px">
+              <col style="width:60px">
+              <col style="width:14%">
+              <col style="width:14%">
+              <col style="width:21%">
+              <col style="width:18%">
+            </colgroup>
+            <thead><tr>
+              <th>用例ID</th><th>用例标题</th><th>类型</th><th>优先级</th>
+              <th>前置条件</th><th>测试数据</th><th>操作步骤</th><th>预期结果</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/* ===== tab 切换 ===== */
+function switchDrawerTab(pane){
+  document.querySelectorAll('#dTabs .dtab').forEach(b=>b.classList.toggle('on', b.dataset.pane===pane));
+  document.querySelectorAll('.dtab-pane').forEach(p=>p.classList.toggle('on', p.id==='pane-'+pane));
+  // 每次切到思维导图都用「当前任务」的数据重渲染（修复：之前 mindmapInited 一旦 true 就永不更新，导致不同任务永远显示同一份用例）
+  if(pane==='mindmap'){
+    renderMindmapPane(pendingCasesForMindmap);
+  }
 }
 function openDrawer(){$("overlay").classList.add("open");document.body.style.overflow='hidden';}
 async function dl(id,fmt){
@@ -1375,5 +1545,101 @@ function dismissTunnelTip(){
   }catch(e){}
 })();
 </script>
+
+<!-- 跨作用域共享状态：detail 渲染时挂到 window，ESM 模块也能读写 -->
+<script>
+window.pendingCasesForMindmap = [];
+window.mindmapInited = false;
+</script>
+
+<!-- 思维导图渲染（mind-elixir + tags 原生胶囊，ESM 走静态伺服） -->
+<script type="module">
+import MindElixir, { SIDE, THEME } from './vendor/mind-elixir/MindElixir.js';
+
+// 稳定递增 ID 生成器（cases_json 里 id 可能不全/重复）
+let __mm_id = 0;
+const uid = () => 'mm_' + (++__mm_id) + '_' + Date.now().toString(36);
+
+function buildMindmapData(cases){
+  // 按 module 分组 → 模块节点 → 用例节点 + tags → 字段（前缀/数据/步骤/预期）节点 + tags
+  const groups = {};
+  cases.forEach(c => {
+    const m = c.module || c.module_name || '未分类';
+    (groups[m] = groups[m] || []).push(c);
+  });
+  const buildCaseNode = (c) => {
+    const kids = [];
+    if (c.pre_condition) kids.push({ id: uid(), topic: c.pre_condition, tags: ['前置条件'] });
+    if (c.test_data)     kids.push({ id: uid(), topic: c.test_data,     tags: ['测试数据'] });
+    (c.steps || []).forEach((s, i) => {
+      const sn = { id: uid(), topic: (i + 1) + '. ' + s, tags: ['操作步骤'] };
+      // 把"预期结果"挂到最后一步的子节点，跟 XMind 截图一致
+      if (i === (c.steps.length - 1) && c.expected) {
+        sn.children = [{ id: uid(), topic: c.expected, tags: ['预期结果'] }];
+      }
+      kids.push(sn);
+    });
+    if (!(c.steps || []).length && c.expected) kids.push({ id: uid(), topic: c.expected, tags: ['预期结果'] });
+    return {
+      id: c.case_id || uid(),
+      topic: (c.case_id || '') + ' ' + (c.title || '(无标题)'),
+      // 类型 + 优先级 → 节点下方胶囊标签（原生 tags 渲染）
+      tags: [c.case_type, c.priority].filter(Boolean),
+      children: kids
+    };
+  };
+  const children = Object.keys(groups).map(mod => ({
+    id: uid(),
+    topic: mod,
+    children: groups[mod].map(buildCaseNode)
+  }));
+  return { nodeData: { id: 'root', topic: 'DBERP 测试用例', expanded: true, children } };
+}
+
+// 把「导出 XMind」按钮注入到 mind-elixir 右下角工具栏，排在「最大化」按钮（#fullscreen）左边
+// 注意：me.init() 是 async，工具栏在 await document.fonts.ready 之后才挂载，必须在 init resolve 后再注入
+function injectMapDl(me){
+  const rb = me.el && me.el.querySelector('.mind-elixir-toolbar.rb');
+  if (!rb) return;
+  rb.querySelectorAll('.map-dl').forEach(x => x.remove());  // 防重复注入
+  const btn = document.createElement('span');
+  btn.className = 'map-dl';
+  btn.textContent = '⬇ 导出 XMind';
+  btn.title = '导出 XMind';
+  btn.onclick = () => window.dl(window.currentTaskId, 'xmind');
+  const fs = rb.querySelector('#fullscreen');
+  rb.insertBefore(btn, fs);  // 插到「最大化」之前 = 排最左
+}
+
+window.renderMindmapPane = function(cases){
+  const host = document.getElementById('map');
+  if (!host) return;
+  if (!cases || !cases.length){
+    host.innerHTML = '<div class="empty"><div class="ico">🧠</div><div>暂无用例数据，无法渲染思维导图</div></div>';
+    window.mindmapInited = true;
+    return;
+  }
+  try{
+    // 销毁上一次实例（修复：重复 new 会残留旧节点/事件），再清空容器
+    if (window.mindmapInstance && typeof window.mindmapInstance.destroy === 'function'){
+      try{ window.mindmapInstance.destroy(); }catch(e){}
+    }
+    window.mindmapInstance = null;
+    host.innerHTML = '';
+    const data = buildMindmapData(cases);
+    const me = new MindElixir({
+      el: '#map', direction: SIDE, draggable: true, toolBar: true, overflowHidden: false,
+      primaryLinkStyle: 2, mainLinkStyle: 2, theme: THEME
+    });
+    me.init(data).then(() => injectMapDl(me));
+    window.mindmapInstance = me;
+    window.mindmapInited = true;
+  } catch(e){
+    host.innerHTML = '<div class="empty"><div class="ico">⚠️</div><div>思维导图渲染失败：' + (e && e.message || e) + '</div></div>';
+    window.mindmapInited = true;
+  }
+};
+</script>
+
 </body>
 </html>

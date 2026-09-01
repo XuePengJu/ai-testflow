@@ -1,6 +1,6 @@
 """任务相关的 Pydantic 响应模型。"""
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -28,6 +28,9 @@ class TaskOut(BaseModel):
     created_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     steps: list[StepLogOut] = []
+    # 结构化用例列表（仅详情接口包含；列表接口为 []）。
+    # 由 api/tasks.py 的 _to_out(include_cases=True) 注入，避免大 payload 拖慢列表渲染。
+    cases: list[dict[str, Any]] = []
 
     class Config:
         from_attributes = True

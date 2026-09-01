@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import auth, categories, guest, llm_config, tasks, users
 from app.core.config import STATIC_DIR, jwt_secret_is_placeholder, ENV
@@ -91,6 +92,11 @@ def favicon():
     from fastapi.responses import FileResponse
 
     return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
+
+
+# 前端第三方库（mind-elixir 等）本地化 vendor 目录，同源伺服
+# 让本地单服务（8000）即可完整加载思维导图，无需另起静态服务器
+app.mount("/vendor", StaticFiles(directory=str(STATIC_DIR / "vendor")), name="vendor")
 
 
 if __name__ == "__main__":
