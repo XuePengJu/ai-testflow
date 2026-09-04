@@ -331,7 +331,7 @@
     </div>
     <div>
       <div class="brand-t">AI 测试工作流平台</div>
-      <div class="brand-s">智能体编排 · 测试用例自动生成</div>
+      <div class="brand-s">通用测试用例生成 · 四 Agent 编排</div>
     </div>
     <div class="spacer"></div>
     <div class="idchip" id="identity"></div>
@@ -355,14 +355,6 @@
       <h2>新建生成任务 <span class="tag">四 Agent 编排</span></h2>
 
       <div class="field">
-        <label>规格类型</label>
-        <div class="seg" id="kindSeg">
-          <button data-kind="api" class="on">接口规格 API</button>
-          <button data-kind="business">业务需求</button>
-        </div>
-      </div>
-
-      <div class="field">
         <label>导出格式（可多选）</label>
         <div class="chips" id="fmtChips">
           <span class="chip on" data-fmt="xlsx">XLSX</span>
@@ -372,20 +364,20 @@
       </div>
 
       <div class="field">
-        <label>上传规格文件</label>
+        <label>上传需求文档</label>
         <div class="drop" id="drop">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
           <div class="t1">拖拽文件到此处</div>
-          <div class="t2">或 <span class="browse">点击选择</span> · 支持 .json / .md / .txt</div>
-          <input type="file" id="file" accept=".json,.md,.txt,application/json,text/markdown,text/plain" hidden>
+          <div class="t2">或 <span class="browse">点击选择</span> · 支持 .md / .txt</div>
+          <input type="file" id="file" accept=".md,.txt,text/markdown,text/plain" hidden>
         </div>
         <div id="fileBox"></div>
       </div>
 
       <div class="field">
-        <label>或直接粘贴规格文本（business 适用）</label>
+        <label>或直接粘贴需求文本</label>
         <textarea id="text" placeholder="例如：采购管理 - 采购订单创建。功能点：新增、编辑、审批、删除、查询……"></textarea>
         <div style="margin-top:6px"><button class="sample-btn" type="button" onclick="fillSample()">填入示例业务需求 →</button></div>
       </div>
@@ -710,7 +702,7 @@ function aesGcmDecrypt(keyB64,payloadB64){
 <script src="./config.js"></script>
 <script>
 const API=(window.API_BASE||"")+"/api";
-let kind="api";
+let kind="business";
 const fmts=new Set(["xlsx","json","xmind"]);
 let pendingFile=null, currentId=null, pollTimer=null;
 
@@ -1023,9 +1015,6 @@ function statusText(s){return {pending:'排队中',running:'运行中',completed
 function fmtSize(b){if(b==null)return'';return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(2)+' MB';}
 function fmtTime(s){if(!s)return'';const d=new Date(s);if(isNaN(d))return'';const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
 
-/* 类型选择 */
-$("kindSeg").addEventListener("click",e=>{const b=e.target.closest('button');if(!b)return;
-  document.querySelectorAll('#kindSeg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');kind=b.dataset.kind;});
 /* 格式选择 */
 $("fmtChips").addEventListener("click",e=>{const c=e.target.closest('.chip');if(!c)return;
   c.classList.toggle('on');const f=c.dataset.fmt;if(c.classList.contains('on'))fmts.add(f);else fmts.delete(f);});
@@ -1049,8 +1038,6 @@ function clearFile(){pendingFile=null;fileInput.value='';renderFileChip();}
 
 function fillSample(){
   $("text").value="采购管理 - 采购订单创建。\n功能点：新增采购单、编辑未提交单据、提交审批、审批通过/驳回、删除草稿、按供应商/日期查询。\n业务规则：提交后不可编辑；金额超 5 万需二级审批；供应商需为有效状态。";
-  kind="business";
-  document.querySelectorAll('#kindSeg button').forEach(x=>x.classList.toggle('on',x.dataset.kind==='business'));
   showToast("已填入示例业务需求");
 }
 
@@ -1098,11 +1085,10 @@ async function loadTasks(){
         ondragstart="dragData={type:'task',id:'${t.id}'};this.classList.add('dragging')"
         ondragend="dragData=null;this.classList.remove('dragging')"
         onclick="showDetail('${t.id}')">
-        <div class="ava">${t.kind==='api'?'🔌':'📄'}</div>
+        <div class="ava">📄</div>
         <div class="body">
           <div class="tn">${esc(t.name)}</div>
           <div class="ts">
-            <span class="k">${t.kind==='api'?'接口规格':'业务需求'}</span>
             <span class="k">${t.cases_count} 条用例</span>
             <span class="k">${t.duration_ms?t.duration_ms.toFixed(0)+'ms':'-'}</span>
             <span>${fmtTime(t.created_at)}</span>
@@ -1227,7 +1213,7 @@ async function renderDetail(id){
   const r=await api(API+'/tasks/'+id).catch(()=>null);if(!r||!r.ok)return;
   const t=await r.json();
   $("dTitle").textContent=t.name;
-  $("dMeta").innerHTML=`<span><b>${statusText(t.status)}</b></span><span>${t.kind==='api'?'接口规格':'业务需求'}</span><span>用例 <b>${t.cases_count}</b> 条</span><span>耗时 <b>${t.duration_ms?t.duration_ms.toFixed(0):'-'}</b>ms</span><span>${fmtTime(t.created_at)}</span>`;
+  $("dMeta").innerHTML=`<span><b>${statusText(t.status)}</b></span><span>用例 <b>${t.cases_count}</b> 条</span><span>耗时 <b>${t.duration_ms?t.duration_ms.toFixed(0):'-'}</b>ms</span><span>${fmtTime(t.created_at)}</span>`;
   $("ctCases").textContent=t.cases_count||0;
 
   // 工作流步骤（次要 tab #pane-steps）

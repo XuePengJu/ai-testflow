@@ -10,6 +10,7 @@ from app.core.utils import utcnow
 from sqlalchemy.orm import Session
 
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR
+from app.models.category import Category
 from app.models.task import Task, StepLog
 from app.models.user import User, CleanLog
 
@@ -20,7 +21,8 @@ def clean_guest(db: Session, guest: User, trigger: str) -> dict:
     """清理单个 guest：级联任务/日志/文件/目录/用户记录，返回统计。"""
     deleted_tasks = db.query(Task).filter(Task.user_id == guest.id).count()
 
-    # DB 级联：step_logs → tasks → user
+    # DB 级联：categories（示例分类易积留）→ step_logs → tasks → user
+    db.query(Category).filter(Category.user_id == guest.id).delete(synchronize_session=False)
     task_ids = [t.id for t in db.query(Task.id).filter(Task.user_id == guest.id).all()]
     if task_ids:
         db.query(StepLog).filter(StepLog.task_id.in_(task_ids)).delete(synchronize_session=False)

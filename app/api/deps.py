@@ -45,6 +45,13 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+async def require_user(user: User = Depends(get_current_user)) -> User:
+    """已注册用户（user/admin），排除访客——用于个人配置等注册后才能用的接口。"""
+    if user.role == "guest":
+        raise HTTPException(status_code=403, detail="访客无法使用该功能，请注册账号")
+    return user
+
+
 async def require_guest(user: User = Depends(get_current_user)) -> User:
     """仅 guest 可调（访客转正接口）。"""
     if user.role != "guest":

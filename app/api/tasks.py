@@ -70,14 +70,16 @@ async def create_task(
     user: User = Depends(get_current_user),
     file: UploadFile | None = File(None),
     text: str = Form(""),
-    kind: str = Form("api"),
+    kind: str = Form("business"),
     formats: str = Form("xlsx,json"),
     name: str = Form(""),
 ):
     """提交一个测试用例生成任务。可上传规格文件或粘贴文本。"""
     # 访客任务上限（防滥用）
     if user.role == "guest":
-        count = db.query(Task).filter(Task.user_id == user.id).count()
+        count = db.query(Task).filter(
+            Task.user_id == user.id, Task.is_sample.is_(False)
+        ).count()
         if count >= GUEST_MAX_TASKS:
             raise HTTPException(status_code=429, detail=f"访客最多 {GUEST_MAX_TASKS} 个任务，注册后无限制")
 

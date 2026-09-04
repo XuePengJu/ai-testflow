@@ -30,6 +30,8 @@ def _ensure_columns() -> None:
         cols = [r[1] for r in conn.execute(text("PRAGMA table_info(tasks)"))]
         if "category_id" not in cols:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN category_id INTEGER"))
+        if "is_sample" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN is_sample BOOLEAN NOT NULL DEFAULT 0"))
         conn.commit()
 
 

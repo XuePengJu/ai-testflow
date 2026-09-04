@@ -9,7 +9,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_user
 from app.core.db import get_db
 from app.core.providers import PROVIDERS, is_provider, FREE_PROVIDERS
 from app.models.llm_config import LLMConfig
@@ -96,7 +96,7 @@ def get_effective(db: Session = Depends(get_db),
 
 @router.get("/llm/config")
 def get_config(db: Session = Depends(get_db),
-               user: User = Depends(get_current_user)):
+               user: User = Depends(require_user)):
     rows = db.query(LLMConfig).filter(LLMConfig.user_id == user.id).all()
     return [_to_out(r) for r in rows]
 
@@ -104,7 +104,7 @@ def get_config(db: Session = Depends(get_db),
 @router.put("/llm/config", response_model=LLMConfigOut)
 def put_config(body: LLMConfigIn,
                db: Session = Depends(get_db),
-               user: User = Depends(get_current_user)):
+               user: User = Depends(require_user)):
     row = _upsert(db, user.id, body)
     if body.slot == "text" and not row.api_key_enc:
         # 免费厂商且服务端已配 Key → 允许不填 Key（平台提供）
@@ -116,7 +116,7 @@ def put_config(body: LLMConfigIn,
 @router.delete("/llm/config/{slot}", status_code=204)
 def delete_config(slot: str,
                   db: Session = Depends(get_db),
-                  user: User = Depends(get_current_user)):
+                  user: User = Depends(require_user)):
     if slot not in ("text", "vision"):
         raise HTTPException(400, detail="slot 只能是 text 或 vision")
     row = _get_row(db, user.id, slot)
@@ -130,7 +130,7 @@ def delete_config(slot: str,
 
 @router.get("/llm/platform-config", response_model=list[LLMConfigOut])
 def get_platform(db: Session = Depends(get_db),
-                 user: User = Depends(get_current_user)):
+                 admin: User = Depends(require_admin)):
     rows = db.query(LLMConfig).filter(LLMConfig.user_id == 0).all()
     return [_to_out(r) for r in rows]
 

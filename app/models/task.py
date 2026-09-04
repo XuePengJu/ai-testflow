@@ -2,7 +2,7 @@
 from app.core.utils import utcnow
 
 from sqlalchemy import (
-    Column, String, Integer, Text, DateTime, Float, ForeignKey,
+    Column, String, Integer, Text, DateTime, Float, ForeignKey, Boolean,
 )
 from app.core.db import Base
 
@@ -19,6 +19,7 @@ class Task(Base):
     formats = Column(String, default="xlsx,json")  # 导出格式，逗号分隔
     status = Column(String, nullable=False, default="pending")  # pending/running/completed/failed
     user_id = Column(Integer, nullable=True, index=True)        # 归属用户（存量迁移归 admin）
+    is_sample = Column(Boolean, nullable=False, default=False)  # 平台预置示例任务（不占访客配额）
     category_id = Column(Integer, nullable=True, index=True)    # 归属分类（NULL=未分类）
     input_summary = Column(Text, default="")
     cases_count = Column(Integer, default=0)

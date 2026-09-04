@@ -25,8 +25,14 @@ _ASSET = Path(__file__).resolve().parent.parent / "assets" / "sample_tasks.json"
 
 
 def seed_sample_tasks(db: Session, user: User) -> int:
-    """为新账号播种分类与示例任务，返回播种任务数（失败返回 0，不抛异常）。"""
+    """为新账号播种分类与示例任务，返回播种任务数（失败返回 0，不抛异常）。
+
+    幂等：若该用户已有 is_sample=True 的任务，直接返回 0，避免重复创建分类与任务。
+    """
     try:
+        # 幂等检查：已播种过则跳过
+        if db.query(Task).filter(Task.user_id == user.id, Task.is_sample.is_(True)).first():
+            return 0
         data = json.loads(_ASSET.read_text(encoding="utf-8"))
         now = utcnow()
         out_dir = OUTPUT_DIR / user.data_dir
@@ -58,6 +64,7 @@ def seed_sample_tasks(db: Session, user: User) -> int:
                     finished_at=now + timedelta(milliseconds=t.get("duration_ms", 0)),
                     user_id=user.id,
                     category_id=cat.id,
+                    is_sample=True,
                 ))
                 for s in tpl["steps"]:
                     db.add(StepLog(
