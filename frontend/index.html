@@ -93,14 +93,16 @@
   textarea:focus,input[type=text]:focus,input[type=password]:focus,.llm-slot select:focus{outline:none;border-color:var(--brand1);box-shadow:0 0 0 3px var(--brand-soft)}
 
   /* ===== 拖拽上传 ===== */
-  .drop{border:2px dashed #cdd2e0;border-radius:14px;padding:26px 18px;text-align:center;cursor:pointer;
-        background:#fafbff;transition:.2s;position:relative;overflow:hidden}
+  .drop{border:2px dashed #cdd2e0;border-radius:12px;padding:10px 16px;text-align:center;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:10px;
+    background:#fafbff;transition:.2s;position:relative;overflow:hidden}
   .drop:hover{border-color:var(--brand1);background:#f4f5ff}
   .drop.drag{border-color:var(--brand2);background:#efeaff;transform:scale(1.01)}
-  .drop .ic{width:44px;height:44px;margin:0 auto 10px;color:var(--brand1);opacity:.9}
-  .drop .t1{font-size:14px;font-weight:600}
-  .drop .t2{font-size:12px;color:var(--sub);margin-top:4px}
+  .drop .ic{width:22px;height:22px;margin:0;color:var(--brand1);opacity:.9;flex:none}
+  .drop .t1{font-size:14px;font-weight:600;white-space:nowrap}
+  .drop .t2{font-size:12px;color:var(--sub);margin:0;white-space:nowrap}
   .drop .browse{color:var(--brand1);font-weight:700;text-decoration:underline}
+  @media(max-width:480px){.drop{flex-wrap:wrap;row-gap:2px;padding:12px 14px}.drop .t2{flex-basis:100%}}
   .filechip{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:2px}
   .filechip .fic{width:34px;height:34px;border-radius:9px;background:var(--brand-soft);color:var(--brand1);display:grid;place-items:center;flex:none}
   .filechip .fmeta{min-width:0;flex:1}
