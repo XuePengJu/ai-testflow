@@ -23,6 +23,8 @@ _PLAINTEXT_PATHS = {
     ("POST", "/api/auth/register"),
     ("POST", "/api/guest/token"),
     ("POST", "/api/guest/upgrade"),
+    # SSE 流式响应：响应是 text/event-stream，不能加密；请求体是明文 JSON，无需解密
+    ("POST", "/api/chat/stream"),
 }
 
 
