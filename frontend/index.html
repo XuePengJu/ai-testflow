@@ -1633,6 +1633,7 @@ function appendChatStreamBubble(draft){
       stopBtn.style.display='none';
     },
     _setStopped(){
+      div.classList.remove('streaming');
       const pill=div.querySelector('.live-pill');
       if(pill){pill.textContent='已停止';pill.style.background='#6b7280';}
       stopBtn.style.display='none';
@@ -1641,6 +1642,7 @@ function appendChatStreamBubble(draft){
       appendConfirmBtnToStream(div, draft);
     },
     _setDone(meta){
+      div.classList.remove('streaming');
       const pill=div.querySelector('.live-pill');
       if(pill){
         if(meta && meta.had_error){pill.textContent='部分失败';pill.style.background='#f59e0b';}
