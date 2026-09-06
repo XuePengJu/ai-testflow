@@ -1718,9 +1718,18 @@ async function sendChat(){
   setChatStreamingState(true);
   chatStreamAbort=new AbortController();
 
-  let fullThinking='';
+    let fullThinking='';
   let fullReply='';
   let stopped=false;
+
+  // 前端切分 思考...思考 的辅助函数
+  function splitThink(text){
+    const m = text.match(/ 思考([\s\S]*?)思考/);
+    if(!m) return {thinking:'', reply:text};
+    const thinking = m[1].trim();
+    const reply = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
+    return {thinking, reply};
+  }
 
   try{
     const r=await fetch(API+'/chat/stream',{
@@ -1744,32 +1753,36 @@ async function sendChat(){
     const decoder=new TextDecoder('utf-8');
     let buffer='';
 
-    while(true){
-      const {done, value}=await reader.read();
-      if(done)break;
-      buffer += decoder.decode(value, {stream:true});
+      while(true){
+        const {done, value}=await reader.read();
+        if(done)break;
+        buffer += decoder.decode(value, {stream:true});
 
-      // 按 \n\n 切分事件（SSE 协议）
-      let idx;
-      while((idx=buffer.indexOf('\n\n')) !== -1){
-        const raw=buffer.slice(0, idx);
-        buffer=buffer.slice(idx+2);
-        const ev=parseSSE(raw);
-        if(!ev)continue;
-        if(ev.event==='thinking'){
-          fullThinking += ev.data.delta||'';
-          streamBubble._appendThinking(fullThinking);
-        }else if(ev.event==='reply'){
-          fullReply += ev.data.delta||'';
-          streamBubble._appendReply(fullReply);
-        }else if(ev.event==='error'){
-          streamBubble._setError(ev.data.message||'未知错误');
-        }else if(ev.event==='done'){
-          streamBubble._setDone(ev.data);
+        // 按 \n\n 切分事件（SSE 协议）
+        let idx;
+        while((idx=buffer.indexOf('\n\n')) !== -1){
+          const raw=buffer.slice(0, idx);
+          buffer=buffer.slice(idx+2);
+          const ev=parseSSE(raw);
+          if(!ev)continue;
+          if(ev.event==='delta'){
+            const text=(ev.data.content||'') + '';
+            fullReply += text;
+            // 解析思考/回复并更新面板
+            const parsed=splitThink(fullReply);
+            if(parsed.thinking !== fullThinking){
+              fullThinking = parsed.thinking;
+              streamBubble._appendThinking(fullThinking);
+            }
+            streamBubble._appendReply(parsed.reply);
+          }else if(ev.event==='error'){
+            streamBubble._setError(ev.data.message||'未知错误');
+          }else if(ev.event==='done'){
+            streamBubble._setDone(ev.data);
+          }
         }
+        $("chatStream").scrollTop=$("chatStream").scrollHeight;
       }
-      $("chatStream").scrollTop=$("chatStream").scrollHeight;
-    }
   }catch(e){
     if(e.name==='AbortError'){
       stopped=true;

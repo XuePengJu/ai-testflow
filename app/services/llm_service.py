@@ -7,6 +7,7 @@
 - chat_stream：流式输出（前端打字机体验），yield 内容片段（prompt 强制 <think>…</think> 切分）
 """
 import asyncio
+import asyncio
 import json
 import re
 import time
@@ -87,7 +88,7 @@ class OpenAICompatClient:
         """与旧 BailianClient.generate 同签名：prompt 进、文本出。"""
         return self.chat([{"role": "user", "content": prompt}])
 
-    def chat_stream(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192):
+    def chat_stream(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192, timeout: float = _TIMEOUT):
         """流式 chat_completions：yield (event, payload)。
 
         event in {"delta", "done", "error"}：
@@ -106,7 +107,7 @@ class OpenAICompatClient:
         buf = ""
         full = ""
         try:
-            with httpx.Client(timeout=_TIMEOUT) as hc:
+            with httpx.Client(timeout=timeout) as hc:
                 with hc.stream("POST", url, headers=headers, json=payload) as r:
                     if r.status_code != 200:
                         body = r.read().decode("utf-8", errors="ignore")[:300]
@@ -329,42 +330,48 @@ def _mock_reply_for(user_text: str) -> str:
     )
 
 
-def _mock_stream_chunks(user_text: str):
-    """mock 模式流式切片：think 段 + reply 段，逐句/逐段 yield。"""
+async def _mock_stream_chunks(user_text: str):
+    """mock 模式流式切片：think 段 + reply 段，逐段 yield。"""
     thinking = _mock_thinking_for(user_text)
     reply = _mock_reply_for(user_text)
-    # 构造完整内容（用 <think> 分隔符让前端能解析）
-    full = f"<think>\n{thinking}\n</think>\n{reply}"
-    # 按换行分块，每块 ~60ms，模拟真实模型流式节奏
-    pieces = re.split(r"(\n)", full)  # 保留换行符便于前端排版
-    for piece in pieces:
-        if not piece:
-            continue
+    full = f" 思考\n{thinking}\n思考\n{reply}"
+    chunk_size = 12
+    i = 0
+    while i < len(full):
+        piece = full[i:i+chunk_size]
         yield ("delta", piece)
-        time.sleep(0.06)
+        await asyncio.sleep(0.04)
+        i += chunk_size
     yield ("done", {"full": full, "clean": reply})
 
+async def chat_stream(db: Session, user: User | None, user_text: str, history: list | None, attached_text: str = ""):
+    """对话流式生成器（async）。
 
-def chat_stream(db: Session, user: User | None, user_text: str, history: list | None, attached_text: str = ""):
-    """对话流式生成器：根据 resolve_effective 选择真实模型 / mock。
-
-    返回 generator，event ∈ {"delta", "done", "error"}，含义见 OpenAICompatClient.chat_stream。
-    若真实模型调用前已确定 mock（无配置），走 mock 流式切片。
+    设计：对话场景以 demo 体验优先。平台默认/环境变量兜底是免费或公共模型，
+    可能很慢或不稳定，因此**聊天默认走 mock 流式**，只有用户明确自配真实模型时才走真实调用。
     """
     eff = resolve_effective(db, user)
+    use_real = (eff.get("source") == "user" and eff.get("text") is not None)
     messages = _build_messages(user_text or "", history, attached_text)
-    if eff.get("text") is None:
-        yield from _mock_stream_chunks(user_text or "")
+    if not use_real:
+        async for ev in _mock_stream_chunks(user_text or ""):
+            yield ev
         return
     cfg = eff["text"]
     client = OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
     try:
-        for ev in client.chat_stream(messages):
+        # 真实模型是同步 generator（httpx 同步流式），在线程池里跑
+        loop = asyncio.get_running_loop()
+        sync_gen = client.chat_stream(messages, timeout=8.0)
+        while True:
+            ev = await loop.run_in_executor(None, lambda: next(sync_gen, None))
+            if ev is None:
+                break
             yield ev
     except LLMError as e:
-        # 真实模型失败时降级到 mock，保证前端体验不挂
         yield ("error", str(e))
-        yield from _mock_stream_chunks(user_text or "")
+        async for ev in _mock_stream_chunks(user_text or ""):
+            yield ev
 
 
 # ============ 视觉增强（两段式第一步） ============
