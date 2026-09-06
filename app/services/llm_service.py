@@ -4,9 +4,12 @@
 - resolve_effective：模型解析优先级 = 用户配置 > 平台默认 > 服务器环境变量 > mock 兜底
 - Key 落库加密：复用 crypto 的 AES-256-GCM 原语，密钥 HKDF(JWT_SECRET, info=llm-at-rest:<owner>)
 - 两段式视觉理解：图片（data: URI / http URL）先交视觉模型转文字描述，再进文本模型
+- chat_stream：流式输出（前端打字机体验），yield 内容片段（prompt 强制 <think>…</think> 切分）
 """
+import asyncio
 import json
 import re
+import time
 
 import httpx
 from sqlalchemy.orm import Session
@@ -83,6 +86,56 @@ class OpenAICompatClient:
     def generate(self, prompt: str) -> str:
         """与旧 BailianClient.generate 同签名：prompt 进、文本出。"""
         return self.chat([{"role": "user", "content": prompt}])
+
+    def chat_stream(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192):
+        """流式 chat_completions：yield (event, payload)。
+
+        event in {"delta", "done", "error"}：
+        - delta：payload=str，本次增量内容（前端用 <think> 标签自行切分思考/回复）
+        - done： payload={"full": str}，本次完整内容
+        - error：payload=str，错误描述
+
+        实现：httpx.stream() 逐行解析 SSE，按 data: {...} 取 choices[0].delta.content。
+        """
+        url = self.base_url.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": self.model, "messages": messages,
+            "temperature": temperature, "max_tokens": max_tokens, "stream": True,
+        }
+        buf = ""
+        full = ""
+        try:
+            with httpx.Client(timeout=_TIMEOUT) as hc:
+                with hc.stream("POST", url, headers=headers, json=payload) as r:
+                    if r.status_code != 200:
+                        body = r.read().decode("utf-8", errors="ignore")[:300]
+                        yield ("error", f"HTTP {r.status_code}：{body}")
+                        return
+                    for line in r.iter_lines():
+                        if not line:
+                            continue
+                        if line.startswith("data:"):
+                            data = line[5:].strip()
+                            if data == "[DONE]":
+                                break
+                            try:
+                                obj = json.loads(data)
+                                delta = obj["choices"][0].get("delta", {}).get("content") or ""
+                            except (KeyError, IndexError, ValueError):
+                                continue
+                            if delta:
+                                full += delta
+                                yield ("delta", delta)
+        except httpx.HTTPError as e:
+            yield ("error", f"网络错误：{e.__class__.__name__}")
+            return
+        except Exception as e:  # noqa: BLE001
+            yield ("error", f"流式中断：{e.__class__.__name__}: {str(e)[:80]}")
+            return
+        # 防御：去除混入的 <think> 思考过程（虽然前端会切分，但完整存档里也清掉避免污染）
+        clean = re.sub(r"<think>.*?</think>", "", full, flags=re.S).strip()
+        yield ("done", {"full": full, "clean": clean})
 
     def describe_image(self, image_url: str, hint: str = "") -> str:
         """视觉理解：图片 + 指令 → 中文文字描述（两段式第一步）。"""
@@ -213,6 +266,105 @@ def public_view(cfg: dict | None) -> dict | None:
     if not cfg:
         return None
     return {k: cfg[k] for k in ("provider", "provider_label", "base_url", "model")}
+
+
+# ============ 对话流式 chat_stream（前端打字机体验） ============
+
+_SYSTEM_PROMPT = """你是 Buddy，资深软件测试工程师，专精测试用例设计。
+
+【输出格式要求】严格按下述结构：
+<think>
+- 需求理解：...
+- 覆盖维度：...
+- 风险点 / 边界条件：...
+</think>
+（正式回复，正面回答用户，先复述需求理解，再列出覆盖维度，每条简短解释，最后给 1-3 个澄清问题）
+
+要求：
+1. 思考过程用 <think>...</think> 包裹，可折叠不打扰用户阅读正式回复
+2. 正式回复要可直接生成测试用例，澄清问题要具体（如"主要覆盖正面/反面/边界？"）
+3. 简洁专业，避免客套；用 markdown 列表"""
+
+
+def _build_messages(user_text: str, history: list | None, attached_text: str) -> list:
+    """组装 messages：system + history + 当前用户消息（附文档摘要在消息里）。"""
+    msgs = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    if history:
+        msgs.extend(history[-10:])  # 截断最多 10 轮避免超 token
+    user_content = user_text or "（用户仅发送了附件）"
+    if attached_text:
+        user_content += f"\n\n【附件摘要】\n{attached_text[:3000]}"
+    msgs.append({"role": "user", "content": user_content})
+    return msgs
+
+
+def _mock_thinking_for(user_text: str) -> str:
+    """mock 模式：根据用户输入动态拼一段思考过程。"""
+    u = (user_text or "").strip()
+    if not u:
+        u = "（无文字描述，仅附件）"
+    short = u[:60] + ("…" if len(u) > 60 else "")
+    return (
+        "- 需求理解：用户描述「" + short + "」\n"
+        "- 覆盖维度：输入边界 / 错误处理 / 权限控制 / 数据一致性 / 异常兼容\n"
+        "- 风险点：未明确业务类型（功能 / 接口 / App），未明确测试范围与通过标准\n"
+    )
+
+
+def _mock_reply_for(user_text: str) -> str:
+    """mock 模式：正式回复模板。"""
+    u = (user_text or "").strip() or "你描述的场景"
+    return (
+        f"好的，关于「{u[:30]}{'…' if len(u) > 30 else ''}」，我先理一下：\n\n"
+        "**可能覆盖的测试维度：**\n"
+        "1. **输入边界**：空值、最大长度、特殊字符、emoji、SQL 注入\n"
+        "2. **错误处理**：异常返回、错误码覆盖、错误提示文案\n"
+        "3. **权限控制**：未登录、不同角色、跨用户访问\n"
+        "4. **数据一致性**：并发修改、删除后引用、外键约束\n"
+        "5. **异常兼容**：网络中断、超时、重试机制\n\n"
+        "为了生成更精准的用例，能否告诉我：\n"
+        "1. 这属于哪类系统（Web 功能 / 接口 / App 端）？\n"
+        "2. 需要覆盖哪些角色（管理员 / 普通用户 / 访客）？\n"
+        "3. 有没有特定业务规则（如金额上限、审批流）？"
+    )
+
+
+def _mock_stream_chunks(user_text: str):
+    """mock 模式流式切片：think 段 + reply 段，逐句/逐段 yield。"""
+    thinking = _mock_thinking_for(user_text)
+    reply = _mock_reply_for(user_text)
+    # 构造完整内容（用 <think> 分隔符让前端能解析）
+    full = f"<think>\n{thinking}\n</think>\n{reply}"
+    # 按换行分块，每块 ~60ms，模拟真实模型流式节奏
+    pieces = re.split(r"(\n)", full)  # 保留换行符便于前端排版
+    for piece in pieces:
+        if not piece:
+            continue
+        yield ("delta", piece)
+        time.sleep(0.06)
+    yield ("done", {"full": full, "clean": reply})
+
+
+def chat_stream(db: Session, user: User | None, user_text: str, history: list | None, attached_text: str = ""):
+    """对话流式生成器：根据 resolve_effective 选择真实模型 / mock。
+
+    返回 generator，event ∈ {"delta", "done", "error"}，含义见 OpenAICompatClient.chat_stream。
+    若真实模型调用前已确定 mock（无配置），走 mock 流式切片。
+    """
+    eff = resolve_effective(db, user)
+    messages = _build_messages(user_text or "", history, attached_text)
+    if eff.get("text") is None:
+        yield from _mock_stream_chunks(user_text or "")
+        return
+    cfg = eff["text"]
+    client = OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
+    try:
+        for ev in client.chat_stream(messages):
+            yield ev
+    except LLMError as e:
+        # 真实模型失败时降级到 mock，保证前端体验不挂
+        yield ("error", str(e))
+        yield from _mock_stream_chunks(user_text or "")
 
 
 # ============ 视觉增强（两段式第一步） ============
