@@ -14,7 +14,7 @@ from app.core.db import get_db
 from app.core.providers import PROVIDERS, is_provider, FREE_PROVIDERS
 from app.models.llm_config import LLMConfig
 from app.models.user import User
-from app.schemas.llm_config import LLMConfigIn, LLMConfigOut, LLMTestIn
+from app.schemas.llm_config import ChatIn, LLMConfigIn, LLMConfigOut, LLMTestIn
 from app.services import llm_service
 
 router = APIRouter()
@@ -245,3 +245,65 @@ def test_llm(body: LLMTestIn,
     if not body.base_url.strip() or not body.model.strip():
         raise HTTPException(400, detail="base_url 与 model 不能为空")
     return llm_service.test_connectivity(body.base_url.strip(), api_key, body.model.strip())
+
+
+# ---------- 首页对话流（AI 测试工程师对话） ----------
+
+_CHAT_SYSTEM_PROMPT = (
+    "你是一位资深软件测试工程师，正在与用户沟通测试用例设计需求。"
+    "请用中文、简洁、专业地回复。你的目标是：\n"
+    "1. 理解用户给出的测试需求；\n"
+    "2. 简要分析可以覆盖哪些测试维度（如功能、边界、异常、权限、兼容性等）；\n"
+    "3. 针对不清晰的地方提出 1-3 个澄清问题；\n"
+    "4. 如果用户已表达清楚，可在回复末尾引导用户点击「生成测试用例」按钮开始生成；\n"
+    "5. 不要一次性输出大量用例表格，保持对话感。"
+)
+
+
+@router.post("/chat")
+def chat(body: ChatIn,
+         db: Session = Depends(get_db),
+         user: User = Depends(get_current_user)):
+    """首页对话流：用户发消息 → AI 测试工程师回复。
+
+    - 复用当前生效文本模型（用户配置 > 平台默认 > 服务器环境变量 > mock 兜底）
+    - 未配置真实模型时返回 mock 回复，仍可演示完整交互
+    """
+    eff = llm_service.resolve_effective(db, user)
+    cfg = eff.get("text")
+    messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT}]
+    for h in (body.history or []):
+        if h.get("role") in ("user", "assistant") and h.get("content"):
+            messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": body.message})
+
+    if not cfg or not cfg.get("api_key"):
+        # mock 兜底：给出结构化回复
+        reply = (
+            f"收到你的需求：「{body.message[:60]}{'…' if len(body.message) > 60 else ''}」。\n\n"
+            "从测试设计角度，我建议先明确以下几个维度：\n"
+            "1. **功能路径**：正常流程与异常流程分别是什么？\n"
+            "2. **边界条件**：有无长度、次数、金额、时间等限制？\n"
+            "3. **权限与状态**：不同角色/状态下行为是否一致？\n\n"
+            "如果你已经考虑清楚，可以直接点击下方的「生成测试用例」按钮，我会调用 4 个 Agent 开始生成。"
+        )
+        return {"reply": reply, "source": eff.get("source", "mock"), "model": None, "used_mock": True}
+
+    try:
+        client = llm_service.OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
+        reply = client.chat(messages, temperature=0.5, max_tokens=2048)
+        return {
+            "reply": reply,
+            "source": eff.get("source"),
+            "model": cfg.get("model"),
+            "provider_label": cfg.get("provider_label"),
+            "used_mock": False,
+        }
+    except llm_service.LLMError as e:
+        # 真实模型调用失败时回退到 mock，保证前端不挂
+        reply = (
+            f"收到你的需求：「{body.message[:60]}{'…' if len(body.message) > 60 else ''}」。\n\n"
+            f"（真实模型暂时不可用：{str(e)[:80]}，已切换为兜底回复）\n\n"
+            "建议先明确：功能路径、边界条件、权限与状态。确认后点击下方「生成测试用例」开始生成。"
+        )
+        return {"reply": reply, "source": eff.get("source"), "model": cfg.get("model"), "used_mock": True}

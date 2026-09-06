@@ -46,3 +46,9 @@ class LLMEffectiveOut(BaseModel):
     source: str                      # user / platform / env / mock
     text: dict | None                # {provider, provider_label, model}
     vision: dict | None
+
+
+class ChatIn(BaseModel):
+    """首页对话流：用户消息 + 可选历史（多轮）。"""
+    message: str
+    history: list[dict] = []         # [{role:"user"/"assistant", content:"..."}]

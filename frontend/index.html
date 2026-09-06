@@ -241,6 +241,14 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
     cursor:pointer;transition:.12s;font-family:inherit;
   }
   .msg-ai .bubble .quick-row .qtag:hover{background:#ddd6fe}
+  .chat-reply .reply-body p{margin:0 0 6px 0;line-height:1.6}
+  .chat-reply .reply-body p:last-child{margin-bottom:0}
+  .thinking-dots{display:flex;gap:4px;align-items:center;height:20px}
+  .thinking-dots span{width:8px;height:8px;background:var(--brand1);border-radius:50%;animation:thinkBounce 1.4s infinite ease-in-out both}
+  .thinking-dots span:nth-child(1){animation-delay:-0.32s}
+  .thinking-dots span:nth-child(2){animation-delay:-0.16s}
+  .thinking-dots span:nth-child(3){animation-delay:0s}
+  @keyframes thinkBounce{0%,80%,100%{transform:scale(0.6);opacity:0.5}40%{transform:scale(1);opacity:1}}
 
   /* AI 回复里的模块小卡 */
   .mod-grid{margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
@@ -861,6 +869,7 @@ const fmts=new Set(["xlsx","json","xmind"]);
 let pendingFile=null, currentId=null, pollTimer=null;
 // 对话驱动：当前未确认的草稿（用户说需求后，AI 先确认，再点「生成测试用例」才真正创建任务）
 let pendingDraft=null;
+let chatMessages=[];   // 首页多轮对话历史 [{role:'user'|'assistant', content}]
 
 /* ===== 认证状态（V2）+ 分级加密（V2.1） ===== */
 const TOKEN_KEY="aitf_token", USER_KEY="aitf_user", ENCKEY_KEY="aitf_enc_key";
@@ -1453,8 +1462,9 @@ function pickAttach(){
 }
 
 function newChat(){
-  // 清空对话流 + 草稿，只保留欢迎区
+  // 清空对话流 + 草稿 + 历史，只保留欢迎区
   pendingDraft=null;
+  chatMessages=[];
   clearFile();
   $("chatText").value='';
   const stream=$("chatStream");
@@ -1497,75 +1507,109 @@ async function sendChat(){
   const txt=$("chatText").value.trim();
   if(!txt && !pendingFile){showToast('请输入需求或附加文档');return;}
 
+  const userContent=txt||'(仅附加文档)';
   // 渲染用户气泡
-  appendUserMsg(txt||'(附加文档)');
+  appendUserMsg(userContent);
+  // 记录到对话历史
+  chatMessages.push({role:'user', content:userContent});
 
   // 保存当前草稿（文件、文本、类型、格式）
-  pendingDraft={
+  const draft={
     text: txt,
     file: pendingFile,
     kind: kind,
     formats: [...fmts]
   };
+  pendingDraft=draft;
 
   // 清空输入区
   $("chatText").value='';
-  if(pendingFile){
-    clearFile();
+  if(pendingFile){clearFile();}
+
+  // 调用 AI 对话接口获取真正回复（不是模板确认）
+  appendChatThinking();
+  $("chatStream").scrollTop=$("chatStream").scrollHeight;
+
+  try{
+    const r=await api(API+'/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:userContent, history:chatMessages.slice(0,-1)})
+    });
+    removeChatThinking();
+    if(!r.ok){
+      const e=await r.text();
+      appendChatAiMsg('抱歉，AI 回复失败：'+e, draft);
+      return;
+    }
+    const data=await r.json();
+    chatMessages.push({role:'assistant', content:data.reply});
+    appendChatAiMsg(data.reply, draft, data.used_mock);
+  }catch(e){
+    removeChatThinking();
+    appendChatAiMsg('网络错误，请重试：'+e.message, draft);
   }
-
-  // AI 先确认需求，不直接创建任务
-  appendConfirmBubble(txt||'(仅附件)');
-
-  // 滚动到底部
   $("chatStream").scrollTop=$("chatStream").scrollHeight;
 }
 
-function appendConfirmBubble(text){
+function appendChatThinking(){
   const stream=$("chatStream");
   const div=document.createElement('div');
-  div.className='msg msg-ai msg-confirm';
-  // 把当前草稿绑定到这个气泡上，防止多轮对话后旧气泡误用新草稿
-  div._draft=pendingDraft;
-  div.innerHTML=renderConfirmBubbleHTML(text);
+  div.className='msg msg-ai msg-thinking';
+  div.id='chatThinking';
+  div.innerHTML=`<div class="avatar">AI</div><div class="bubble"><div class="thinking-dots"><span></span><span></span><span></span></div></div>`;
   stream.appendChild(div);
   stream.scrollTop=stream.scrollHeight;
-  // 绑定确认区按钮
+}
+function removeChatThinking(){
+  const el=$('chatThinking'); if(el) el.remove();
+}
+
+function appendChatAiMsg(reply, draft, usedMock){
+  const stream=$("chatStream");
+  const div=document.createElement('div');
+  div.className='msg msg-ai msg-chat';
+  div._draft=draft;
+  div._conversation=JSON.parse(JSON.stringify(chatMessages));
+  div.innerHTML=renderChatAiBubbleHTML(reply, usedMock);
+  stream.appendChild(div);
+  stream.scrollTop=stream.scrollHeight;
+  // 绑定生成按钮
   const btn=div.querySelector('.confirm-btn');
   if(btn){
     btn.addEventListener('click',()=>{
-      // 防止重复点击
-      btn.disabled=true;
-      btn.textContent='生成中…';
-      confirmAndCreateTask(div, div._draft);
+      btn.disabled=true; btn.textContent='生成中…';
+      confirmAndCreateTask(div, div._draft, div._conversation);
     });
   }
 }
 
-function renderConfirmBubbleHTML(text){
-  const preview=text.length>80?text.slice(0,80)+'…':text;
-  const kindLabel={business:'业务功能',interface:'接口测试',app:'App 端功能'}[kind]||'业务功能';
-  const fmtLabels={xlsx:'Excel',json:'JSON',xmind:'XMind'};
-  const fmtText=[...fmts].map(f=>fmtLabels[f]||f).join('、')||'Excel';
+function renderChatAiBubbleHTML(reply, usedMock){
+  const mockTag=usedMock?`<span style="font-size:11px;color:var(--sub);margin-left:6px">(演示模式)</span>`:'';
+  // 把回复里的换行渲染成段落
+  const paragraphs=esc(reply).split('\n').filter(l=>l.trim()).map(l=>`<p>${l}</p>`).join('');
   return `
-    <div class="avatar">AI</div>
-    <div class="bubble">
-      <div class="bubble-title">收到需求</div>
-      <div>我理解为：<b>「${esc(preview)}」</b></div>
-      <div style="margin-top:6px">计划按 <b>${kindLabel}</b> 类型设计，输出格式 <b>${fmtText}</b>。</div>
-      <div style="margin-top:6px;color:var(--sub)">确认后我会调用 4 个 Agent（解析 → 拆解 → 设计 → 校验）开始生成测试用例。</div>
+    <div class="avatar">AI${mockTag}</div>
+    <div class="bubble chat-reply">
+      <div class="bubble-title">AI 测试工程师</div>
+      <div class="reply-body">${paragraphs}</div>
       <div class="quick-row" style="margin-top:10px">
         <button class="qtag confirm-btn" type="button">✨ 生成测试用例</button>
-        <button class="qtag" type="button" onclick="showToast('可在输入框补充更多规则后再点生成')">补充规则</button>
+        <button class="qtag" type="button" onclick="showToast('可在输入框继续补充规则后发送')">继续补充</button>
       </div>
     </div>`;
 }
 
-async function confirmAndCreateTask(confirmBubble, draft){
+async function confirmAndCreateTask(chatBubble, draft, conversation){
   if(!draft){showToast('没有待生成的需求，请重新输入');return;}
-  pendingDraft=draft;
-  // 将确认气泡更新为「生成中」状态
-  const bubble=confirmBubble.querySelector('.bubble');
+  // 把完整对话作为任务文本，上下文更充分
+  const conversationText=(conversation||[]).map(m=>`${m.role==='user'?'用户':'AI'}：${m.content}`).join('\n\n');
+  pendingDraft={
+    ...draft,
+    text: draft.text || conversationText
+  };
+  // 将对话气泡更新为「生成中」状态
+  const bubble=chatBubble.querySelector('.bubble');
   if(bubble){
     bubble.innerHTML=`<div class="bubble-title">正在生成…</div>
       <div>Agent 链已启动：解析规格 → 拆解场景 → 设计用例 → 质量校验</div>
