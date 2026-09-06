@@ -316,6 +316,39 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .msg-ai.thinking .bubble .dots{display:inline-block;animation:dotfade 1.2s infinite}
   @keyframes dotfade{0%,100%{opacity:.3}50%{opacity:1}}
 
+  /* 流式 AI 气泡：思考折叠 + 回复打字机 */
+  .msg-ai.streaming .bubble{background:#fff;border:1px solid var(--line)}
+  .msg-ai.streaming .stream-head{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:6px}
+  .msg-ai.streaming .stream-head .live-pill{font-size:10px;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2));padding:2px 6px;border-radius:999px;display:inline-flex;align-items:center;gap:4px}
+  .msg-ai.streaming .stream-head .live-pill::before{content:"";width:6px;height:6px;border-radius:50%;background:#fff;animation:pulse 1s infinite}
+  .msg-ai.streaming .stream-head .stop-btn{margin-left:auto;font-size:11px;color:var(--sub);background:#f3f4f6;border:1px solid var(--line);padding:3px 8px;border-radius:6px;cursor:pointer}
+  .msg-ai.streaming .stream-head .stop-btn:hover{background:#fee2e2;color:#dc2626;border-color:#fecaca}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+
+  /* 思考折叠面板 */
+  .think-panel{margin:6px 0 10px;border:1px solid #e0e7ff;background:#f5f7ff;border-radius:8px;overflow:hidden}
+  .think-panel.hidden{display:none}
+  .think-panel.empty{display:none}
+  .think-head{display:flex;align-items:center;gap:6px;padding:7px 12px;font-size:12px;color:#4f46e5;font-weight:600;cursor:pointer;user-select:none;background:linear-gradient(180deg,#eef2ff,#f5f7ff)}
+  .think-head:hover{background:linear-gradient(180deg,#e0e7ff,#eef2ff)}
+  .think-head .arrow{display:inline-block;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #6366f1;transition:transform .25s}
+  .think-head.open .arrow{transform:rotate(180deg)}
+  .think-head .label{flex:1}
+  .think-head .hint{font-size:11px;color:var(--sub);font-weight:400}
+  .think-body{max-height:0;overflow:hidden;transition:max-height .3s ease;padding:0 12px}
+  .think-body.open{max-height:320px;overflow-y:auto;padding:8px 12px 10px;font-size:12px;color:#475569;white-space:pre-wrap;line-height:1.6;border-top:1px solid #e0e7ff}
+
+  /* 回复区（流式打字机）*/
+  .reply-body{font-size:14px;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word}
+  .reply-body p{margin:0 0 6px 0}
+  .reply-body .typing-cursor{display:inline-block;width:7px;height:14px;background:var(--brand1);margin-left:2px;vertical-align:text-bottom;animation:blink 1s infinite}
+  @keyframes blink{0%,50%{opacity:1}51%,100%{opacity:0}}
+
+  /* 通用：流式时输入区禁用视觉 */
+  .chat-input-wrap.streaming{opacity:.6;pointer-events:none}
+  .chat-send-btn.streaming{background:#fee2e2;color:#dc2626;border-color:#fecaca}
+  .chat-send-btn.streaming:hover{background:#fecaca}
+
   /* footer 与 chat-wrap 间距 */
   .footer{margin:20px auto 30px;max-width:1400px;padding:0 24px;color:var(--sub);font-size:11px;text-align:center}
 
@@ -870,6 +903,7 @@ let pendingFile=null, currentId=null, pollTimer=null;
 // 对话驱动：当前未确认的草稿（用户说需求后，AI 先确认，再点「生成测试用例」才真正创建任务）
 let pendingDraft=null;
 let chatMessages=[];   // 首页多轮对话历史 [{role:'user'|'assistant', content}]
+let chatStreamAbort=null;   // 当前流式请求的 AbortController（用于停止按钮）
 
 /* ===== 认证状态（V2）+ 分级加密（V2.1） ===== */
 const TOKEN_KEY="aitf_token", USER_KEY="aitf_user", ENCKEY_KEY="aitf_enc_key";
@@ -1496,60 +1530,261 @@ function newChat(){
   document.querySelectorAll('.hist-item.active').forEach(x=>x.classList.remove('active'));
 }
 
+/** 解析一行 SSE 事件：返回 {event, data} 或 null */
+function parseSSE(raw){
+  let event='message';
+  let dataStr='';
+  for(const line of raw.split('\n')){
+    if(line.startsWith('event:'))event=line.slice(6).trim();
+    else if(line.startsWith('data:'))dataStr += (dataStr?'\n':'') + line.slice(5).trim();
+  }
+  if(!dataStr)return null;
+  try{return {event, data: JSON.parse(dataStr)};}catch(_e){return null;}
+}
+
+/** 简易 markdown 渲染（流式累积文本用）：段落换行 + **加粗** */
+function renderReplyMarkdown(text){
+  const escaped=esc(text);
+  return escaped
+    .replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')
+    .replace(/\n\n+/g,'<p></p>')
+    .replace(/\n/g,'<br>');
+}
+
+/** 流式状态切换：禁用/恢复输入 + 切换发送按钮文本 */
+function setChatStreamingState(on){
+  const wrap=document.querySelector('.chat-input-wrap');
+  const btn=$("chatSendBtn");
+  const input=$("chatText");
+  const attachBtn=$("chatAttachBtn");
+  if(!wrap||!btn)return;
+  if(on){
+    wrap.classList.add('streaming');
+    btn.classList.add('streaming');
+    btn.textContent='⏹ 停止生成';
+    if(input){input.disabled=true;input.placeholder='生成中…';}
+    if(attachBtn)attachBtn.style.pointerEvents='none';
+  }else{
+    wrap.classList.remove('streaming');
+    btn.classList.remove('streaming');
+    btn.textContent='发送';
+    if(input){input.disabled=false;input.placeholder='把你的测试需求告诉 Buddy…';}
+    if(attachBtn)attachBtn.style.pointerEvents='';
+  }
+}
+
+/** 创建流式 AI 气泡，返回一个控制对象。 */
+function appendChatStreamBubble(draft){
+  const stream=$("chatStream");
+  const div=document.createElement('div');
+  div.className='msg msg-ai streaming';
+  div.innerHTML=`
+    <div class="avatar">AI</div>
+    <div class="bubble">
+      <div class="stream-head">
+        <span>AI 测试工程师</span>
+        <span class="live-pill">生成中</span>
+        <button class="stop-btn" type="button">⏹ 停止</button>
+      </div>
+      <div class="think-panel empty" data-think>
+        <div class="think-head" data-think-head>
+          <span class="arrow"></span>
+          <span class="label">思考过程</span>
+          <span class="hint">默认折叠 · 点开查看</span>
+        </div>
+        <div class="think-body" data-think-body></div>
+      </div>
+      <div class="reply-body" data-reply>
+        <span class="typing-cursor"></span>
+      </div>
+    </div>`;
+  stream.appendChild(div);
+
+  const thinkPanel=div.querySelector('[data-think]');
+  const thinkHead=div.querySelector('[data-think-head]');
+  const thinkBody=div.querySelector('[data-think-body]');
+  const replyEl=div.querySelector('[data-reply]');
+  const stopBtn=div.querySelector('.stop-btn');
+
+  // 折叠交互
+  thinkHead.addEventListener('click',()=>{
+    thinkHead.classList.toggle('open');
+    thinkBody.classList.toggle('open');
+  });
+
+  // 停止按钮
+  stopBtn.addEventListener('click',()=>{
+    if(chatStreamAbort){chatStreamAbort.abort();}
+  });
+
+  return {
+    el: div,
+    _appendThinking(text){
+      thinkBody.textContent=text;
+      thinkPanel.classList.remove('empty','hidden');
+    },
+    _appendReply(text){
+      replyEl.innerHTML=renderReplyMarkdown(text) + '<span class="typing-cursor"></span>';
+    },
+    _setError(msg){
+      replyEl.innerHTML=`<span style="color:#dc2626">⚠️ ${esc(msg)}</span>`;
+      const pill=div.querySelector('.live-pill');
+      if(pill){pill.textContent='失败';pill.style.background='#dc2626';}
+      stopBtn.style.display='none';
+    },
+    _setStopped(){
+      const pill=div.querySelector('.live-pill');
+      if(pill){pill.textContent='已停止';pill.style.background='#6b7280';}
+      stopBtn.style.display='none';
+      const cur=replyEl.querySelector('.typing-cursor');
+      if(cur)cur.remove();
+      appendConfirmBtnToStream(div, draft);
+    },
+    _setDone(meta){
+      const pill=div.querySelector('.live-pill');
+      if(pill){
+        if(meta && meta.had_error){pill.textContent='部分失败';pill.style.background='#f59e0b';}
+        else{pill.textContent='完成';pill.style.background='#10b981';}
+      }
+      stopBtn.style.display='none';
+      const cur=replyEl.querySelector('.typing-cursor');
+      if(cur)cur.remove();
+      if(meta && meta.source==='mock'){
+        const tag=document.createElement('span');
+        tag.style.cssText='font-size:11px;color:var(--sub);margin-left:6px';
+        tag.textContent='(演示模式)';
+        div.querySelector('.stream-head').appendChild(tag);
+      }
+      appendConfirmBtnToStream(div, draft);
+    },
+    _getFinalReply(){
+      const cur=replyEl.querySelector('.typing-cursor');
+      if(cur)cur.remove();
+      return replyEl.innerText.trim();
+    },
+  };
+}
+
+/** 给流式 AI 气泡追加"生成测试用例"按钮（done 或 stopped 后） */
+function appendConfirmBtnToStream(streamBubble, draft){
+  if(streamBubble.querySelector('.confirm-btn'))return;
+  const row=document.createElement('div');
+  row.className='quick-row';
+  row.style.marginTop='10px';
+  row.innerHTML=`
+    <button class="qtag confirm-btn" type="button">✨ 生成测试用例</button>
+    <button class="qtag" type="button" onclick="showToast('可在输入框继续补充规则后发送')">继续补充</button>`;
+  streamBubble.querySelector('.bubble').appendChild(row);
+  row.querySelector('.confirm-btn').addEventListener('click',()=>{
+    row.querySelector('.confirm-btn').disabled=true;
+    row.querySelector('.confirm-btn').textContent='生成中…';
+    confirmAndCreateTask(streamBubble, draft, chatMessages);
+  });
+}
+
 async function sendChat(){
-  // 进入对话前先确保有登录态
+  // 流式时点击 = 停止（按钮文本已变为"⏹ 停止生成"）
+  if(chatStreamAbort){
+    chatStreamAbort.abort();
+    return;
+  }
   if(!token){
     showToast('请先登录或使用游客体验');
     if(typeof enterGuestSilently==='function'){await enterGuestSilently();}
     else showAuth();
     if(!token)return;
   }
+  // 流式时禁止重复发送（防御性，正常流程走上面的 abort 分支）
+  if(chatStreamAbort){showToast('请先停止当前生成');return;}
+
   const txt=$("chatText").value.trim();
   if(!txt && !pendingFile){showToast('请输入需求或附加文档');return;}
 
   const userContent=txt||'(仅附加文档)';
-  // 渲染用户气泡
   appendUserMsg(userContent);
-  // 记录到对话历史
   chatMessages.push({role:'user', content:userContent});
 
-  // 保存当前草稿（文件、文本、类型、格式）
-  const draft={
-    text: txt,
-    file: pendingFile,
-    kind: kind,
-    formats: [...fmts]
-  };
+  const draft={text:txt, file:pendingFile, kind:kind, formats:[...fmts]};
   pendingDraft=draft;
 
-  // 清空输入区
   $("chatText").value='';
   if(pendingFile){clearFile();}
 
-  // 调用 AI 对话接口获取真正回复（不是模板确认）
-  appendChatThinking();
+  // 创建流式 AI 气泡（思考折叠 + 回复打字机）
+  const streamBubble=appendChatStreamBubble(draft);
   $("chatStream").scrollTop=$("chatStream").scrollHeight;
 
+  // 进入流式态：禁用输入，发送按钮变停止
+  setChatStreamingState(true);
+  chatStreamAbort=new AbortController();
+
+  let fullThinking='';
+  let fullReply='';
+  let stopped=false;
+
   try{
-    const r=await api(API+'/chat',{
+    const r=await fetch(API+'/chat/stream',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:userContent, history:chatMessages.slice(0,-1)})
+      headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+      body:JSON.stringify({message:userContent, history:chatMessages.slice(0,-1)}),
+      signal: chatStreamAbort.signal,
     });
-    removeChatThinking();
     if(!r.ok){
       const e=await r.text();
-      appendChatAiMsg('抱歉，AI 回复失败：'+e, draft);
+      streamBubble._setError('请求失败：'+e.slice(0,200));
+      chatMessages.push({role:'assistant', content:'（生成失败）'});
       return;
     }
-    const data=await r.json();
-    chatMessages.push({role:'assistant', content:data.reply});
-    appendChatAiMsg(data.reply, draft, data.used_mock);
+    if(!r.body){
+      streamBubble._setError('浏览器不支持流式响应（请升级到 Chrome/Edge/Firefox）');
+      return;
+    }
+
+    const reader=r.body.getReader();
+    const decoder=new TextDecoder('utf-8');
+    let buffer='';
+
+    while(true){
+      const {done, value}=await reader.read();
+      if(done)break;
+      buffer += decoder.decode(value, {stream:true});
+
+      // 按 \n\n 切分事件（SSE 协议）
+      let idx;
+      while((idx=buffer.indexOf('\n\n')) !== -1){
+        const raw=buffer.slice(0, idx);
+        buffer=buffer.slice(idx+2);
+        const ev=parseSSE(raw);
+        if(!ev)continue;
+        if(ev.event==='thinking'){
+          fullThinking += ev.data.delta||'';
+          streamBubble._appendThinking(fullThinking);
+        }else if(ev.event==='reply'){
+          fullReply += ev.data.delta||'';
+          streamBubble._appendReply(fullReply);
+        }else if(ev.event==='error'){
+          streamBubble._setError(ev.data.message||'未知错误');
+        }else if(ev.event==='done'){
+          streamBubble._setDone(ev.data);
+        }
+      }
+      $("chatStream").scrollTop=$("chatStream").scrollHeight;
+    }
   }catch(e){
-    removeChatThinking();
-    appendChatAiMsg('网络错误，请重试：'+e.message, draft);
+    if(e.name==='AbortError'){
+      stopped=true;
+      streamBubble._setStopped();
+    }else{
+      streamBubble._setError('网络错误：'+(e.message||e));
+    }
+  }finally{
+    setChatStreamingState(false);
+    chatStreamAbort=null;
+    // 把完整对话加入历史（用于下次 sendChat 的上下文）
+    const finalReply=streamBubble._getFinalReply();
+    if(finalReply)chatMessages.push({role:'assistant', content:finalReply});
+    $("chatStream").scrollTop=$("chatStream").scrollHeight;
   }
-  $("chatStream").scrollTop=$("chatStream").scrollHeight;
 }
 
 function appendChatThinking(){
