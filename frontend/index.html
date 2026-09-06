@@ -859,6 +859,8 @@ const API=(window.API_BASE||"")+"/api";
 let kind="business";
 const fmts=new Set(["xlsx","json","xmind"]);
 let pendingFile=null, currentId=null, pollTimer=null;
+// 对话驱动：当前未确认的草稿（用户说需求后，AI 先确认，再点「生成测试用例」才真正创建任务）
+let pendingDraft=null;
 
 /* ===== 认证状态（V2）+ 分级加密（V2.1） ===== */
 const TOKEN_KEY="aitf_token", USER_KEY="aitf_user", ENCKEY_KEY="aitf_enc_key";
@@ -1201,34 +1203,41 @@ function fillSample(){
 
 async function createTask(){
   if(!token){showToast("请先登录或使用游客体验");showAuth();return;}
-  const text=$("chatText").value.trim();
-  if(!pendingFile && !text){showToast("请上传文件或粘贴规格文本");return;}
-  if(fmts.size===0){showToast("请至少选择一个导出格式");return;}
+  // 从 pendingDraft 读取需求（对话驱动：先确认再生成）
+  const draft=pendingDraft;
+  if(!draft){showToast("没有待生成的需求");return;}
+  const text=(draft.text||'').trim();
+  const file=draft.file;
+  if(!file && !text){showToast("请上传文件或粘贴规格文本");return;}
+  const formats=draft.formats||['xlsx'];
+  if(formats.length===0){showToast("请至少选择一个导出格式");return;}
+
   const fd=new FormData();
-  if(pendingFile)fd.append('file',pendingFile);
+  if(file)fd.append('file',file);
   fd.append('text',text);
-  fd.append('kind',kind);
-  fd.append('formats',[...fmts].join(','));
-  fd.append('name',text.slice(0,40));
-  const btn=$("chatSendBtn");btn.disabled=true;btn.textContent='生成中…';
+  fd.append('kind',draft.kind||'business');
+  fd.append('formats',formats.join(','));
+  fd.append('name',text.slice(0,40)||'未命名任务');
+
+  const sendBtn=$("chatSendBtn"); sendBtn.disabled=true; sendBtn.textContent='生成中…';
   let createdTask;
   try{
     const r=await api(API+'/tasks',{method:'POST',body:fd});
     if(!r.ok){const e=await r.text();showToast('提交失败：'+e);return;}
     createdTask=await r.json();
-    $("chatText").value='';clearFile();$("chatAttachName").textContent='';$("chatAttachBtn").classList.remove('has');
+    pendingDraft=null; // 草稿已消费
+    clearFile();
     showToast("任务已提交，正在编排生成");
     // 把 AI 气泡插入对话流
     if(createdTask && createdTask.id){
       appendAiMsg(createdTask);
       startMsgPoll(createdTask.id);
-      // 立即把会话历史刷新
       loadTasks();
     }else{
       loadTasks();
     }
   }catch(e){showToast('网络错误：'+e.message);}
-  finally{btn.disabled=false;btn.textContent='发送';}
+  finally{sendBtn.disabled=false;sendBtn.textContent='发送';}
 }
 
 function startMsgPoll(taskId){
@@ -1300,7 +1309,7 @@ function renderChatHistory(tasks){
   // 倒序展示（最新在最上）
   const sorted=[...tasks].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
   el.innerHTML=sorted.slice(0,30).map(t=>`
-    <div class="hist-item" data-task="${t.id}" onclick="focusHistItem(this, ${t.id})">
+    <div class="hist-item" data-task="${t.id}" onclick="focusHistItem(this, '${t.id}')">
       <div class="h-name">${esc(t.name)}</div>
       <div class="h-meta">
         <span class="h-dot ${t.status}"></span>
@@ -1311,11 +1320,51 @@ function renderChatHistory(tasks){
     </div>`).join('');
 }
 
-function focusHistItem(el, taskId){
+async function focusHistItem(el, taskId){
   document.querySelectorAll('.hist-item.active').forEach(x=>x.classList.remove('active'));
-  el.classList.add('active');
-  // 打开新标签页查看完整任务
+  if(el && el.classList) el.classList.add('active');
+  // 1) 同时高亮回显到对话流：让左侧点击有即时反馈
+  const stream=$("chatStream");
+  const w=$("chatWelcome"); if(w) w.remove();
+  let t=lastTasks.find(x=>String(x.id)===String(taskId));
+  if(!t){
+    try{
+      const r=await api(API+'/tasks/'+taskId);
+      if(r.ok) t=await r.json();
+    }catch(e){}
+  }
+  if(t){
+    // 插入一条 AI 汇总气泡
+    const div=document.createElement('div');
+    div.className='msg msg-ai';
+    div.id='msg-hist-'+t.id;
+    div.innerHTML=renderHistSummaryHTML(t);
+    stream.appendChild(div);
+    stream.scrollTop=stream.scrollHeight;
+    bindAiMsgButtons(div, t.id);
+  }
+  // 2) 再打开新标签页
   openTaskWindow(taskId);
+}
+
+function renderHistSummaryHTML(task){
+  const statusBadge=task.status==='completed'
+    ? `<span style="color:var(--ok)">✓ 已完成</span>`
+    : task.status==='running'
+      ? `<span style="color:var(--run)">⏳ 生成中</span>`
+      : task.status==='failed'
+        ? `<span style="color:var(--fail)">✗ 失败</span>`
+        : `<span style="color:var(--sub)">排队中</span>`;
+  return `
+    <div class="avatar">AI</div>
+    <div class="bubble">
+      <div class="bubble-title">${esc(task.name)}</div>
+      <div>已加载历史任务：${statusBadge} · 共 ${task.cases_count||0} 个用例 · ${fmtTime(task.created_at)}</div>
+      <div class="quick-row">
+        <button class="qtag" data-action="detail" type="button">查看完整任务 →</button>
+        <button class="qtag" data-action="export" type="button">导出</button>
+      </div>
+    </div>`;
 }
 
 function appendUserMsg(text){
@@ -1404,7 +1453,10 @@ function pickAttach(){
 }
 
 function newChat(){
-  // 清空对话流，只保留欢迎区
+  // 清空对话流 + 草稿，只保留欢迎区
+  pendingDraft=null;
+  clearFile();
+  $("chatText").value='';
   const stream=$("chatStream");
   stream.innerHTML='';
   const w=document.createElement('div');
@@ -1438,19 +1490,88 @@ async function sendChat(){
   // 进入对话前先确保有登录态
   if(!token){
     showToast('请先登录或使用游客体验');
-    // 静默游客登录
     if(typeof enterGuestSilently==='function'){await enterGuestSilently();}
     else showAuth();
     if(!token)return;
   }
   const txt=$("chatText").value.trim();
   if(!txt && !pendingFile){showToast('请输入需求或附加文档');return;}
+
+  // 渲染用户气泡
   appendUserMsg(txt||'(附加文档)');
-  // 复用 createTask 提交逻辑
-  await createTask();
-  // createTask 内部会清空 chatText / pendingFile
+
+  // 保存当前草稿（文件、文本、类型、格式）
+  pendingDraft={
+    text: txt,
+    file: pendingFile,
+    kind: kind,
+    formats: [...fmts]
+  };
+
+  // 清空输入区
+  $("chatText").value='';
+  if(pendingFile){
+    clearFile();
+  }
+
+  // AI 先确认需求，不直接创建任务
+  appendConfirmBubble(txt||'(仅附件)');
+
   // 滚动到底部
   $("chatStream").scrollTop=$("chatStream").scrollHeight;
+}
+
+function appendConfirmBubble(text){
+  const stream=$("chatStream");
+  const div=document.createElement('div');
+  div.className='msg msg-ai msg-confirm';
+  // 把当前草稿绑定到这个气泡上，防止多轮对话后旧气泡误用新草稿
+  div._draft=pendingDraft;
+  div.innerHTML=renderConfirmBubbleHTML(text);
+  stream.appendChild(div);
+  stream.scrollTop=stream.scrollHeight;
+  // 绑定确认区按钮
+  const btn=div.querySelector('.confirm-btn');
+  if(btn){
+    btn.addEventListener('click',()=>{
+      // 防止重复点击
+      btn.disabled=true;
+      btn.textContent='生成中…';
+      confirmAndCreateTask(div, div._draft);
+    });
+  }
+}
+
+function renderConfirmBubbleHTML(text){
+  const preview=text.length>80?text.slice(0,80)+'…':text;
+  const kindLabel={business:'业务功能',interface:'接口测试',app:'App 端功能'}[kind]||'业务功能';
+  const fmtLabels={xlsx:'Excel',json:'JSON',xmind:'XMind'};
+  const fmtText=[...fmts].map(f=>fmtLabels[f]||f).join('、')||'Excel';
+  return `
+    <div class="avatar">AI</div>
+    <div class="bubble">
+      <div class="bubble-title">收到需求</div>
+      <div>我理解为：<b>「${esc(preview)}」</b></div>
+      <div style="margin-top:6px">计划按 <b>${kindLabel}</b> 类型设计，输出格式 <b>${fmtText}</b>。</div>
+      <div style="margin-top:6px;color:var(--sub)">确认后我会调用 4 个 Agent（解析 → 拆解 → 设计 → 校验）开始生成测试用例。</div>
+      <div class="quick-row" style="margin-top:10px">
+        <button class="qtag confirm-btn" type="button">✨ 生成测试用例</button>
+        <button class="qtag" type="button" onclick="showToast('可在输入框补充更多规则后再点生成')">补充规则</button>
+      </div>
+    </div>`;
+}
+
+async function confirmAndCreateTask(confirmBubble, draft){
+  if(!draft){showToast('没有待生成的需求，请重新输入');return;}
+  pendingDraft=draft;
+  // 将确认气泡更新为「生成中」状态
+  const bubble=confirmBubble.querySelector('.bubble');
+  if(bubble){
+    bubble.innerHTML=`<div class="bubble-title">正在生成…</div>
+      <div>Agent 链已启动：解析规格 → 拆解场景 → 设计用例 → 质量校验</div>
+      <div class="bubble-meta"><span style="color:var(--run)">⏳ 生成中</span></div>`;
+  }
+  await createTask();
 }
 
 /* ===== 任务分类树（V2.3：多级分类 + 拖拽归类/移动） ===== */
@@ -1553,7 +1674,10 @@ async function showDetail(id){
 
 /* 新标签页打开任务详情（弹窗空间小显示不全，改独立窗口全屏展示） */
 function openTaskWindow(id){
-  window.open(location.pathname+'?task='+id, '_blank');
+  const url=(location.origin||'')+location.pathname.replace(/\/$/,'')+'?task='+id;
+  const w=window.open(url, '_blank');
+  if(!w){showToast('新窗口被浏览器拦截，请点击允许弹窗');}
+  return w;
 }
 /* URL 带 ?task=<id>：进入独立详情页模式（隐藏主界面，详情弹窗全屏化后自动打开） */
 (function(){
@@ -1762,12 +1886,12 @@ function renderModelPill(){
       txt.textContent=`${t?t.model:"模型"} · ${src} ⚠️ ${ht.error_label||"不可用"}`;
       pill.style.background="linear-gradient(135deg,#f59e0b,#ef4444)";
       pill.title=`最近测试失败：${ht.error_label||ht.error||"不可用"}（${ht.model||""}）`;
-      if(hint)hint.innerHTML=`⚠️ 模型可用性测试失败：<b>${esc(ht.error_label||ht.error||"不可用")}</b>${ht.model?`（${esc(ht.model)}）`:''} · <a href='javascript:void(0)' style='color:var(--brand1)' onclick='openLlm()'>查看详情</a> · 重新测试后会自动更新`;
+      // 模型提示区已随旧表单移除，这里只更新右上角 pill
     }else{
       pill.style.background="";
       txt.textContent=t?`${t.model} · ${src}`:'模型';
       pill.title=`当前模型：${t?t.model:''}（${src}）`;
-      if(hint)hint.innerHTML=`当前模型：<b>${esc(t.model)} · ${esc(t.provider_label)}</b>（${src}）${v?` · 图像识别：<b>${esc(v.model)}</b>`:' · 未配置图像识别模型（配置后含截图文档可两段式解析）'} · <a href='javascript:void(0)' style='color:var(--brand1)' onclick='openLlm()'>修改</a>`;
+      // 模型提示区已随旧表单移除，这里只更新右上角 pill
     }
   }
 }

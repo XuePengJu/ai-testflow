@@ -7,8 +7,8 @@
 (function () {
   var h = location.hostname || "";
   if (h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h === "[::1]") {
-    // dev：后端 uvicorn 8000；CORS 默认 *
-    window.API_BASE = "http://localhost:8000";
+    // dev：根据当前端口自动适配 uvicorn，方便在任意端口本地调试
+    window.API_BASE = "http://" + h + ":" + (location.port || 8000);
   } else {
     window.API_BASE = "https://api.clickscope.in"; // 线上：Cloudflare 隧道品牌域名
   }
