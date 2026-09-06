@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI 测试工作流平台</title>
+<script>/* 任务详情独立页：渲染前标记根元素，避免主界面先渲染一帧导致闪烁 */
+if(new URLSearchParams(location.search).get('task'))document.documentElement.classList.add('task-page');</script>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <!-- 思维导图本地依赖（不走 CDN，离线可用） -->
 <link rel="stylesheet" href="./vendor/mind-elixir/MindElixir.css">
@@ -171,6 +173,11 @@
   .drawer-head h3{margin:0;font-size:15px;font-weight:700}
   .drawer-head .close{border:0;background:#f1f3f9;width:32px;height:32px;border-radius:9px;cursor:pointer;font-size:17px;color:var(--sub);flex:none}
   .drawer-head .close:hover{background:#fee2e2;color:var(--fail)}
+  /* ===== 任务详情独立页模式（URL 带 ?task= 时，新标签页全屏显示详情）===== */
+  html.task-page .topbar,html.task-page .tunnel-tip-wrap,html.task-page .wrap{display:none!important}
+  html.task-page .roadmap-fab,html.task-page .roadmap-drawer,html.task-page .roadmap-overlay{display:none!important}
+  html.task-page #overlay{display:flex!important;align-items:stretch;justify-content:stretch;background:#f6f7fb;backdrop-filter:none}
+  html.task-page #overlay .drawer{max-width:100vw;width:100%;max-height:100vh;height:100%;border-radius:0;animation:none}
   .dmeta{font-size:11px;color:var(--sub);margin:3px 0 10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   .dmeta b{color:var(--text)}
 
@@ -241,6 +248,8 @@
   /* 思维导图 tab · 「导出 XMind」按钮注入到 mind-elixir 右下角工具栏，排在「最大化」按钮左边 */
   .map-container .mind-elixir-toolbar.rb .map-dl{display:inline-flex;align-items:center;height:16px;font-size:12px;font-weight:600;line-height:1;padding:0 8px;border:1px solid var(--main-color);color:var(--main-color);border-radius:4px;background:var(--panel-bgcolor);cursor:pointer;vertical-align:-.15em;user-select:none;white-space:nowrap}
   .map-container .mind-elixir-toolbar.rb .map-dl:hover{background:var(--main-color);color:var(--panel-bgcolor)}
+  /* 隐藏思维导图左上角工具栏第一个按钮（节点概要预览），保留下面两个 */
+  .map-container .mind-elixir-toolbar.lt #tbltl{display:none!important}
   .sec-title{font-size:13px;font-weight:700;color:var(--sub);letter-spacing:.4px;text-transform:uppercase;margin:4px 0 12px}
   .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:12px 20px;border-radius:12px;font-size:13px;z-index:100;box-shadow:var(--shadow-lg);opacity:0;transition:.25s;pointer-events:none}
   .toast.show{opacity:1}
@@ -1086,7 +1095,7 @@ async function loadTasks(){
       <div class="task" draggable="true"
         ondragstart="dragData={type:'task',id:'${t.id}'};this.classList.add('dragging')"
         ondragend="dragData=null;this.classList.remove('dragging')"
-        onclick="showDetail('${t.id}')">
+        onclick="openTaskWindow('${t.id}')">
         <div class="ava">📄</div>
         <div class="body">
           <div class="tn">${esc(t.name)}</div>
@@ -1196,6 +1205,40 @@ const STEP_ICON={解析规格:'🔍',AI生成用例:'✨',质量校验:'🛡️'
 async function showDetail(id){
   currentId=id;openDrawer();await renderDetail(id);
 }
+
+/* 新标签页打开任务详情（弹窗空间小显示不全，改独立窗口全屏展示） */
+function openTaskWindow(id){
+  window.open(location.pathname+'?task='+id, '_blank');
+}
+/* URL 带 ?task=<id>：进入独立详情页模式（隐藏主界面，详情弹窗全屏化后自动打开） */
+(function(){
+  const m=new URLSearchParams(location.search).get('task');
+  if(!m)return;
+  document.body.classList.add('task-page');
+  // 独立页里关闭按钮 = 关标签页
+  window._closeDetailOrig=closeDetail;
+  window.closeDetail=function(){clearTimeout(pollTimer);currentId=null;window.close();};
+})();
+async function _autoOpenFromUrl(){
+  const m=new URLSearchParams(location.search).get('task');
+  if(!m)return;
+  // 等登录态恢复（refreshMe/guest token 初始化）后再拉详情
+  for(let i=0;i<20;i++){
+    if(localStorage.getItem(TOKEN_KEY))break;
+    await new Promise(r=>setTimeout(r,250));
+  }
+  // 仍未拿到 → 主动静默取一次访客身份再等一轮（避免与 enterGuestSilently 竞态误弹登录框）
+  if(!localStorage.getItem(TOKEN_KEY)){
+    try{await enterGuestSilently();}catch(e){}
+    for(let i=0;i<12;i++){
+      if(localStorage.getItem(TOKEN_KEY))break;
+      await new Promise(r=>setTimeout(r,250));
+    }
+  }
+  if(!localStorage.getItem(TOKEN_KEY)){showAuth();return;}
+  showDetail(m);
+}
+if(new URLSearchParams(location.search).get('task'))setTimeout(_autoOpenFromUrl,300);
 
 /* dev-only auto-open: 仅当 URL 带 #auto 时生效（生产 URL 不会有，正常进入不影响）
    用于本地验证：diag.html 登录后跳到 ?taskId=#auto，自动打开最近一条任务的详情 + mindmap tab */
@@ -1605,7 +1648,7 @@ window.mindmapInited = false;
 
 <!-- 思维导图渲染（mind-elixir + tags 原生胶囊，ESM 走静态伺服） -->
 <script type="module">
-import MindElixir, { SIDE, THEME } from './vendor/mind-elixir/MindElixir.js';
+import MindElixir, { SIDE, RIGHT, THEME } from './vendor/mind-elixir/MindElixir.js';
 
 // 稳定递增 ID 生成器（cases_json 里 id 可能不全/重复）
 let __mm_id = 0;
@@ -1679,10 +1722,23 @@ window.renderMindmapPane = function(cases){
     host.innerHTML = '';
     const data = buildMindmapData(cases);
     const me = new MindElixir({
-      el: '#map', direction: SIDE, draggable: true, toolBar: true, overflowHidden: false,
+      el: '#map', direction: RIGHT, draggable: true, toolBar: true, overflowHidden: false,
       primaryLinkStyle: 2, mainLinkStyle: 2, theme: THEME
     });
-    me.init(data).then(() => injectMapDl(me));
+    me.init(data).then(() => {
+      injectMapDl(me);
+      // 右侧导图：把根节点往左推，避免右侧预览时左侧大片空白
+      const map = document.getElementById('map');
+      const canvas = map.querySelector('.map-canvas');
+      const root = canvas && canvas.querySelector('.me-nodes');
+      if (canvas && root) {
+        const offset = root.getBoundingClientRect().left - map.getBoundingClientRect().left;
+        const want = 80; // 给左侧工具栏留 80px 间距
+        const shift = offset - want;
+        const tf = canvas.style.transform || '';
+        canvas.style.transform = tf.replace(/translate3d\(([^,]+)px/, (m, x) => `translate3d(${parseFloat(x) - shift}px`);
+      }
+    });
     window.mindmapInstance = me;
     window.mindmapInited = true;
   } catch(e){
