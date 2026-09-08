@@ -154,7 +154,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
 
   /* ===== 对话驱动首页（方案 E） ===== */
   .chat-wrap{
-    max-width:1400px;margin:0 auto;padding:20px 24px 12px;
+    margin:0 auto;padding:20px 8px 12px;
     display:grid;grid-template-columns:240px 1fr;gap:20px;
     align-items:start;min-height:calc(100vh - 140px);
   }
@@ -205,7 +205,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
     overflow:hidden;position:relative;
   }
   @media(max-width:920px){.chat-main{height:auto;min-height:60vh}}
-  .chat-stream{flex:1;overflow-y:auto;padding:24px 24px 12px;display:flex;flex-direction:column;gap:18px}
+  .chat-stream{flex:1;overflow-y:auto;padding:20px 8px 12px;display:flex;flex-direction:column;gap:18px}
   .chat-stream::-webkit-scrollbar{width:6px}
   .chat-stream::-webkit-scrollbar-thumb{background:#d6dae7;border-radius:3px}
 
@@ -1456,7 +1456,7 @@ function renderLiveSteps(taskBox, t){
   taskBox.innerHTML = `<div class="steps-card">${head}${rows}</div>${casesHTML}`;
   // 绑定"查看完整"按钮 → 开新页面（保留完整详情）
   const detailBtn=taskBox.querySelector('[data-action="detail"]');
-  if(detailBtn) detailBtn.addEventListener('click',()=>openTaskWindow(t.id));
+  if(detailBtn) detailBtn.addEventListener('click',()=>showDetail(t.id));
   // 绑定"删除任务"按钮 → 确认弹窗
   const delBtn=taskBox.querySelector('[data-action="del-task"]');
   if(delBtn) delBtn.addEventListener('click',()=>confirmDeleteTask(t.id, t.name, t.cases_count));
@@ -1670,7 +1670,7 @@ function appendConvAiMsg(m){
     btn.addEventListener('click',()=>toggleStepDetail(btn, div));
   });
   const detailBtn=div.querySelector('[data-action="detail"]');
-  if(detailBtn)detailBtn.addEventListener('click',()=>{ if(m.task_id)openTaskWindow(m.task_id); });
+  if(detailBtn)detailBtn.addEventListener('click',()=>{ if(m.task_id)showDetail(m.task_id); });
   const delBtn=div.querySelector('[data-action="del-task"]');
   if(delBtn && m.task_id)delBtn.addEventListener('click',()=>{
     confirmDeleteTask(m.task_id, m.task&&m.task.name, m.task&&m.task.cases_count);
@@ -1854,7 +1854,7 @@ function bindAiMsgButtons(scope, taskId){
   scope.querySelectorAll('.qtag').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const a=btn.dataset.action;
-      if(a==='detail')openTaskWindow(taskId);
+      if(a==='detail')showDetail(taskId);
       else if(a==='export'){showToast('导出请到任务详情页');openTaskWindow(taskId);}
       else if(a==='refine'){showToast('细化提示：在新需求里追加规则即可');}
     });
