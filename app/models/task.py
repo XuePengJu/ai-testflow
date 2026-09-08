@@ -21,6 +21,7 @@ class Task(Base):
     user_id = Column(Integer, nullable=True, index=True)        # 归属用户（存量迁移归 admin）
     is_sample = Column(Boolean, nullable=False, default=False)  # 平台预置示例任务（不占访客配额）
     category_id = Column(Integer, nullable=True, index=True)    # 归属分类（NULL=未分类）
+    conversation_id = Column(String, nullable=True, index=True) # 归属会话（对话驱动首页）
     input_summary = Column(Text, default="")
     cases_count = Column(Integer, default=0)
     duration_ms = Column(Float, default=0.0)

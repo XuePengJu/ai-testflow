@@ -64,6 +64,13 @@ class CaseGenerator:
         return out
 
     def generate_for_unit(self, unit: RequirementUnit) -> list[TestCase]:
+        try:
+            return self._generate_inner(unit)
+        except Exception:  # noqa: BLE001
+            # 单点失败回退 mock
+            return mock_generate(unit)
+
+    def _generate_inner(self, unit: RequirementUnit) -> list[TestCase]:
         if self.injected is not None:
             # 平台注入的真实模型（V2.4）：OpenAI 兼容调用
             prompt = self._build_prompt(unit)

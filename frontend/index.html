@@ -42,16 +42,6 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .brand-s{font-size:12px;color:var(--sub);margin-top:1px}
   .topbar .spacer{flex:1}
 
-  /* ===== 隧道慢速提示条 ===== */
-  .tunnel-tip-wrap{max-width:1400px;margin:14px auto 0;padding:0 24px}
-  @media(max-width:920px){.tunnel-tip-wrap{padding:0 16px}}
-  .tunnel-tip{position:relative;padding:11px 44px 11px 16px;background:#fff7ed;border:1px solid #fed7aa;
-    border-radius:12px;color:#9a3412;font-size:13px;line-height:1.5;display:flex;align-items:center;gap:8px;
-    box-shadow:var(--shadow)}
-  .tunnel-tip .ti-ico{flex-shrink:0}
-  .tunnel-tip .ti-close{position:absolute;top:50%;right:10px;transform:translateY(-50%);border:none;
-    background:transparent;color:#9a3412;font-size:15px;cursor:pointer;width:24px;height:24px;border-radius:6px;line-height:1}
-  .tunnel-tip .ti-close:hover{background:#fed7aa}
   .mode-pill{font-size:12px;color:#7c3aed;background:var(--brand-soft);border:1px solid #ddd6fe;
              padding:5px 12px;border-radius:999px;font-weight:600;display:flex;align-items:center;gap:6px}
   .mode-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--brand2)}
@@ -190,7 +180,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .chat-history-list::-webkit-scrollbar{width:5px}
   .chat-history-list::-webkit-scrollbar-thumb{background:#d6dae7;border-radius:3px}
   .hist-item{
-    display:flex;flex-direction:column;gap:3px;padding:10px 12px;border-radius:10px;
+    position:relative;display:flex;flex-direction:column;gap:3px;padding:10px 34px 10px 12px;border-radius:10px;
     cursor:pointer;border:1px solid transparent;transition:.12s;background:#fafbfe;
   }
   .hist-item:hover{background:#f4f5ff;border-color:#e1e3f5}
@@ -203,6 +193,9 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .hist-item .h-dot.running{background:var(--run)}
   .hist-item .h-dot.failed{background:var(--fail)}
   .hist-item .h-dot.pending{background:var(--wait)}
+  .hist-item .h-del{position:absolute;top:9px;right:9px;width:22px;height:22px;border-radius:6px;border:0;background:transparent;color:var(--sub);font-size:13px;cursor:pointer;opacity:0;transition:.15s;display:flex;align-items:center;justify-content:center;font-family:inherit}
+  .hist-item:hover .h-del{opacity:1}
+  .hist-item .h-del:hover{background:#fee2e2;color:var(--fail)}
   .hist-empty{font-size:12px;color:var(--sub);text-align:center;padding:20px 8px;line-height:1.6}
 
   /* 中央：对话流 */
@@ -227,10 +220,10 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .msg-user .avatar{background:#d3d1c7;color:#fff}
   .msg-ai .avatar{background:linear-gradient(135deg,var(--brand1),var(--brand2));color:#fff}
   .msg .bubble{
-    padding:12px 16px;border-radius:14px;font-size:13px;line-height:1.6;
-    word-break:break-word;white-space:pre-wrap;
+    padding:10px 14px;border-radius:14px;font-size:13px;line-height:1.6;
+    word-break:break-word;
   }
-  .msg-user .bubble{background:#eef0ff;color:#26215c;border-bottom-right-radius:4px}
+  .msg-user .bubble{background:#eef0ff;color:#26215c;border-bottom-right-radius:4px;white-space:pre-wrap}
   .msg-ai .bubble{background:#fff;border:1px solid var(--line);color:var(--text);border-bottom-left-radius:4px}
   .msg-ai .bubble .bubble-title{font-weight:600;margin-bottom:8px}
   .msg-ai .bubble .bubble-meta{font-size:11px;color:var(--sub);margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -318,7 +311,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
 
   /* 流式 AI 气泡：思考折叠 + 回复打字机 */
   .msg-ai.streaming .bubble{background:#fff;border:1px solid var(--line)}
-  .msg-ai.streaming .stream-head{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:6px}
+  .msg-ai.streaming .stream-head{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:4px}
   .msg-ai.streaming .stream-head .live-pill{font-size:10px;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2));padding:2px 6px;border-radius:999px;display:inline-flex;align-items:center;gap:4px}
   .msg-ai.streaming .stream-head .live-pill::before{content:"";width:6px;height:6px;border-radius:50%;background:#fff;animation:pulse 1s infinite}
   .msg-ai.streaming .stream-head .stop-btn{margin-left:auto;font-size:11px;color:var(--sub);background:#f3f4f6;border:1px solid var(--line);padding:3px 8px;border-radius:6px;cursor:pointer}
@@ -326,17 +319,34 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
 
   /* 思考折叠面板 */
-  .think-panel{margin:6px 0 10px;border:1px solid #e0e7ff;background:#f5f7ff;border-radius:8px;overflow:hidden}
+  .think-panel{margin:4px 0 6px;border:1px solid #e0e7ff;background:#f5f7ff;border-radius:8px;overflow:hidden}
   .think-panel.hidden{display:none}
   .think-panel.empty{display:none}
-  .think-head{display:flex;align-items:center;gap:6px;padding:7px 12px;font-size:12px;color:#4f46e5;font-weight:600;cursor:pointer;user-select:none;background:linear-gradient(180deg,#eef2ff,#f5f7ff)}
+  .think-head{display:flex;align-items:center;gap:6px;padding:5px 10px;font-size:12px;color:#4f46e5;font-weight:600;cursor:pointer;user-select:none;background:linear-gradient(180deg,#eef2ff,#f5f7ff)}
   .think-head:hover{background:linear-gradient(180deg,#e0e7ff,#eef2ff)}
-  .think-head .arrow{display:inline-block;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #6366f1;transition:transform .25s}
-  .think-head.open .arrow{transform:rotate(180deg)}
+  .think-head .arrow{display:inline-block;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:5px solid #6366f1;transition:transform .25s}
+  .think-head.open .arrow{transform:rotate(90deg)}
   .think-head .label{flex:1}
   .think-head .hint{font-size:11px;color:var(--sub);font-weight:400}
-  .think-body{max-height:0;overflow:hidden;transition:max-height .3s ease;padding:0 12px}
-  .think-body.open{max-height:320px;overflow-y:auto;padding:8px 12px 10px;font-size:12px;color:#475569;white-space:pre-wrap;line-height:1.6;border-top:1px solid #e0e7ff}
+  .think-body{max-height:0;height:0;overflow:hidden;transition:max-height .3s ease,height .3s ease;padding:0 12px;position:relative}
+  .think-body.open{max-height:132px;height:auto;overflow:hidden;padding:6px 12px 8px;font-size:12px;color:#475569;white-space:pre-wrap;line-height:1.6;border-top:1px solid #e0e7ff}
+  .think-panel.clamp .think-body:not(.expanded)::after{content:'';position:absolute;left:0;right:0;bottom:0;height:44px;background:linear-gradient(180deg,rgba(245,247,255,0),#f5f7ff 90%);pointer-events:none}
+  .think-body.expanded{max-height:none}
+  .think-more{display:none;width:100%;border:none;border-top:1px solid #e0e7ff;background:#f5f7ff;color:#4f46e5;font-size:12px;padding:6px 0 8px;cursor:pointer}
+  .think-more:hover{color:#3730a3}
+  .think-panel.clamp .think-more{display:block}
+
+  /* 会话回放：节点步骤卡 + 用例卡（聊天流内嵌，不复用详情抽屉的大表格） */
+  .msg-ai .steps-card{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:12px 14px 2px;background:#fbfcff}
+  .msg-ai .steps-card .step{padding-bottom:14px}
+  .msg-ai .cases-card{margin-top:8px;border:1px solid #e0e7ff;border-radius:10px;padding:10px 12px;background:#f5f7ff}
+  .msg-ai .cases-card-head{font-size:13px;font-weight:600;color:#4f46e5;margin-bottom:6px}
+  .msg-ai .cases-card .mc{font-size:12px;color:var(--sub);font-weight:400;margin-left:6px}
+  .msg-ai .steps-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
+  .msg-ai .steps-card-head .sc-title{font-size:12px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px}
+  .msg-ai .steps-card-head .sc-n{font-size:11px;color:var(--sub);font-weight:400}
+  .msg-ai .task-del{border:1px solid #fecaca;background:#fff5f5;color:var(--fail);font-size:11px;padding:3px 9px;border-radius:7px;cursor:pointer;font-family:inherit;transition:.15s;display:inline-flex;align-items:center;gap:4px;flex:none}
+  .msg-ai .task-del:hover{background:#fee2e2}
 
   /* 回复区（流式打字机）*/
   .reply-body{font-size:14px;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word}
@@ -364,7 +374,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .drawer-head .close{border:0;background:#f1f3f9;width:32px;height:32px;border-radius:9px;cursor:pointer;font-size:17px;color:var(--sub);flex:none}
   .drawer-head .close:hover{background:#fee2e2;color:var(--fail)}
   /* ===== 任务详情独立页模式（URL 带 ?task= 时，新标签页全屏显示详情）===== */
-  html.task-page .topbar,html.task-page .tunnel-tip-wrap,html.task-page .chat-wrap{display:none!important}
+  html.task-page .topbar,html.task-page .chat-wrap{display:none!important}
   html.task-page .roadmap-fab,html.task-page .roadmap-drawer,html.task-page .roadmap-overlay{display:none!important}
   html.task-page #overlay{display:flex!important;align-items:stretch;justify-content:stretch;background:#f6f7fb;backdrop-filter:none}
   html.task-page #overlay .drawer{max-width:100vw;width:100%;max-height:100vh;height:100%;border-radius:0;animation:none}
@@ -424,6 +434,12 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .step.completed .ring{background:var(--ok);border-color:var(--ok);color:#fff}
   .step.failed .ring{background:var(--fail);border-color:var(--fail);color:#fff}
   .step.running .ring{border-color:var(--run);color:var(--run);animation:pulse 1.4s ease-in-out infinite}
+  .step .run-hint{font-size:11px;color:var(--run);font-weight:400;margin-left:4px;animation:pulse 1.4s ease-in-out infinite}
+  /* 展开详情 */
+  .step-detail-toggle{font-size:11px;color:var(--brand1);cursor:pointer;margin-top:6px;display:inline-flex;align-items:center;gap:4px;transition:.15s;border:none;background:none;padding:0;font-family:inherit}
+  .step-detail-toggle:hover{opacity:.7}
+  .step-detail-body{display:none;margin-top:8px;font-size:12px;line-height:1.7;color:#475569;background:#f8fafc;border-radius:8px;padding:10px 12px;border:1px solid var(--line);white-space:pre-wrap;word-break:break-all}
+  .step-detail-body.open{display:block}
   .step .sname{font-size:14px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .step .smini{font-size:12px;color:var(--sub);margin-top:3px}
   .step .sout{font-size:13px;color:#334155;margin-top:8px;background:#f8f9fc;border-radius:10px;padding:10px 12px;line-height:1.6;border:1px solid var(--line)}
@@ -461,6 +477,19 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .guest-btn{margin-top:14px;width:100%;border:1px dashed #c7cbff;background:#fafbff;color:var(--brand1);border-radius:12px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;transition:.18s}
   .danger-btn{width:100%;border:1px solid #fecaca;background:#fff5f5;color:var(--fail);border-radius:12px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;transition:.18s}
   .danger-btn:hover{background:#fee2e2}
+  .confirm-overlay{align-items:center}
+  .confirm-card{background:#fff;width:100%;max-width:400px;border-radius:16px;padding:24px 24px 20px;text-align:center;animation:pop .22s cubic-bezier(.2,.8,.2,1)}
+  .confirm-card .ci{width:48px;height:48px;border-radius:50%;background:#fee2e2;color:var(--fail);font-size:22px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px}
+  .confirm-card h3{margin:0 0 10px;font-size:16px;font-weight:700;color:var(--text)}
+  .confirm-card .cm{font-size:13px;color:var(--sub);line-height:1.7;margin-bottom:4px;word-break:break-all}
+  .confirm-card .cm b{color:var(--fail);font-weight:700}
+  .confirm-card .csub{font-size:12px;color:#f59e0b;margin-bottom:18px}
+  .confirm-card .cbtns{display:flex;gap:10px}
+  .confirm-card .cbtns button{flex:1;border-radius:10px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;transition:.15s;border:1px solid var(--line)}
+  .confirm-card .c-cancel{background:#fff;color:var(--text)}
+  .confirm-card .c-cancel:hover{background:#f3f4f6}
+  .confirm-card .c-ok{background:var(--fail);color:#fff;border-color:var(--fail)!important}
+  .confirm-card .c-ok:hover{filter:brightness(.94)}
   .mtable{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px}
   .mtable th{text-align:left;padding:8px 10px;color:var(--sub);font-weight:600;border-bottom:1px solid var(--line);white-space:nowrap}
   .mtable td{padding:9px 10px;border-bottom:1px solid #f1f3f9;vertical-align:middle}
@@ -540,14 +569,6 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
          onclick="openLlm()"><span class="dot"></span><span id="modelPillText">加载中…</span></div>
   </div>
 </header>
-
-<div class="tunnel-tip-wrap" id="tunnelTipWrap">
-  <div class="tunnel-tip">
-    <span class="ti-ico">⚠️</span>
-    <span>当前通过 cloudflared 隧道代理访问，接口响应可能较慢（约 1–3 秒），请耐心等待数据加载。</span>
-    <button class="ti-close" onclick="dismissTunnelTip()" title="关闭提示">✕</button>
-  </div>
-</div>
 
 <div class="chat-wrap">
   <!-- 左：会话历史 -->
@@ -651,6 +672,21 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- 删除确认弹窗（任务级 / 会话级） -->
+<div class="overlay confirm-overlay" id="confirmOverlay" style="z-index:90">
+  <div class="confirm-card">
+    <div class="ci">🗑</div>
+    <h3 id="confirmTitle">确认删除</h3>
+    <div class="cm" id="confirmMsg"></div>
+    <div class="csub" id="confirmSub">此操作不可恢复</div>
+    <div class="cbtns">
+      <button class="c-cancel" onclick="closeConfirm()" type="button">取消</button>
+      <button class="c-ok" id="confirmOk" type="button">确认删除</button>
+    </div>
+  </div>
+</div>
+
 
 <!-- 登录 / 注册 / 游客体验 三选一 -->
 <div class="overlay" id="authOverlay" style="z-index:70">
@@ -904,6 +940,7 @@ let pendingFile=null, currentId=null, pollTimer=null;
 let pendingDraft=null;
 let chatMessages=[];   // 首页多轮对话历史 [{role:'user'|'assistant', content}]
 let chatStreamAbort=null;   // 当前流式请求的 AbortController（用于停止按钮）
+let currentConversationId=null;   // 当前对话会话 id（发消息前确保存在，落库用）
 
 /* ===== 认证状态（V2）+ 分级加密（V2.1） ===== */
 const TOKEN_KEY="aitf_token", USER_KEY="aitf_user", ENCKEY_KEY="aitf_enc_key";
@@ -988,7 +1025,8 @@ $("authOverlay").addEventListener("click",e=>{if(e.target===$("authOverlay"))clo
 /* ESC 键关闭弹窗 */
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
-  if($("authOverlay").classList.contains("open"))closeAuth();
+  if($("confirmOverlay").classList.contains("open"))closeConfirm();
+  else if($("authOverlay").classList.contains("open"))closeAuth();
   else if($("pwdOverlay").classList.contains("open"))closePwd();
   else if($("profileOverlay").classList.contains("open"))closeProfile();
   else if($("mgmtOverlay").classList.contains("open"))closeMgmt();
@@ -1174,6 +1212,7 @@ async function enterGuestSilently(){
     saveAuth(d.access_token,{username:d.username,role:"guest",remaining_hours:d.remaining_hours,enc_key:d.enc_key});
     await refreshMe();
     loadTasks();
+    loadConversations();
   }catch(e){renderIdentity();showAuth();}
 }
 function renderIdentity(){
@@ -1211,6 +1250,71 @@ function $(id){return document.getElementById(id);}
 function showToast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("show"),2200);}
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function statusText(s){return {pending:'排队中',running:'运行中',completed:'已完成',failed:'失败'}[s]||s;}
+
+/* ===== 删除确认弹窗（任务级 / 会话级） ===== */
+let _confirmAction=null;   // 用户点「确认删除」后要执行的回调
+function showConfirm(title, msgHtml, subText, onConfirm){
+  $("confirmTitle").textContent=title;
+  $("confirmMsg").innerHTML=msgHtml;
+  $("confirmSub").textContent=subText||"此操作不可恢复";
+  _confirmAction=onConfirm;
+  $("confirmOverlay").classList.add("open");
+}
+function closeConfirm(){_confirmAction=null;$("confirmOverlay").classList.remove("open");}
+$("confirmOk").addEventListener("click",async()=>{
+  const fn=_confirmAction;_confirmAction=null;
+  $("confirmOverlay").classList.remove("open");
+  if(fn){try{await fn();}catch(e){showToast("删除失败："+(e&&e.message||e));}}
+});
+$("confirmOverlay").addEventListener("click",e=>{if(e.target===$("confirmOverlay"))closeConfirm();});
+
+/* 删除单个任务（节点卡右上角「删除」按钮触发） */
+function confirmDeleteTask(taskId, taskName, casesCount){
+  showConfirm(
+    "删除任务",
+    `任务「<b>${esc(taskName||"未命名")}</b>」的 <b>${casesCount||0} 条用例</b>、生成记录和导出文件（xlsx / json / xmind）将被永久删除，不可恢复。`,
+    "删除后无法找回，请谨慎操作",
+    async()=>{
+      const r=await api(API+'/tasks/'+taskId,{method:'DELETE'});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok){showToast(d.detail||('删除失败：'+r.status));return;}
+      // 停止该任务的实时轮询
+      const pk='msg-poll-'+taskId;if(window[pk]){clearInterval(window[pk]);window[pk]=null;}
+      // 从当前聊天流移除节点卡：直播气泡(.task-steps-live) + 回放的 .steps-card/.cases-card
+      document.querySelectorAll(`.task-steps-live[data-task-id="${taskId}"]`).forEach(el=>el.remove());
+      document.querySelectorAll(`.steps-card[data-task-id="${taskId}"], .cases-card[data-task-id="${taskId}"]`).forEach(el=>el.remove());
+      document.querySelectorAll(`.msg-task-active[data-task-id="${taskId}"]`).forEach(el=>{
+        el.classList.remove('msg-task-active');delete el.dataset.taskId;
+      });
+      showToast('任务已删除');
+      loadTasks();loadConversations();
+    });
+}
+
+/* 删除整个会话（侧栏 hover「删除」图标触发）：连带删会话下所有任务 */
+function confirmDeleteConversation(convId, title, taskCount){
+  showConfirm(
+    "删除会话",
+    `会话「<b>${esc(title||"新会话")}</b>」的全部对话记录${taskCount?`以及 <b>${taskCount} 个任务</b>（含用例与导出文件）`:''}将被永久删除，不可恢复。`,
+    "删除后无法找回，请谨慎操作",
+    async()=>{
+      const r=await api(API+'/conversations/'+convId,{method:'DELETE'});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok){showToast(d.detail||('删除失败：'+r.status));return;}
+      showToast('会话已删除');
+      // 若删的是当前会话，回到欢迎页
+      if(currentConversationId===convId){
+        currentConversationId=null;chatMessages=[];
+        $("chatStream").innerHTML='';
+        const w=document.createElement('div');
+        w.className='welcome';w.id='chatWelcome';
+        w.innerHTML=`<h2>👋 我是 Buddy</h2><p>会话已删除，发句话开始新的对话吧。</p>`;
+        $("chatStream").appendChild(w);
+      }
+      loadTasks();loadConversations();
+    });
+}
+
 function fmtSize(b){if(b==null)return'';return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(2)+' MB';}
 function fmtTime(s){if(!s)return'';const d=new Date(s);if(isNaN(d))return'';const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
 
@@ -1244,7 +1348,7 @@ function fillSample(){
   showToast("已填入示例业务需求");
 }
 
-async function createTask(){
+async function createTask(chatBubble){
   if(!token){showToast("请先登录或使用游客体验");showAuth();return;}
   // 从 pendingDraft 读取需求（对话驱动：先确认再生成）
   const draft=pendingDraft;
@@ -1261,6 +1365,7 @@ async function createTask(){
   fd.append('kind',draft.kind||'business');
   fd.append('formats',formats.join(','));
   fd.append('name',text.slice(0,40)||'未命名任务');
+  fd.append('conversation_id',currentConversationId||'');
 
   const sendBtn=$("chatSendBtn"); sendBtn.disabled=true; sendBtn.textContent='生成中…';
   let createdTask;
@@ -1271,22 +1376,155 @@ async function createTask(){
     pendingDraft=null; // 草稿已消费
     clearFile();
     showToast("任务已提交，正在编排生成");
-    // 把 AI 气泡插入对话流
     if(createdTask && createdTask.id){
-      appendAiMsg(createdTask);
-      startMsgPoll(createdTask.id);
-      loadTasks();
+      // 升级当前流式 AI 气泡为节点卡气泡（不再新建独立任务气泡）
+      if(chatBubble){
+        upgradeBubbleToTask(chatBubble, createdTask);
+        startMsgPoll(createdTask.id, chatBubble);
+      }else{
+        // 兜底：没有传入 bubble 时，新建独立任务气泡（保留旧行为）
+        appendAiMsg(createdTask);
+        startMsgPollLegacy(createdTask.id);
+      }
+      loadConversations();
     }else{
-      loadTasks();
+      loadConversations();
     }
   }catch(e){showToast('网络错误：'+e.message);}
   finally{sendBtn.disabled=false;sendBtn.textContent='发送';}
 }
 
-function startMsgPoll(taskId){
+/* 把流式 AI 气泡升级为任务气泡：去流式态 + 追加节点卡容器 */
+function upgradeBubbleToTask(chatBubble, task){
+  chatBubble.classList.remove('streaming');
+  chatBubble.classList.add('msg-task-active');
+  chatBubble.dataset.taskId = task.id;
+  // 移除流式态的"生成中/停止" 按钮 & 残留 quick-row（生成测试用例按钮）
+  const stopBtn = chatBubble.querySelector('.stop-btn'); if(stopBtn) stopBtn.remove();
+  chatBubble.querySelectorAll('.quick-row').forEach(r=>r.remove());
+  // 追加节点卡 + 用例卡容器
+  const bubble = chatBubble.querySelector('.bubble');
+  const taskBox = document.createElement('div');
+  taskBox.className = 'task-steps-live';
+  taskBox.dataset.taskId = task.id;
+  bubble.appendChild(taskBox);
+  // 首次渲染（4 步 pending）
+  renderLiveSteps(taskBox, task);
+}
+
+/* 实时渲染 4 节点步骤卡 + 用例卡（被 startMsgPoll 调用） */
+function renderLiveSteps(taskBox, t){
+  const STEP_TITLES=['解析规格','AI 生成用例','质量校验','导出文件'];
+  const RUNNING_HINT={解析规格:'⏳ 正在拆解需求...',AI生成用例:'✨ 正在生成用例...',质量校验:'🛡️ 正在质量校验...',导出文件:'📦 正在导出文件...'};
+  const steps=(t.steps||[]).filter(s=>STEP_TITLES.includes(s.title));
+  const stepMap={}; steps.forEach(s=>{ stepMap[s.title]=s; });
+  const rows=STEP_TITLES.map(title=>{
+    const s=stepMap[title];
+    const status=s?s.status:'pending';
+    const ring=status==='completed'?'✓':status==='failed'?'!':(STEP_ICON[title]||'•');
+    // 动态提示文字：running 状态显示「正在xxx...」
+    const runningHint = status==='running' ? `<span class="smini run-hint">${RUNNING_HINT[title]||'处理中...'}</span>` : '';
+    // 运行中 badge 改为「运行中…」带动画
+    const badgeTxt = status==='running' ? '运行中…' : statusText(status);
+    // 详情内容：解析出测试点、生成统计、质量报告（默认展开）
+    const detailHTML = s && s.input_summary ? formatStepDetail(s.name, JSON.parse(s.input_summary)) : '';
+    return `
+      <div class="step ${status}">
+        <div class="ring">${ring}</div>
+        <div>
+          <div class="sname">${esc(title)}<span class="badge ${status}">${badgeTxt}</span>${s&&s.duration_ms?'<span class="smini">'+s.duration_ms.toFixed(0)+'ms</span>':''}${runningHint}</div>
+          ${s&&s.output_summary?`<div class="sout">${esc(s.output_summary)}</div>`:''}
+          ${detailHTML ? `<div class="step-detail-body open">${detailHTML}</div>` : ''}
+          ${s&&s.error?`<div class="serr">${esc(s.error)}</div>`:''}
+        </div>
+      </div>`;
+  }).join('');
+  const casesHTML=(t.cases_count>0)
+    ? `<div class="cases-card">
+        <div class="cases-card-head">📋 测试用例 <span class="mc">${t.cases_count} 条</span></div>
+        <div class="quick-row"><button class="qtag" data-action="detail" type="button">查看完整用例 →</button></div>
+      </div>` : '';
+  const head=`<div class="steps-card-head">
+        <span class="sc-title">🧪 ${esc(t.name||'测试任务')}<span class="sc-n">${t.cases_count||0} 条用例</span></span>
+        <button class="task-del" data-action="del-task" type="button" title="删除任务">🗑 删除</button>
+      </div>`;
+  // 重渲染前：保存已展开的步骤标题，避免轮询覆盖
+  const expandedBefore = new Set();
+  taskBox.querySelectorAll('.step-detail-body.open').forEach(el => {
+    expandedBefore.add(el.id.replace('detail-', ''));
+  });
+  taskBox.innerHTML = `<div class="steps-card">${head}${rows}</div>${casesHTML}`;
+  // 绑定"查看完整"按钮 → 开新页面（保留完整详情）
+  const detailBtn=taskBox.querySelector('[data-action="detail"]');
+  if(detailBtn) detailBtn.addEventListener('click',()=>openTaskWindow(t.id));
+  // 绑定"删除任务"按钮 → 确认弹窗
+  const delBtn=taskBox.querySelector('[data-action="del-task"]');
+  if(delBtn) delBtn.addEventListener('click',()=>confirmDeleteTask(t.id, t.name, t.cases_count));
+  // 绑定详情展开
+  taskBox.querySelectorAll('.step-detail-toggle').forEach(btn=>{
+    btn.addEventListener('click',()=>toggleStepDetail(btn, taskBox));
+  });
+  // 恢复展开状态：用原始 title 匹配 button，用去掉空格的 id 匹配 body
+  expandedBefore.forEach(suffix => {
+    const body = taskBox.querySelector('#detail-' + suffix);
+    if(!body) return;
+    // suffix 是 detail 的 id 后缀（去空格），找到对应 button（data-step 是原始 title）
+    const btn = Array.from(taskBox.querySelectorAll('.step-detail-toggle')).find(
+      b => b.dataset.step.replace(/\s/g,'') === suffix
+    );
+    if(body && !body.classList.contains('open')){
+      body.classList.add('open');
+      if(btn) btn.textContent = '▼ 收起';
+      if(!body.dataset.loaded){
+        const stepTitle = suffix.replace(/([A-Z])/g,' $1'); // 粗略还原
+        const s = (t.steps||[]).find(x=>x.title.replace(/\s/g,'')===suffix);
+        if(s && s.input_summary){
+          try{ body.innerHTML=formatStepDetail(s.name, JSON.parse(s.input_summary)); body.dataset.loaded='1'; }
+          catch(e){ body.textContent=s.input_summary; body.dataset.loaded='1'; }
+        }
+      }
+    }
+  });
+}
+
+function startMsgPoll(taskId, chatBubble){
   const key='msg-poll-'+taskId;
   if(window[key]){clearInterval(window[key]);window[key]=null;}
-  let ttl=60; // 最多轮询 2 分钟
+  let ttl=90; // 最多轮询 3 分钟
+  window[key]=setInterval(async()=>{
+    ttl--;
+    if(ttl<=0){clearInterval(window[key]);window[key]=null;return;}
+    try{
+      const r=await api(API+'/tasks/'+taskId);
+      if(!r.ok)return;
+      const t=await r.json();
+      if(!chatBubble || !document.body.contains(chatBubble)){
+        clearInterval(window[key]);window[key]=null;return;
+      }
+      const taskBox=chatBubble.querySelector('.task-steps-live');
+      if(taskBox) renderLiveSteps(taskBox, t);
+      // 缓存 steps 供 toggleStepDetail 使用
+      window._currentTaskSteps = t.steps || [];
+      // 更新 stream-head 状态 pill
+      const pill=chatBubble.querySelector('.live-pill');
+      if(pill){
+        pill.textContent = t.status==='completed'?'完成':t.status==='failed'?'失败':t.status==='running'?'生成中':statusText(t.status);
+        if(t.status==='completed') pill.style.background='#10b981';
+        else if(t.status==='failed') pill.style.background='#dc2626';
+        else if(t.status==='running') pill.style.background='';
+      }
+      if(t.status==='completed' || t.status==='failed'){
+        clearInterval(window[key]);window[key]=null;
+      }
+    }catch(e){/* ignore */}
+  },2000);
+}
+
+/* 旧版轮询：保留给没 chatBubble 的兜底场景（appendAiMsg 路径） */
+function startMsgPollLegacy(taskId){
+  const key='msg-poll-legacy-'+taskId;
+  if(window[key]){clearInterval(window[key]);window[key]=null;}
+  let ttl=90;
   window[key]=setInterval(async()=>{
     ttl--;
     if(ttl<=0){clearInterval(window[key]);window[key]=null;return;}
@@ -1301,20 +1539,8 @@ function startMsgPoll(taskId){
       const titleEl=bubble.querySelector('.bubble-title');
       const summaryEl=titleEl?.nextElementSibling;
       const metaEl=bubble.querySelector('.bubble-meta');
-      const statusBadge=t.status==='completed'
-        ? `<span style="color:var(--ok)">✓ 已完成</span>`
-        : t.status==='running'
-          ? `<span style="color:var(--run)">⏳ 生成中</span>`
-          : t.status==='failed'
-            ? `<span style="color:var(--fail)">✗ 失败</span>`
-            : `<span style="color:var(--sub)">排队中</span>`;
-      const summary=t.status==='completed'
-        ? `已完成 · 共 ${t.cases_count||0} 个用例`
-        : t.status==='running'
-          ? `正在编排中…（Agent 链：解析 → 拆解 → 设计 → 导出）`
-          : t.status==='failed'
-            ? `生成失败，点击查看详情`
-            : `已接收任务，正在排队`;
+      const statusBadge=t.status==='completed'?`<span style="color:var(--ok)">✓ 已完成</span>`:t.status==='running'?`<span style="color:var(--run)">⏳ 生成中</span>`:t.status==='failed'?`<span style="color:var(--fail)">✗ 失败</span>`:`<span style="color:var(--sub)">排队中</span>`;
+      const summary=t.status==='completed'?`已完成 · 共 ${t.cases_count||0} 个用例`:t.status==='running'?`正在编排中…`:t.status==='failed'?`生成失败，点击查看详情`:`已接收任务，正在排队`;
       if(titleEl)titleEl.textContent=esc(t.name);
       if(summaryEl)summaryEl.textContent=summary;
       if(metaEl){
@@ -1322,7 +1548,6 @@ function startMsgPoll(taskId){
         metaEl.innerHTML=statusBadge+dur;
       }
       if(t.status==='completed' || t.status==='failed'){
-        loadTasks();
         clearInterval(window[key]);window[key]=null;
       }
     }catch(e){/* ignore */}
@@ -1332,62 +1557,72 @@ function startMsgPoll(taskId){
 let lastTasks=[];   // 当前用户全部任务（分类树计数与过滤用）
 
 async function loadTasks(){
+  if(!token)return;
+  try{
+    const r=await api(API+'/tasks');if(!r.ok)return;
+    lastTasks=await r.json();
+    loadCats();
+  }catch(e){/* ignore */}
+}
+
+/* ===== 对话驱动首页：会话历史侧栏 + 对话流 ===== */
+async function loadConversations(){
   if(!token){
     $("chatHistory").innerHTML='<div class="hist-empty">登录或游客体验后查看历史会话</div>';
     return;
   }
   try{
-    const r=await api(API+'/tasks');if(!r.ok)return;
-    const tasks=await r.json();
-    lastTasks=tasks;
-    loadCats();
-    renderChatHistory(tasks);
+    const r=await api(API+'/conversations');if(!r.ok)return;
+    renderChatHistory(await r.json());
   }catch(e){/* ignore */}
 }
 
-/* ===== 对话驱动首页：会话历史侧栏 + 对话流 ===== */
-function renderChatHistory(tasks){
+function renderChatHistory(convs){
   const el=$("chatHistory");
-  if(!tasks.length){el.innerHTML='<div class="hist-empty">还没有会话<br>右侧发条消息开始</div>';return;}
-  // 倒序展示（最新在最上）
-  const sorted=[...tasks].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
-  el.innerHTML=sorted.slice(0,30).map(t=>`
-    <div class="hist-item" data-task="${t.id}" onclick="focusHistItem(this, '${t.id}')">
-      <div class="h-name">${esc(t.name)}</div>
+  if(!convs.length){el.innerHTML='<div class="hist-empty">还没有会话<br>右侧发条消息开始</div>';return;}
+  el.innerHTML=convs.slice(0,50).map(c=>`
+    <div class="hist-item ${c.id===currentConversationId?'active':''}" data-conv="${c.id}" onclick="focusHistItem(this, '${c.id}')">
+      <button class="h-del" title="删除会话" type="button"
+        onclick="event.stopPropagation();confirmDeleteConversation('${c.id}', '${esc(c.title).replace(/'/g,"\\'")}', ${c.task_count||0})">🗑</button>
+      <div class="h-name">${esc(c.title)}</div>
       <div class="h-meta">
-        <span class="h-dot ${t.status}"></span>
-        <span>${statusText(t.status)}</span>
+        <span>${c.message_count||0} 条消息</span>
+        ${c.task_count?`<span>·</span><span>${c.task_count} 个任务</span>`:''}
         <span>·</span>
-        <span>${t.cases_count||0} 用例</span>
+        <span>${fmtTime(c.updated_at||c.created_at)}</span>
       </div>
     </div>`).join('');
 }
 
-async function focusHistItem(el, taskId){
+async function focusHistItem(el, convId){
   document.querySelectorAll('.hist-item.active').forEach(x=>x.classList.remove('active'));
   if(el && el.classList) el.classList.add('active');
-  // 1) 同时高亮回显到对话流：让左侧点击有即时反馈
+  currentConversationId=convId;
+  chatMessages=[];   // 回放会话时重置上下文，避免串会话
   const stream=$("chatStream");
-  const w=$("chatWelcome"); if(w) w.remove();
-  let t=lastTasks.find(x=>String(x.id)===String(taskId));
-  if(!t){
-    try{
-      const r=await api(API+'/tasks/'+taskId);
-      if(r.ok) t=await r.json();
-    }catch(e){}
-  }
-  if(t){
-    // 插入一条 AI 汇总气泡
-    const div=document.createElement('div');
-    div.className='msg msg-ai';
-    div.id='msg-hist-'+t.id;
-    div.innerHTML=renderHistSummaryHTML(t);
-    stream.appendChild(div);
+  stream.innerHTML='';
+  let conv=null;
+  try{
+    const r=await api(API+'/conversations/'+convId);
+    if(r.ok) conv=await r.json();
+  }catch(e){}
+  if(conv && conv.messages && conv.messages.length){
+    conv.messages.forEach(m=>{
+      if(m.role==='user'){
+        appendUserMsg(m.content);
+        chatMessages.push({role:'user', content:m.content});
+      }else{
+        appendConvAiMsg(m);
+        chatMessages.push({role:'assistant', content:m.content||m.task?.report?.summary||''});
+      }
+    });
     stream.scrollTop=stream.scrollHeight;
-    bindAiMsgButtons(div, t.id);
+  }else{
+    const w=document.createElement('div');
+    w.className='welcome';w.id='chatWelcome';
+    w.innerHTML=`<h2>👋 我是 Buddy</h2><p>这个会话还没有消息，发句话开始吧。</p>`;
+    stream.appendChild(w);
   }
-  // 2) 再打开新标签页
-  openTaskWindow(taskId);
 }
 
 function renderHistSummaryHTML(task){
@@ -1419,6 +1654,153 @@ function appendUserMsg(text){
   div.innerHTML=`<div class="avatar">你</div><div class="bubble">${esc(text)}</div>`;
   stream.appendChild(div);
   stream.scrollTop=stream.scrollHeight;
+}
+
+/* ===== 会话回放：渲染历史 AI 消息（思考 + 正文 + 节点卡 + 用例卡） ===== */
+function appendConvAiMsg(m){
+  const stream=$("chatStream");
+  const div=document.createElement('div');
+  div.className='msg msg-ai msg-chat';
+  div.innerHTML=renderConvAiBubbleHTML(m);
+  stream.appendChild(div);
+  stream.scrollTop=stream.scrollHeight;
+  bindThinkPanel(div);
+  // 绑定详情展开
+  div.querySelectorAll('.step-detail-toggle').forEach(btn=>{
+    btn.addEventListener('click',()=>toggleStepDetail(btn, div));
+  });
+  const detailBtn=div.querySelector('[data-action="detail"]');
+  if(detailBtn)detailBtn.addEventListener('click',()=>{ if(m.task_id)openTaskWindow(m.task_id); });
+  const delBtn=div.querySelector('[data-action="del-task"]');
+  if(delBtn && m.task_id)delBtn.addEventListener('click',()=>{
+    confirmDeleteTask(m.task_id, m.task&&m.task.name, m.task&&m.task.cases_count);
+  });
+}
+
+function renderConvAiBubbleHTML(m){
+  const thinkHTML = m.thinking
+    ? `<div class="think-panel open" data-think>
+        <div class="think-head open" data-think-head>
+          <span class="arrow"></span><span class="label">思考过程</span><span class="hint">已展开</span>
+        </div>
+        <div class="think-body open" data-think-body>${esc(m.thinking)}</div>
+        <button class="think-more" data-think-more type="button">展开全部</button>
+      </div>`
+    : '';
+  const task = m.task;
+  const taskHead = (task && m.task_id)
+    ? `<div class="steps-card-head">
+        <span class="sc-title">🧪 ${esc(task.name||'测试任务')}<span class="sc-n">${task.cases_count||0} 条用例</span></span>
+        <button class="task-del" data-action="del-task" type="button" title="删除任务">🗑 删除</button>
+      </div>` : '';
+  const stepsHTML = (task && task.steps && task.steps.length)
+    ? `<div class="steps-card" data-task-id="${m.task_id}">${taskHead}${task.steps.map(s=>renderStepRow(s)).join('')}</div>` : '';
+  const casesHTML = (task && task.cases_count>0)
+    ? `<div class="cases-card" data-task-id="${m.task_id}">
+        <div class="cases-card-head">📋 测试用例 <span class="mc">${task.cases_count} 条</span></div>
+        <div class="quick-row"><button class="qtag" data-action="detail" type="button">查看完整用例 →</button></div>
+      </div>` : '';
+  return `
+    <div class="avatar">AI</div>
+    <div class="bubble chat-reply">
+      <div class="bubble-title">AI 测试工程师</div>
+      ${thinkHTML}
+      <div class="reply-body">${renderReplyMarkdown(m.content||'')}</div>
+      ${stepsHTML}
+      ${casesHTML}
+    </div>`;
+}
+
+function renderStepRow(s){
+  const ring=s.status==='completed'?'✓':s.status==='failed'?'!':(STEP_ICON[s.title]||'•');
+  // 动态提示文字
+  const RUNNING_HINT={解析规格:'⏳ 正在拆解需求...',AI生成用例:'✨ 正在生成用例...',质量校验:'🛡️ 正在质量校验...',导出文件:'📦 正在导出文件...'};
+  const runningHint = s.status==='running' ? `<span class="smini run-hint">${RUNNING_HINT[s.title]||'处理中...'}</span>` : '';
+  const badgeTxt = s.status==='running' ? '运行中…' : statusText(s.status);
+  // 详情内容：默认展开，直接显示
+  const detailHTML = s.input_summary ? formatStepDetail(s.name, JSON.parse(s.input_summary)) : '';
+  return `
+    <div class="step ${s.status}">
+      <div class="ring">${ring}</div>
+      <div>
+        <div class="sname">${esc(s.title)}<span class="badge ${s.status}">${badgeTxt}</span>${s.duration_ms?'<span class="smini">'+s.duration_ms.toFixed(0)+'ms</span>':''}${runningHint}</div>
+        ${s.output_summary?`<div class="sout">${esc(s.output_summary)}</div>`:''}
+        ${detailHTML ? `<div class="step-detail-body open">${detailHTML}</div>` : ''}
+        ${s.error?`<div class="serr">${esc(s.error)}</div>`:''}
+      </div>
+    </div>`;
+}
+
+/* 展开/收起步骤详情 */
+function toggleStepDetail(btn, scope){
+  const title = btn.dataset.step;
+  const body = scope ? scope.querySelector(`#detail-${title.replace(/\s/g,'')}`) : null;
+  if(!body) return;
+  const isOpen = body.classList.toggle('open');
+  btn.textContent = isOpen ? '▼ 收起' : '▶ 查看详情';
+  // 如果详情还未加载，从 DOM 上找原始 step 数据加载
+  if(isOpen && !body.dataset.loaded){
+    const s = window._currentTaskSteps?.find(x=>x.title===title);
+    if(s && s.input_summary){
+      try{
+        const d=JSON.parse(s.input_summary);
+        body.innerHTML=formatStepDetail(s.name, d);
+        body.dataset.loaded='1';
+      }catch(e){
+        body.textContent=s.input_summary;
+        body.dataset.loaded='1';
+      }
+    }
+  }
+}
+
+/* 格式化步骤详情 */
+function formatStepDetail(name, d){
+  if(!d) return '';
+  if(name==='parser'){
+    // 解析结果：测试点列表
+    const units=(d.units||[]);
+    if(!units.length) return '未解析出测试点';
+    return units.map((u,i)=>`${i+1}. ${esc(u.name)}${u.description?' — '+esc(u.description):''}`).join('\n');
+  }
+  if(name==='generator'){
+    // 生成统计
+    return `模型：${esc(d.model||'-')}\n测试点覆盖：\n${(d.by_unit||[]).map(u=>`  · ${esc(u.name)} → ${u.cases_generated} 条`).join('\n')}\n总用例：${d.total_cases||0} 条`;
+  }
+  if(name==='reviewer'){
+    // 质量报告
+    const byType=d.by_type||{};
+    const supplement=d.supplemented||0;
+    const pass=d.quality_pass?'✅ 通过':'⚠️ 存在问题';
+    return `总用例：${d.total||0} 条\n正向：${byType['正向']||0} 条 | 异常：${byType['异常']||0} 条 | 边界：${byType['边界值']||0} 条 | 场景：${byType['场景组合']||0} 条\n结构问题：${(d.struct_issues||[]).length} 条\n${supplement>0?'AI 补充：'+supplement+' 条\n':''}质量校验：${pass}`;
+  }
+  return '';
+}
+
+function bindThinkPanel(scope){
+  scope.querySelectorAll('[data-think]').forEach(panel=>{
+    const head=panel.querySelector('[data-think-head]');
+    const body=panel.querySelector('[data-think-body]');
+    const more=panel.querySelector('[data-think-more]');
+    const hint=head?head.querySelector('.hint'):null;
+    if(head){
+      head.addEventListener('click',()=>{
+        const open=body.classList.toggle('open');
+        head.classList.toggle('open',open);
+        if(hint)hint.textContent=open?'已展开':'已折叠';
+      });
+    }
+    if(more){
+      more.addEventListener('click',()=>{
+        const expanded=body.classList.toggle('expanded');
+        more.textContent=expanded?'收起':'展开全部';
+        if(!expanded)body.scrollTop=0;
+      });
+    }
+    if(body && body.scrollHeight > body.clientHeight + 1){
+      panel.classList.add('clamp');
+    }
+  });
 }
 
 function appendAiMsg(task){
@@ -1499,6 +1881,7 @@ function newChat(){
   // 清空对话流 + 草稿 + 历史，只保留欢迎区
   pendingDraft=null;
   chatMessages=[];
+  currentConversationId=null;   // 新对话：下次发送时自动创建新会话
   clearFile();
   $("chatText").value='';
   const stream=$("chatStream");
@@ -1547,7 +1930,7 @@ function renderReplyMarkdown(text){
   const escaped=esc(text);
   return escaped
     .replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')
-    .replace(/\n\n+/g,'<p></p>')
+    .replace(/\n\n+/g,'<br><br>')
     .replace(/\n/g,'<br>');
 }
 
@@ -1586,13 +1969,14 @@ function appendChatStreamBubble(draft){
         <span class="live-pill">生成中</span>
         <button class="stop-btn" type="button">⏹ 停止</button>
       </div>
-      <div class="think-panel empty" data-think>
-        <div class="think-head" data-think-head>
+      <div class="think-panel empty open" data-think>
+        <div class="think-head open" data-think-head>
           <span class="arrow"></span>
           <span class="label">思考过程</span>
-          <span class="hint">默认折叠 · 点开查看</span>
+          <span class="hint">已展开</span>
         </div>
-        <div class="think-body" data-think-body></div>
+        <div class="think-body open" data-think-body></div>
+        <button class="think-more" data-think-more type="button">展开全部</button>
       </div>
       <div class="reply-body" data-reply>
         <span class="typing-cursor"></span>
@@ -1603,13 +1987,23 @@ function appendChatStreamBubble(draft){
   const thinkPanel=div.querySelector('[data-think]');
   const thinkHead=div.querySelector('[data-think-head]');
   const thinkBody=div.querySelector('[data-think-body]');
+  const thinkMore=div.querySelector('[data-think-more]');
+  const thinkHint=div.querySelector('.think-head .hint');
   const replyEl=div.querySelector('[data-reply]');
   const stopBtn=div.querySelector('.stop-btn');
 
-  // 折叠交互
+  // 标题整体折叠 / 展开
   thinkHead.addEventListener('click',()=>{
-    thinkHead.classList.toggle('open');
-    thinkBody.classList.toggle('open');
+    const open=thinkBody.classList.toggle('open');
+    thinkHead.classList.toggle('open',open);
+    if(thinkHint)thinkHint.textContent=open?'已展开':'已折叠';
+  });
+
+  // 展开全部 / 收起
+  thinkMore.addEventListener('click',()=>{
+    const expanded=thinkBody.classList.toggle('expanded');
+    thinkMore.textContent=expanded?'收起':'展开全部';
+    if(!expanded)thinkBody.scrollTop=0;
   });
 
   // 停止按钮
@@ -1622,6 +2016,7 @@ function appendChatStreamBubble(draft){
     _appendThinking(text){
       thinkBody.textContent=text;
       thinkPanel.classList.remove('empty','hidden');
+      thinkBody.scrollTop=thinkBody.scrollHeight;
     },
     _appendReply(text){
       replyEl.innerHTML=renderReplyMarkdown(text) + '<span class="typing-cursor"></span>';
@@ -1639,6 +2034,9 @@ function appendChatStreamBubble(draft){
       stopBtn.style.display='none';
       const cur=replyEl.querySelector('.typing-cursor');
       if(cur)cur.remove();
+      if(thinkBody.scrollHeight > thinkBody.clientHeight + 1){
+        thinkPanel.classList.add('clamp');
+      }
       appendConfirmBtnToStream(div, draft);
     },
     _setDone(meta){
@@ -1656,6 +2054,9 @@ function appendChatStreamBubble(draft){
         tag.style.cssText='font-size:11px;color:var(--sub);margin-left:6px';
         tag.textContent='(演示模式)';
         div.querySelector('.stream-head').appendChild(tag);
+      }
+      if(thinkBody.scrollHeight > thinkBody.clientHeight + 1){
+        thinkPanel.classList.add('clamp');
       }
       appendConfirmBtnToStream(div, draft);
     },
@@ -1703,6 +2104,15 @@ async function sendChat(){
   if(!txt && !pendingFile){showToast('请输入需求或附加文档');return;}
 
   const userContent=txt||'(仅附加文档)';
+
+  // 确保有会话（首次发送时创建，后续消息都挂到这个会话）
+  if(!currentConversationId){
+    try{
+      const r=await api(API+'/conversations',{method:'POST',headers:{"Content-Type":"application/json"},body:JSON.stringify({title:(txt||'新对话').slice(0,40)})});
+      if(r.ok){const c=await r.json();currentConversationId=c.id;loadConversations();}
+    }catch(e){}
+  }
+
   appendUserMsg(userContent);
   chatMessages.push({role:'user', content:userContent});
 
@@ -1737,7 +2147,7 @@ async function sendChat(){
     const r=await fetch(API+'/chat/stream',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
-      body:JSON.stringify({message:userContent, history:chatMessages.slice(0,-1)}),
+      body:JSON.stringify({message:userContent, history:chatMessages.slice(0,-1), conversation_id:currentConversationId}),
       signal: chatStreamAbort.signal,
     });
     if(!r.ok){
@@ -1799,6 +2209,7 @@ async function sendChat(){
     const finalReply=streamBubble._getFinalReply();
     if(finalReply)chatMessages.push({role:'assistant', content:finalReply});
     $("chatStream").scrollTop=$("chatStream").scrollHeight;
+    loadConversations();   // 后端已落库，刷新会话列表（message_count / 排序）
   }
 }
 
@@ -1858,14 +2269,8 @@ async function confirmAndCreateTask(chatBubble, draft, conversation){
     ...draft,
     text: draft.text || conversationText
   };
-  // 将对话气泡更新为「生成中」状态
-  const bubble=chatBubble.querySelector('.bubble');
-  if(bubble){
-    bubble.innerHTML=`<div class="bubble-title">正在生成…</div>
-      <div>Agent 链已启动：解析规格 → 拆解场景 → 设计用例 → 质量校验</div>
-      <div class="bubble-meta"><span style="color:var(--run)">⏳ 生成中</span></div>`;
-  }
-  await createTask();
+  // 不替换 bubble.innerHTML（保留流式回复内容），由 createTask 升级为节点卡气泡
+  await createTask(chatBubble);
 }
 
 /* ===== 任务分类树（V2.3：多级分类 + 拖拽归类/移动） ===== */
@@ -2025,15 +2430,19 @@ async function renderDetail(id){
   $("ctCases").textContent=t.cases_count||0;
 
   // 工作流步骤（次要 tab #pane-steps）
-  $("dSteps").innerHTML=t.steps.map(s=>`
+  $("dSteps").innerHTML=t.steps.map(s=>{
+    const detailHTML = s.input_summary ? formatStepDetail(s.name, JSON.parse(s.input_summary)) : '';
+    return `
     <div class="step ${s.status}">
       <div class="ring">${s.status==='completed'?'✓':s.status==='failed'?'!':(STEP_ICON[s.name]||'•')}</div>
       <div>
         <div class="sname">${esc(s.title)}<span class="badge ${s.status}">${statusText(s.status)}</span>${s.duration_ms?'<span class="smini">'+s.duration_ms.toFixed(0)+'ms</span>':''}</div>
         ${s.output_summary?`<div class="sout">${esc(s.output_summary)}</div>`:''}
+        ${detailHTML?`<div class="step-detail-body open">${detailHTML}</div>`:''}
         ${s.error?`<div class="serr">${esc(s.error)}</div>`:''}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   // 测试用例 tab #pane-cases（核心 · 默认展开）
   renderCasesPane(t.cases||[]);
@@ -2382,24 +2791,16 @@ async function llmClear(slot){
 }
 
 setInterval(loadTasks,4000);
-refreshMe();
-loadLlmMeta();
-loadTasks();
-
-// 隧道慢速提示条：关闭后记住状态，刷新不再弹
-function dismissTunnelTip(){
-  var w=document.getElementById('tunnelTipWrap');
-  if(w) w.style.display='none';
-  try{localStorage.setItem('atf_tunnel_tip_closed','1');}catch(e){}
-}
-(function(){
-  try{
-    if(localStorage.getItem('atf_tunnel_tip_closed')==='1'){
-      var w=document.getElementById('tunnelTipWrap');
-      if(w) w.style.display='none';
-    }
-  }catch(e){}
+// 初始化：等登录态就绪后再加载其他数据
+(async()=>{
+  await refreshMe();   // 先确保 token 就位
+  await Promise.all([
+    loadLlmMeta().catch(()=>{}),
+    loadTasks().catch(()=>{}),
+    loadConversations().catch(()=>{}),
+  ]);
 })();
+
 </script>
 
 <!-- 跨作用域共享状态：detail 渲染时挂到 window，ESM 模块也能读写 -->

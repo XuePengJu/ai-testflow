@@ -103,29 +103,38 @@ def run_task(task_id: str) -> None:
             s0 = time.time()
             try:
                 if name == "parser":
-                    out, summary = fn(input_path, task.kind)
+                    out, summary, details = fn(input_path, task.kind, llm_client)
                     if vision_note:
                         summary = f"{summary}{vision_note}"
                 elif name == "generator":
-                    out, summary = fn(data["units"], llm_client, model_desc)
+                    out, summary, details = fn(data["units"], llm_client, model_desc)
                 elif name == "reviewer":
-                    out, summary = fn(data["cases"])
+                    out, summary, details = fn(data["cases"], llm_client)
                 else:  # exporter
                     fmts = [f.strip() for f in task.formats.split(",") if f.strip()]
-                    out, summary = fn(data["cases"], str(out_dir / task.id), fmts)
+                    out, summary, details = fn(data["cases"], str(out_dir / task.id), fmts)
                 data[key] = out
                 step.status = "completed"
                 step.output_summary = summary
+                step.input_summary = details or ""
                 step.finished_at = utcnow()
                 step.duration_ms = round((time.time() - s0) * 1000, 1)
                 db.commit()
             except Exception as e:  # noqa: BLE001
+                try:
+                    db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
                 step.status = "failed"
                 step.error = str(e)
                 step.finished_at = utcnow()
                 step.duration_ms = round((time.time() - s0) * 1000, 1)
-                task.status = "failed"
-                db.commit()
+                try:
+                    db.commit()
+                    task.status = "failed"
+                    db.commit()
+                except Exception:  # noqa: BLE001
+                    pass
                 return
 
         cases = data["cases"]

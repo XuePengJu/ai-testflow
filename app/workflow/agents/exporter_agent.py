@@ -10,4 +10,4 @@ from src.models.testcase import TestCase
 def run_exporter(cases: list[TestCase], output_path: str, formats):
     files = lib_export(cases, output_path, formats)
     summary = "导出：" + (", ".join(files.keys()) if files else "无")
-    return files, summary
+    return files, summary, ""

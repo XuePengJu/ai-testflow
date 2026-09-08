@@ -23,8 +23,8 @@ from app.models.user import User
 # 服务器环境变量兜底（兼容老部署：.env 里的 DASHSCOPE_API_KEY）
 _BAILIAN_COMPAT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-_TIMEOUT = 60            # 生成用例的常规超时
-_VISION_TIMEOUT = 90     # 视觉模型看图慢一些
+_TIMEOUT = 180           # 生成用例的常规超时（免费模型慢，放宽到 3 分钟）
+_VISION_TIMEOUT = 180    # 视觉模型看图慢一些
 
 
 class LLMError(Exception):
@@ -312,9 +312,28 @@ def _mock_thinking_for(user_text: str) -> str:
     )
 
 
-def _mock_reply_for(user_text: str) -> str:
+def _mock_reply_for(user_text: str, history: list | None = None) -> str:
     """mock 模式：正式回复模板。"""
     u = (user_text or "").strip() or "你描述的场景"
+    # 检查是否有历史上下文
+    has_history = history and len(history) > 0
+    last_user_msg = ""
+    if has_history:
+        # 找最后一条用户消息作为上下文
+        for m in reversed(history):
+            if m.get('role') == 'user' and m.get('content'):
+                last_user_msg = m['content'][:50]
+                break
+    if has_history and last_user_msg:
+        return (
+            f"基于之前的对话（关于「{last_user_msg}」），继续补充：\n\n"
+            "**可能覆盖的测试维度：**\n"
+            "1. **输入边界**：空值、最大长度、特殊字符、emoji、SQL 注入\n"
+            "2. **错误处理**：异常返回、错误码覆盖、错误提示文案\n"
+            "3. **权限控制**：未登录、不同角色、跨用户访问\n"
+            "4. **数据一致性**：并发修改、删除后引用、外键约束\n"
+            "5. **异常兼容**：网络中断、超时、重试机制\n"
+        )
     return (
         f"好的，关于「{u[:30]}{'…' if len(u) > 30 else ''}」，我先理一下：\n\n"
         "**可能覆盖的测试维度：**\n"

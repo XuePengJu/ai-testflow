@@ -52,3 +52,4 @@ class ChatIn(BaseModel):
     """首页对话流：用户消息 + 可选历史（多轮）。"""
     message: str
     history: list[dict] = []         # [{role:"user"/"assistant", content:"..."}]
+    conversation_id: str | None = None   # 归属会话（落库对话记录用；None 则不落库）

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR, GUEST_MAX_TASKS
 from app.core.db import get_db
+from app.models.conversation import Message
 from app.models.task import Task, StepLog
 from app.models.user import User
 from app.schemas.task import TaskOut, StepLogOut
@@ -73,6 +74,7 @@ async def create_task(
     kind: str = Form("business"),
     formats: str = Form("xlsx,json"),
     name: str = Form(""),
+    conversation_id: str = Form(""),
 ):
     """提交一个测试用例生成任务。可上传规格文件或粘贴文本。"""
     # 访客任务上限（防滥用）
@@ -111,10 +113,22 @@ async def create_task(
         formats=formats,
         status="pending",
         user_id=user.id,
+        conversation_id=conversation_id or None,
     )
     db.add(task)
     db.commit()
     db.refresh(task)
+
+    # 回填该会话下最后一条 assistant 消息的 task_id（聊天流回放时据此渲染节点/用例卡）
+    if conversation_id:
+        last_msg = (db.query(Message)
+                    .filter(Message.conversation_id == conversation_id,
+                            Message.role == "assistant",
+                            Message.task_id.is_(None))
+                    .order_by(Message.id.desc()).first())
+        if last_msg:
+            last_msg.task_id = task_id
+            db.commit()
 
     background_tasks.add_task(run_task, task_id)
     return _to_out(db, task)
@@ -137,6 +151,39 @@ def get_task(task_id: str, db: Session = Depends(get_db),
              user: User = Depends(get_current_user)):
     """任务详情：默认带上结构化用例（用于网页思维导图 + 测试用例 tab）。"""
     return _to_out(db, _own_task(db, task_id, user), include_cases=True)
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task(task_id: str,
+                user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """删除任务：级联删 StepLog + 导出文件 + 清除关联 assistant 消息的 task_id。
+    对话本身保留（只是这条消息不再渲染节点卡/用例卡）。"""
+    t = _own_task(db, task_id, user)
+    deleted_files = _delete_task_cascade(db, t)
+    db.delete(t)
+    db.commit()
+    return {"ok": True, "deleted_task_id": task_id, "deleted_files": deleted_files}
+
+
+def _delete_task_cascade(db: Session, t: Task) -> int:
+    """删除任务的级联副作用：StepLog + 导出文件 + 清除 messages.task_id。
+    返回删除的导出文件数。调用方负责 db.commit() 和 db.delete(t)。"""
+    db.query(StepLog).filter(StepLog.task_id == t.id).delete(synchronize_session=False)
+    data_dir = t.user_data_dir(db)
+    deleted_files = 0
+    for ext in ("xlsx", "json", "xmind"):
+        p = OUTPUT_DIR / data_dir / f"{t.id}.{ext}"
+        if p.exists():
+            try:
+                p.unlink()
+                deleted_files += 1
+            except OSError:
+                pass
+    # 清除关联 assistant 消息的 task_id（消息本身保留，只是解除关联）
+    db.query(Message).filter(Message.task_id == t.id).update(
+        {"task_id": None}, synchronize_session=False)
+    return deleted_files
 
 
 @router.get("/tasks/{task_id}/download")

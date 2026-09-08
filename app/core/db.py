@@ -19,6 +19,7 @@ def init_db() -> None:
     import app.models.user  # noqa: F401
     import app.models.category  # noqa: F401
     import app.models.llm_config  # noqa: F401
+    import app.models.conversation  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
 
@@ -32,6 +33,8 @@ def _ensure_columns() -> None:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN category_id INTEGER"))
         if "is_sample" not in cols:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN is_sample BOOLEAN NOT NULL DEFAULT 0"))
+        if "conversation_id" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN conversation_id VARCHAR"))
         conn.commit()
 
 
