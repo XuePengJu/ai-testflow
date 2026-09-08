@@ -10,6 +10,6 @@
     // dev：根据当前端口自动适配 uvicorn，方便在任意端口本地调试
     window.API_BASE = "http://" + h + ":" + (location.port || 8000);
   } else {
-    window.API_BASE = "https://api.clickscope.in"; // 线上：Cloudflare 隧道品牌域名
+    window.API_BASE = ""; // 线上：同域名相对路径 /api（nginx 反代到后端）
   }
 })();
