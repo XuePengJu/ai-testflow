@@ -1,5 +1,12 @@
 # 项目1 · AI 测试工作流平台（MVP 执行方案）
 
+> ⚠️ **修订记录（2026-09-09）**：按 V2.6 实际代码实现做全面更正：
+> 1. 第1节技术栈：AI 模型从"阿里百炼"更新为多厂商支持（7+ 预设）；前端从"原生 HTML+JS MVP"更新为对话驱动 Buddy 助手；部署更新为 FastAPI 同源伺服 + cpolar 内网穿透。
+> 2. 第3节目录树：全面更新为实际结构（前端移至 `frontend/`，补入 `app/api/{chat,conversations,llm_config}.py`、`app/core/providers.py`、`app/models/{conversation,llm_config}.py`、`app/schemas/{conversation,llm_config}.py`、`app/services/{llm_service,sample_seeder}.py`）。
+> 3. 第4节 API 设计：补充全部路由模块（auth/guest/users/categories/llm_config/chat/conversations）。
+> 4. 第5节前端：更新为 Buddy 对话驱动首页 + 左侧边栏 + 详情抽屉。
+> 5. 第8节后新增「8.1.3 V2.4 模型配置」「8.1.4 V2.5 详情页增强」「8.1.5 V2.6 对话驱动」。
+>
 > ⚠️ **修订记录（2026-08-29）**：本方案初稿写于 MVP 立项阶段，后经 V2 认证、V2.1 API 分级加密、V2.3 任务分类多次迭代。本次按**实际代码实现**做了如下更正/补充，原 MVP 规划存档见 `项目1-工作流平台-MVP执行方案-存档20260829.md`：
 > 1. 第0节：原 CLI 原型 `ai-testcase-generator/` 已于 2026-08-29 确认废弃并删除，其能力已整体并入 `generator_core/`；平台为唯一入口。
 > 2. 第3节目录树：更新为实际结构（去掉不存在的 `app/models/case.py`、`app/services/{parser,generator,exporter}.py`，补入 V2/V2.1/V2.3 新增的 `app/api/{auth,guest,users,categories}.py`、`app/core/{crypto,middleware}.py`、`app/jobs/`、`app/models/category.py`、`generator_core/`）。
@@ -28,11 +35,12 @@
 | 层 | 选型 | 说明 |
 |----|------|------|
 | 后端框架 | **FastAPI** | 异步、自带 Swagger、Python AI 生态友好 |
-| AI 模型 | **阿里百炼 / 通义千问** | `DASHSCOPE_API_KEY`；无 Key 时 mock 兜底 |
-| 数据库 | **SQLite** | 轻量，存任务/步骤日志/用例；后续可换 MySQL |
+| AI 模型 | **多厂商 OpenAI 兼容协议** | 7+ 预设（阿里百炼/智谱/腾讯混元/DeepSeek/Kimi/豆包/自定义），用户级 API Key 自管；无 Key 时 mock 兜底 |
+| 数据库 | **SQLite** | 轻量，存任务/步骤日志/用例/用户/会话/分类/模型配置；后续可换 MySQL |
 | 任务编排 | 自研状态机 + 步骤调度 | 四 Agent 串联，每步可观测、可重试 |
-| 前端（MVP） | 原生 HTML+JS | 任务列表/详情/下载；完整 React 版后补 |
-| 部署 | 本地跑通 → 阿里云 39.106.200.147 | 后端纯 Python，无需 Node；前端后补时需装 Node |
+| 对话驱动 | **SSE 流式输出 + 会话持久化** | Buddy 助手自然语言交互，多轮上下文，对话与消息落库可回放 |
+| 前端 | **原生 HTML+JS 单文件（无构建）** | 对话驱动首页 + 左侧边栏 + 详情抽屉 + MindElixir 思维导图；完整 React 版后补 |
+| 部署 | **FastAPI 同源伺服（单端口 8000）+ 阿里云 + cpolar 内网穿透** | 前端静态文件由 FastAPI 挂载，前后端同域同机房，避免跨域和跨太平洋延迟 |
 
 ---
 
@@ -58,29 +66,41 @@
 
 ---
 
-## 3. 目录结构（已更新为实际实现）
+## 3. 目录结构（已更新为 V2.6 实际实现）
 
 ```
 ai-testflow/
-├── main.py                  # FastAPI 入口（挂载 API + 静态页）
+├── main.py                  # FastAPI 入口（挂载 API + 前端静态文件 + vendor）
 ├── requirements.txt
 ├── .env.example
+├── frontend/                # 前端（V2.6 从 app/static 移至此处）
+│   ├── index.html           # 单文件前端（对话驱动 + 登录/分类/拖拽/思维导图/加密）
+│   ├── config.js            # 前端 API 基址配置（同源时空字符串）
+│   ├── favicon.svg
+│   └── vendor/              # 第三方库本地化（mind-elixir 等）
 ├── app/
 │   ├── core/
-│   │   ├── config.py        # 配置（百炼Key、路径、JWT_SECRET、模型名）
-│   │   ├── db.py            # SQLite 连接 + 建表（含 category 等迁移）
+│   │   ├── config.py        # 配置（路径、JWT_SECRET、ENV、CORS、UPLOAD/OUTPUT_DIR）
+│   │   ├── db.py            # SQLite 连接 + 建表（含 category/conversation 等迁移）
 │   │   ├── security.py      # bcrypt 哈希 + JWT 签发/校验（get_current_user 依赖）
 │   │   ├── crypto.py        # API 分级加密（AES-256-GCM，V2.1）
-│   │   ├── middleware.py     # 请求体解密中间件（V2.1）
+│   │   ├── middleware.py     # 请求体解密/响应加密中间件（V2.1）
+│   │   ├── providers.py     # 多厂商 LLM 预设（百炼/智谱/混元/DeepSeek/Kimi/豆包，V2.4）
 │   │   └── utils.py         # 时间等工具
 │   ├── models/
-│   │   ├── task.py          # Task + StepLog（SQLAlchemy，含 category_id）
+│   │   ├── task.py          # Task + StepLog（SQLAlchemy，含 category_id/conversation_id）
 │   │   ├── user.py          # User / GuestCreationLog / CleanLog（三级角色）
-│   │   └── category.py      # 任务多级分类树（V2.3）
+│   │   ├── category.py      # 任务多级分类树（V2.3）
+│   │   ├── conversation.py  # 会话 + 消息（对话持久化，V2.6）
+│   │   └── llm_config.py    # 用户级模型配置（V2.4）
 │   ├── schemas/
-│   │   └── task.py          # Pydantic 请求/响应
+│   │   ├── task.py          # Pydantic 请求/响应
+│   │   ├── conversation.py  # 会话/消息 Pydantic（V2.6）
+│   │   └── llm_config.py    # 模型配置 Pydantic（V2.4）
 │   ├── services/
-│   │   └── pipeline_lib.py  # 生成流水线封装（解析→生成→导出）
+│   │   ├── pipeline_lib.py  # 生成流水线封装（解析→生成→导出）
+│   │   ├── llm_service.py   # OpenAI 兼容 HTTP 直连客户端（V2.4）
+│   │   └── sample_seeder.py # 示例数据播种
 │   ├── workflow/
 │   │   ├── engine.py        # 状态机 + 步骤调度
 │   │   └── agents/
@@ -89,16 +109,18 @@ ai-testflow/
 │   │       ├── reviewer_agent.py
 │   │       └── exporter_agent.py
 │   ├── api/
-│   │   ├── tasks.py         # 任务 REST 端点
+│   │   ├── tasks.py         # 任务 REST 端点（含上传/下载）
 │   │   ├── auth.py          # 注册/登录/改密/me（V2）
 │   │   ├── guest.py         # 访客 token / 转正（V2）
 │   │   ├── users.py         # 用户管理 / 访客治理 / 统计（V2）
 │   │   ├── categories.py    # 分类 CRUD + 任务归类（V2.3）
+│   │   ├── llm_config.py    # 模型配置 / 连通测试（V2.4）
+│   │   ├── chat.py          # Buddy 对话 SSE 流式（V2.6）
+│   │   ├── conversations.py # 会话 CRUD + 消息（V2.6）
 │   │   └── deps.py          # 鉴权依赖
 │   ├── jobs/
 │   │   └── guest_cleaner.py # 访客 TTL 清理（APScheduler，V2）
-│   └── static/
-│       └── index.html       # 前端 dashboard（含登录/分类/拖拽）
+│   └── static/              # 旧静态目录（已废弃，前端移至 frontend/）
 ├── generator_core/          # 从 CLI 原型继承的生成内核（V2 起并入）
 │   ├── config/settings.py
 │   └── src/
@@ -116,25 +138,62 @@ ai-testflow/
 
 ## 4. API 设计
 
+### 4.1 核心路由模块
+
+| 路由文件 | 前缀 | 说明 |
+|---------|------|------|
+| `tasks.py` | `/api` | 任务 CRUD、上传、下载、详情 |
+| `auth.py` | `/api` | 注册/登录/改密/me |
+| `guest.py` | `/api` | 访客 token / 转正 |
+| `users.py` | `/api` | 用户管理 / 访客治理 / 统计（admin） |
+| `categories.py` | `/api` | 分类 CRUD + 任务归类（V2.3） |
+| `llm_config.py` | `/api` | 模型配置 / 连通测试（V2.4） |
+| `chat.py` | `/api` | Buddy 对话 SSE 流式（V2.6） |
+| `conversations.py` | `/api` | 会话 CRUD + 消息（V2.6） |
+
+### 4.2 核心端点
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/tasks` | 提交任务：上传规格文件 **或** 粘贴文本 + 选素材类型(api/business) + 导出格式 |
-| GET | `/api/tasks` | 任务列表（状态/进度/用例数） |
+| GET | `/api/tasks` | 任务列表（状态/进度/用例数，admin 可 `?all=true`） |
 | GET | `/api/tasks/{id}` | 任务详情 + 四步骤日志 + 用例概览 |
 | GET | `/api/tasks/{id}/download?fmt=xlsx` | 下载导出文件 |
+| POST | `/api/chat/stream` | Buddy 对话 SSE 流式输出（V2.6） |
+| POST/GET/DELETE | `/api/conversations` | 会话创建/列表/删除（V2.6） |
+| POST | `/api/conversations/{id}/messages` | 追加消息（V2.6） |
+| GET/POST | `/api/llm-config` | 模型配置读取/保存（V2.4） |
+| POST | `/api/llm-config/test` | 连通测试（V2.4） |
 | GET | `/health` | 健康检查 |
 
 FastAPI 自带 `/docs` Swagger 交互文档。
 
 ---
 
-## 5. 轻量前端（MVP）
+## 5. 前端（V2.6 对话驱动形态）
 
-`static/index.html` 原生实现：
-- 顶部：提交区（文件上传 / 文本粘贴 / 类型选择 / 格式选择 / 提交）
-- 列表：任务卡片（状态徽章、进度条、用例数、耗时）
-- 详情：四 Agent 步骤时间线（名称/状态/耗时/输出摘要/错误）
-- 下载：xlsx / json / xmind 按钮
+`frontend/index.html` 原生单文件实现（无构建、无框架）：
+
+- **首页主区域**：Buddy 对话助手
+  - 对话式输入框，自然语言描述测试需求
+  - AI 回复 SSE 流式逐字渲染，思考过程可折叠
+  - 预设场景卡片（Web 登录用例 / 接口参数校验 / App 端功能 / 需求文档解析）
+  - 对话内联展示任务生成进度：四 Agent 节点实时刷新，点击节点展开详情
+  - 任务完成后"查看完整用例"按钮，当前页弹出详情抽屉（不新开标签页）
+
+- **左侧边栏**：
+  - 「+ 新对话」按钮
+  - 历史会话列表（按时间倒序，点击切换）
+  - 任务分类树（全部/未分类/自定义多级分类，拖拽归类）
+
+- **任务详情抽屉**（右侧滑出，3 Tab）：
+  - 🧠 思维导图（MindElixir 在线渲染）
+  - 📋 测试用例表格（按模块分组）
+  - ⚙️ 工作流步骤（四步时间线 + 质量报告）
+
+- **顶栏**：身份徽标（访客倒计时/用户名/管理员）、模型状态胶囊、退出按钮、产品路线图悬浮入口
+
+- **安全**：AES-256-GCM 纯 JS 解密（user/guest 角色 API 流量加密），不依赖 crypto.subtle
 
 完整 React + 质量看板版本作为第二阶段。
 
@@ -160,10 +219,15 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
 ## 8. 后续演进（非 MVP）
 
 - **用户认证 + 多用户数据隔离（设计见第 9 节，V2 优先实施）** ✅ 已落地
+- **API 分级加密（V2.1）** ✅ 已落地
+- **任务多级分类 + 拖拽归类（V2.3）** ✅ 已落地
+- **多厂商模型配置 + 双模型视觉理解（V2.4）** ✅ 已落地
+- **任务详情 3 Tab + 思维导图在线预览（V2.5）** ✅ 已落地
+- **对话驱动 Buddy 助手 + 会话持久化（V2.6）** ✅ 已落地
 - 完整 React 前端 + 质量看板（覆盖率/异常占比可视化）
 - 定时执行（Celery/APScheduler）+ Allure 报告
 - 接真实 DBERP 后端做端到端接口自动化闭环
-- 部署到阿里云在线演示（需装 Node 跑前端）
+- 部署优化：Docker 化 + 国内 CDN 加速
 
 ## 8.1 已落地补充（V2.1 / V2.3，实际已实现）
 
@@ -177,6 +241,19 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
 ### 8.1.2 V2.3 · 任务多级分类 + 拖拽归类（FR-H）
 - **动机**：任务列表从「扁平列表」升级为「按系统/模块组织的多级分类树」，支持自由拖拽归类。
 - **方案**：`app/models/category.py` 多级树（name / parent_id / user_id 隔离 / sort）；`app/api/categories.py` 提供分类 CRUD、重命名/移动（防环校验）、任务归类接口（`PUT /api/categories/move-task/{task_id}`）、级联删除回落未分类；前端 `index.html` 用 HTML5 原生拖拽（任务拖到分类归类、分类拖到另一分类变子级、目标高亮）。
+
+### 8.1.3 V2.4 · 多厂商模型配置 + 双模型视觉理解（FR-I）
+- **动机**：解决「平台只能 mock 跑」的问题，让每个用户配置自己的大模型 API Key，真实调用 LLM 生成用例。
+- **方案**：`app/core/providers.py` 内置 7+ 厂商预设（阿里百炼/智谱/腾讯混元/DeepSeek/Kimi/豆包/自定义），选中预设只需填 API Key；`app/services/llm_service.py` OpenAI 兼容协议 HTTP 直连（去除 SDK 依赖）；`app/api/llm_config.py` 配置 CRUD + 连通测试；`app/models/llm_config.py` 用户级配置持久化；API Key AES-256-GCM 加密落库，回显脱敏。
+- **双模型**：可选配置图像识别模型，输入含截图时两段式——视觉模型逐图识别输出文字描述 → 与文档文本合并后交默认模型生成用例。
+
+### 8.1.4 V2.5 · 任务详情 3 Tab 重构 + 思维导图在线预览（FR-J）
+- **动机**：任务详情从「四步骤时间线」扩展为三 Tab 布局，强化用例可视化与评审体验。
+- **方案**：详情抽屉右侧滑出（不新开页面），默认停在思维导图 Tab；`frontend/vendor/` 本地化 MindElixir 渲染库（120KB，零依赖），模块→用例层级展开，节点挂载类型/优先级标签（彩色胶囊）；测试用例 Tab 按模块分组表格展示完整字段；工作流步骤 Tab 保留四步时间线 + 质量报告。
+
+### 8.1.5 V2.6 · 对话驱动 Buddy 助手 + 会话持久化（FR-L）
+- **动机**：产品核心交互形态升级，从「表单提交任务」变为「自然语言对话驱动」，降低使用门槛，增强 AI 产品体验。
+- **方案**：`app/api/chat.py` 实现 `POST /api/chat/stream` SSE 流式输出（逐字渲染 + 思考过程可折叠）；`app/api/conversations.py` 会话 CRUD + 消息追加；`app/models/conversation.py` Conversation（id/user_id/title/created_at/updated_at）+ Message（id/conversation_id/role/content/thinking/task_id/created_at）；assistant 消息关联 task_id，回放时按 task_id 实时拉取任务节点与用例，避免冗余存储；前端首页改为对话流，左侧边栏历史会话列表，对话内联展示任务生成进度，详情抽屉替代新标签页。
 
 ---
 
