@@ -406,6 +406,15 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .cpri.P2{color:#059669;background:#d1fae5}
   .case-card .crow{display:flex;font-size:12px;line-height:1.55;margin:3px 0;gap:10px}
   .case-card .crow .lbl{flex:none;color:var(--sub);font-weight:600;min-width:54px}
+  .iterations{border-top:1px solid #e5e7eb;padding-top:12px}
+  .iter-title{font-size:12px;font-weight:700;color:var(--sub);margin-bottom:8px}
+  .iter-list{display:flex;flex-direction:column;gap:6px}
+  .iter-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;text-decoration:none;color:var(--text);font-size:12px;background:#fff}
+  .iter-item:hover{border-color:#4f46e5;background:#f5f7ff}
+  .iter-item.on{border-color:#4f46e5;background:#eef2ff;font-weight:600}
+  .iter-ver{font-size:11px;font-weight:700;color:#4338ca;background:#e0e7ff;border-radius:6px;padding:1px 7px;flex:none}
+  .iter-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .iter-meta{color:var(--sub);font-size:11px;flex:none}
   .case-card .crow .val{flex:1;color:#334155;white-space:pre-wrap;word-break:break-word}
   .case-card .step-item{padding:3px 0;border-bottom:1px dashed #f1f5f9}
   .case-card .step-item:last-child{border-bottom:0}
@@ -625,7 +634,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
       </div>
       <div class="chat-input-foot">
         <button class="attach-chip" id="chatAttachBtn" onclick="pickAttach()">＋ 附加文档</button>
-        <input type="file" id="chatFile" accept=".md,.txt,text/markdown,text/plain" hidden>
+        <input type="file" id="chatFile" accept=".md,.txt,.xmind,.xlsx,.json,text/markdown,text/plain" hidden>
         <span id="chatAttachName"></span>
         <span class="spacer"></span>
         <span>Enter 发送 · Shift+Enter 换行</span>
@@ -662,6 +671,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
         <a class="dl" href="javascript:void(0)" onclick="dl(window.currentTaskId,'xlsx')">⬇ 导出 Excel (XLSX)</a>
       </div>
       <div id="dCases"></div>
+      <div id="dIterations" class="iterations" style="margin-top:16px"></div>
     </div>
     <!-- tab 内容：工作流步骤（原 stepper，分析步骤降级为次要） -->
     <div class="dtab-pane" id="pane-steps">
@@ -941,6 +951,7 @@ let pendingDraft=null;
 let chatMessages=[];   // 首页多轮对话历史 [{role:'user'|'assistant', content}]
 let chatStreamAbort=null;   // 当前流式请求的 AbortController（用于停止按钮）
 let currentConversationId=null;   // 当前对话会话 id（发消息前确保存在，落库用）
+let supplementTaskId=null;   // 迭代补充模式：关联的任务 id（null=普通生成模式）
 
 /* ===== 认证状态（V2）+ 分级加密（V2.1） ===== */
 const TOKEN_KEY="aitf_token", USER_KEY="aitf_user", ENCKEY_KEY="aitf_enc_key";
@@ -1442,7 +1453,10 @@ function renderLiveSteps(taskBox, t){
   const casesHTML=(t.cases_count>0)
     ? `<div class="cases-card">
         <div class="cases-card-head">📋 测试用例 <span class="mc">${t.cases_count} 条</span></div>
-        <div class="quick-row"><button class="qtag" data-action="detail" type="button">查看完整用例 →</button></div>
+        <div class="quick-row">
+          <button class="qtag" data-action="detail" type="button">查看完整用例 →</button>
+          ${t.status==='completed'?'<button class="qtag" data-action="supplement" type="button">➕ 继续补充</button>':''}
+        </div>
       </div>` : '';
   const head=`<div class="steps-card-head">
         <span class="sc-title">🧪 ${esc(t.name||'测试任务')}<span class="sc-n">${t.cases_count||0} 条用例</span></span>
@@ -1454,9 +1468,12 @@ function renderLiveSteps(taskBox, t){
     expandedBefore.add(el.id.replace('detail-', ''));
   });
   taskBox.innerHTML = `<div class="steps-card">${head}${rows}</div>${casesHTML}`;
-  // 绑定"查看完整"按钮 → 开新页面（保留完整详情）
+  // 绑定"查看完整"按钮 → 开抽屉
   const detailBtn=taskBox.querySelector('[data-action="detail"]');
   if(detailBtn) detailBtn.addEventListener('click',()=>showDetail(t.id));
+  // 绑定"继续补充"按钮 → 进入迭代补充模式
+  const suppBtn=taskBox.querySelector('[data-action="supplement"]');
+  if(suppBtn) suppBtn.addEventListener('click',()=>startSupplement(t.id));
   // 绑定"删除任务"按钮 → 确认弹窗
   const delBtn=taskBox.querySelector('[data-action="del-task"]');
   if(delBtn) delBtn.addEventListener('click',()=>confirmDeleteTask(t.id, t.name, t.cases_count));
@@ -1882,8 +1899,10 @@ function newChat(){
   pendingDraft=null;
   chatMessages=[];
   currentConversationId=null;   // 新对话：下次发送时自动创建新会话
+  supplementTaskId=null;   // 退出迭代补充模式
   clearFile();
   $("chatText").value='';
+  $("chatText").placeholder='把你的测试需求告诉 Buddy…';
   const stream=$("chatStream");
   stream.innerHTML='';
   const w=document.createElement('div');
@@ -2068,20 +2087,26 @@ function appendChatStreamBubble(draft){
   };
 }
 
-/** 给流式 AI 气泡追加"生成测试用例"按钮（done 或 stopped 后） */
+/** 给流式 AI 气泡追加"生成测试用例"或"补充生成"按钮（done 或 stopped 后） */
 function appendConfirmBtnToStream(streamBubble, draft){
   if(streamBubble.querySelector('.confirm-btn'))return;
   const row=document.createElement('div');
   row.className='quick-row';
   row.style.marginTop='10px';
+  const isSupplement=!!supplementTaskId;
+  const btnText=isSupplement?'✨ 补充生成':'✨ 生成测试用例';
   row.innerHTML=`
-    <button class="qtag confirm-btn" type="button">✨ 生成测试用例</button>
+    <button class="qtag confirm-btn" type="button">${btnText}</button>
     <button class="qtag" type="button" onclick="showToast('可在输入框继续补充规则后发送')">继续补充</button>`;
   streamBubble.querySelector('.bubble').appendChild(row);
   row.querySelector('.confirm-btn').addEventListener('click',()=>{
     row.querySelector('.confirm-btn').disabled=true;
     row.querySelector('.confirm-btn').textContent='生成中…';
-    confirmAndCreateTask(streamBubble, draft, chatMessages);
+    if(isSupplement){
+      confirmAndIterate(streamBubble, draft);
+    }else{
+      confirmAndCreateTask(streamBubble, draft, chatMessages);
+    }
   });
 }
 
@@ -2147,7 +2172,7 @@ async function sendChat(){
     const r=await fetch(API+'/chat/stream',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
-      body:JSON.stringify({message:userContent, history:chatMessages.slice(0,-1), conversation_id:currentConversationId}),
+      body:JSON.stringify({message:userContent, history:chatMessages.slice(0,-1), conversation_id:currentConversationId, task_id:supplementTaskId}),
       signal: chatStreamAbort.signal,
     });
     if(!r.ok){
@@ -2240,7 +2265,11 @@ function appendChatAiMsg(reply, draft, usedMock){
   if(btn){
     btn.addEventListener('click',()=>{
       btn.disabled=true; btn.textContent='生成中…';
-      confirmAndCreateTask(div, div._draft, div._conversation);
+      if(supplementTaskId){
+        confirmAndIterate(div, div._draft);
+      }else{
+        confirmAndCreateTask(div, div._draft, div._conversation);
+      }
     });
   }
 }
@@ -2249,13 +2278,15 @@ function renderChatAiBubbleHTML(reply, usedMock){
   const mockTag=usedMock?`<span style="font-size:11px;color:var(--sub);margin-left:6px">(演示模式)</span>`:'';
   // 把回复里的换行渲染成段落
   const paragraphs=esc(reply).split('\n').filter(l=>l.trim()).map(l=>`<p>${l}</p>`).join('');
+  const isSupplement=!!supplementTaskId;
+  const btnText=isSupplement?'✨ 补充生成':'✨ 生成测试用例';
   return `
     <div class="avatar">AI${mockTag}</div>
     <div class="bubble chat-reply">
       <div class="bubble-title">AI 测试工程师</div>
       <div class="reply-body">${paragraphs}</div>
       <div class="quick-row" style="margin-top:10px">
-        <button class="qtag confirm-btn" type="button">✨ 生成测试用例</button>
+        <button class="qtag confirm-btn" type="button">${btnText}</button>
         <button class="qtag" type="button" onclick="showToast('可在输入框继续补充规则后发送')">继续补充</button>
       </div>
     </div>`;
@@ -2271,6 +2302,51 @@ async function confirmAndCreateTask(chatBubble, draft, conversation){
   };
   // 不替换 bubble.innerHTML（保留流式回复内容），由 createTask 升级为节点卡气泡
   await createTask(chatBubble);
+}
+
+/* ===== 迭代补充：确认并调用 iterate API ===== */
+async function confirmAndIterate(chatBubble, draft){
+  if(!supplementTaskId){showToast('未关联任务');return;}
+  const instruction=(draft?.text||'').trim();
+  const file=draft?.file;
+  if(!instruction && !file){showToast('请输入补充要求或上传用例文件');return;}
+
+  const fd=new FormData();
+  if(file)fd.append('file',file);
+  fd.append('instruction',instruction);
+  fd.append('conversation_id',currentConversationId||'');
+
+  const sendBtn=$("chatSendBtn"); if(sendBtn){sendBtn.disabled=true;}
+  try{
+    const r=await api(API+'/tasks/'+supplementTaskId+'/iterate',{method:'POST',body:fd});
+    if(!r.ok){const e=await r.text();showToast('补充失败：'+e.slice(0,200));return;}
+    const newTask=await r.json();
+    pendingDraft=null;
+    clearFile();
+    supplementTaskId=null;  // 回到普通模式
+    showToast("已提交补充，正在生成新版本");
+    if(newTask && newTask.id){
+      if(chatBubble){
+        upgradeBubbleToTask(chatBubble, newTask);
+        startMsgPoll(newTask.id, chatBubble);
+      }
+      loadConversations();
+    }
+  }catch(e){showToast('网络错误：'+e.message);}
+  finally{if(sendBtn){sendBtn.disabled=false;}}
+}
+
+/* 进入迭代补充模式：关联任务，聚焦输入框 */
+function startSupplement(taskId){
+  supplementTaskId=taskId;
+  const input=$("chatText");
+  if(input){
+    input.placeholder='输入补充要求，如：补充退货审批流程的异常场景…';
+    input.focus();
+  }
+  showToast('已进入补充模式，描述你想补充的用例范围');
+  // 滚动到输入框
+  $("chatStream").scrollTop=$("chatStream").scrollHeight;
 }
 
 /* ===== 任务分类树（V2.3：多级分类 + 拖拽归类/移动） ===== */
@@ -2446,6 +2522,8 @@ async function renderDetail(id){
 
   // 测试用例 tab #pane-cases（核心 · 默认展开）
   renderCasesPane(t.cases||[]);
+  // 迭代版本链
+  loadIterationChain(t);
 
   // 思维导图数据准备：每次 renderDetail 都构造最新数据
   pendingCasesForMindmap = t.cases || [];
@@ -2516,6 +2594,50 @@ function renderCasesPane(cases){
         </div>
       </div>`;
   }).join('');
+}
+
+/* ===== 迭代版本链展示 ===== */
+async function loadIterationChain(task){
+  const box=$("dIterations");
+  if(!box)return;
+  // 找 root parent（沿 parent_task_id 往上找）
+  let rootId=task.id;
+  const allTasks=await fetch(API+'/tasks',{headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).catch(()=>[]);
+  const taskMap={};
+  (allTasks||[]).forEach(t=>{taskMap[t.id]=t;});
+  let guard=0;
+  while(taskMap[rootId]?.parent_task_id && guard<20){
+    rootId=taskMap[rootId].parent_task_id;
+    guard++;
+  }
+  // 收集同一迭代链：root + 所有 parent 在链上的任务
+  const chainIds=new Set([rootId]);
+  let changed=true;
+  while(changed){
+    changed=false;
+    (allTasks||[]).forEach(t=>{
+      if(t.parent_task_id && chainIds.has(t.parent_task_id) && !chainIds.has(t.id)){
+        chainIds.add(t.id);
+        changed=true;
+      }
+    });
+  }
+  const chain=(allTasks||[]).filter(t=>chainIds.has(t.id))
+    .sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
+  if(chain.length<=1){
+    box.innerHTML='';
+    return;
+  }
+  const items=chain.map((t,i)=>{
+    const isCur=t.id===task.id;
+    const ver=t.name.match(/\(v(\d+)\)/)?'v'+t.name.match(/\(v(\d+)\)/)[1]:'v1';
+    return `<a class="iter-item ${isCur?'on':''}" href="javascript:void(0)" onclick="showDetail('${t.id}')">
+      <span class="iter-ver">${ver}</span>
+      <span class="iter-name">${esc(t.name)}</span>
+      <span class="iter-meta">${t.cases_count||0}条 · ${statusText(t.status)}</span>
+    </a>`;
+  }).join('');
+  box.innerHTML=`<div class="iter-title">🔁 迭代版本（${chain.length} 个版本）</div><div class="iter-list">${items}</div>`;
 }
 
 /* ===== tab 切换 ===== */

@@ -1,5 +1,14 @@
 # 项目1 · AI 测试工作流平台（MVP 执行方案）
 
+> ⚠️ **修订记录（2026-09-09 V2.7）**：新增用例迭代与导入功能（FR-M）：
+> 1. 数据模型：Task 加 `parent_task_id` 字段，`_ensure_columns()` 自动迁移。
+> 2. 新增 `app/workflow/agents/import_agent.py`（xmind/xlsx/json 用例文件导入解析器）、`app/workflow/agents/supplement_agent.py`（带已有用例上下文的增量生成）、`app/workflow/iterate.py`（迭代流水线：加载基础用例→增量生成→合并去重→质量校验→导出）。
+> 3. API：新增 `POST /api/tasks/{task_id}/iterate`（FormData: instruction + 可选 file + conversation_id），预创建子任务空壳后后台执行，与 create_task 模式一致。
+> 4. 对话上下文：ChatIn 加可选 `task_id`，AI 回复时自动携带任务用例摘要。
+> 5. 前端：上传 accept 扩展 xmind/xlsx/json、任务气泡加「➕ 继续补充」、AI 确认按钮根据模式切换「✨ 补充生成」、详情抽屉加迭代版本链。
+> 6. 每次迭代生成独立子任务（parent_task_id 关联），版本号 v2/v3 自动命名，历史版本可查看/预览/下载。
+> 7. 测试：新增 `tests/test_iterate.py`（18 条），全量 114 条通过。
+
 > ⚠️ **修订记录（2026-09-09）**：按 V2.6 实际代码实现做全面更正：
 > 1. 第1节技术栈：AI 模型从"阿里百炼"更新为多厂商支持（7+ 预设）；前端从"原生 HTML+JS MVP"更新为对话驱动 Buddy 助手；部署更新为 FastAPI 同源伺服 + cpolar 内网穿透。
 > 2. 第3节目录树：全面更新为实际结构（前端移至 `frontend/`，补入 `app/api/{chat,conversations,llm_config}.py`、`app/core/providers.py`、`app/models/{conversation,llm_config}.py`、`app/schemas/{conversation,llm_config}.py`、`app/services/{llm_service,sample_seeder}.py`）。
@@ -254,6 +263,17 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
 ### 8.1.5 V2.6 · 对话驱动 Buddy 助手 + 会话持久化（FR-L）
 - **动机**：产品核心交互形态升级，从「表单提交任务」变为「自然语言对话驱动」，降低使用门槛，增强 AI 产品体验。
 - **方案**：`app/api/chat.py` 实现 `POST /api/chat/stream` SSE 流式输出（逐字渲染 + 思考过程可折叠）；`app/api/conversations.py` 会话 CRUD + 消息追加；`app/models/conversation.py` Conversation（id/user_id/title/created_at/updated_at）+ Message（id/conversation_id/role/content/thinking/task_id/created_at）；assistant 消息关联 task_id，回放时按 task_id 实时拉取任务节点与用例，避免冗余存储；前端首页改为对话流，左侧边栏历史会话列表，对话内联展示任务生成进度，详情抽屉替代新标签页。
+
+### 8.1.6 V2.7 · 用例迭代与导入（FR-M）
+- **动机**：解决「生成后无法再修改」的痛点——AI 首次生成的用例可能不完善，用户需要在会话中继续补充；同时本地已有的 xmind/xlsx 用例文件需要上传解析后检查完善。
+- **方案**：
+  - **数据模型**：Task 加 `parent_task_id`（迭代来源），`_ensure_columns()` 自动迁移。
+  - **导入解析器**（`app/workflow/agents/import_agent.py`）：支持 xmind（兼容 XMind 8 legacy XML + 新版 JSON）、xlsx（列名映射+别名兼容）、json（平台导出格式），解析失败明确报错不静默。
+  - **增量生成**（`app/workflow/agents/supplement_agent.py`）：上下文只传压缩摘要（模块+标题+类型统计，防 token 超限），prompt 明确要求不重复已有用例、只补指令涉及范围，mock 兜底。
+  - **迭代流水线**（`app/workflow/iterate.py`）：加载基础用例（原任务 cases_json + 可选导入文件）→ 增量生成 → 合并去重（键=标题+模块+类型+预期前20字）→ 质量校验（复用 reviewer）→ 导出（复用 exporter）。每次迭代生成独立子任务（parent_task_id 关联），版本号 v2/v3 基于 root 链自动计算，不覆盖原任务。
+  - **API**：`POST /api/tasks/{task_id}/iterate`（FormData: instruction + 可选 file + conversation_id），预创建子任务空壳后后台执行，与 create_task 模式一致；权限校验（仅 owner/admin）、状态校验（仅 completed/failed）、并发保护（running 子任务拒绝重复提交）。
+  - **对话上下文**：ChatIn 加可选 `task_id`，AI 回复时自动携带任务用例摘要（模块分布+标题列表），补充模式下 AI 知道当前在给哪个任务补用例。
+  - **前端**：上传 accept 扩展 xmind/xlsx/json；已完成任务气泡加「➕ 继续补充」按钮进入补充模式；AI 确认按钮根据 supplementTaskId 切换「✨ 补充生成」；详情抽屉测试用例 Tab 加迭代版本链（v1→v2→v3，点击切换查看/预览/下载）。
 
 ---
 

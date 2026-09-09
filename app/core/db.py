@@ -35,6 +35,8 @@ def _ensure_columns() -> None:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN is_sample BOOLEAN NOT NULL DEFAULT 0"))
         if "conversation_id" not in cols:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN conversation_id VARCHAR"))
+        if "parent_task_id" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN parent_task_id VARCHAR"))
         conn.commit()
 
 

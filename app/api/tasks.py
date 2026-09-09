@@ -16,6 +16,7 @@ from app.models.task import Task, StepLog
 from app.models.user import User
 from app.schemas.task import TaskOut, StepLogOut
 from app.workflow.engine import run_task
+from app.workflow.iterate import run_iterate
 
 router = APIRouter()
 
@@ -42,6 +43,7 @@ def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
         id=task.id, name=task.name, kind=task.kind, source_type=task.source_type,
         status=task.status, cases_count=task.cases_count, duration_ms=task.duration_ms,
         formats=task.formats, category_id=task.category_id,
+        parent_task_id=task.parent_task_id,
         created_at=task.created_at, finished_at=task.finished_at,
         steps=[
             StepLogOut(
@@ -197,3 +199,72 @@ def download(task_id: str, fmt: str = "xlsx",
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"未找到 {fmt} 导出文件")
     return FileResponse(path, filename=f"{task_id}{ext}")
+
+
+@router.post("/tasks/{task_id}/iterate", response_model=TaskOut, status_code=201)
+async def iterate_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    file: UploadFile | None = File(None),
+    instruction: str = Form(""),
+    conversation_id: str = Form(""),
+):
+    """对已完成任务进行迭代补充，生成新版本子任务。
+
+    - instruction：补充要求（必填）
+    - file：可选，上传本地用例文件（xmind/xlsx/json），导入后与原用例合并
+    - conversation_id：可选，关联会话（默认继承原任务的会话）
+    """
+    parent = _own_task(db, task_id, user)
+    if parent.status not in ("completed", "failed"):
+        raise HTTPException(status_code=400, detail=f"任务状态为 {parent.status}，仅 completed/failed 任务可迭代")
+    if not instruction.strip() and not file:
+        raise HTTPException(status_code=400, detail="补充要求（instruction）与用例文件至少提供一个")
+
+    # 并发保护：同一原任务下不能有正在运行的子任务
+    running_child = (db.query(Task)
+                     .filter(Task.parent_task_id == task_id, Task.status == "running")
+                     .first())
+    if running_child:
+        raise HTTPException(status_code=409, detail="该任务已有迭代正在进行中，请等待完成")
+
+    # 上传文件落盘
+    uploaded_path = None
+    uploaded_ext = None
+    if file:
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in (".xmind", ".xlsx", ".json"):
+            raise HTTPException(status_code=400, detail=f"不支持的用例文件格式 {ext}（支持 xmind/xlsx/json）")
+        user_dir = UPLOAD_DIR / user.data_dir
+        user_dir.mkdir(parents=True, exist_ok=True)
+        uploaded_path = str(user_dir / f"iter_{uuid.uuid4().hex[:8]}{ext}")
+        with open(uploaded_path, "wb") as f:
+            f.write(await file.read())
+        uploaded_ext = ext.lstrip(".")
+
+    eff_conv = conversation_id or parent.conversation_id
+
+    # 预创建新任务空壳（status=pending），后台 run_iterate 填充
+    new_task_id = uuid.uuid4().hex[:12]
+    new_task = Task(
+        id=new_task_id,
+        name=parent.name,
+        kind=parent.kind,
+        source_type="iterate",
+        input_ref=instruction[:500],
+        formats=parent.formats,
+        status="pending",
+        user_id=parent.user_id,
+        conversation_id=eff_conv,
+        parent_task_id=task_id,
+        category_id=parent.category_id,
+    )
+    db.add(new_task)
+    db.commit()
+    db.refresh(new_task)
+
+    background_tasks.add_task(
+        run_iterate, new_task_id, task_id, instruction.strip(), uploaded_path, uploaded_ext, eff_conv)
+    return _to_out(db, new_task)

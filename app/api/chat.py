@@ -30,6 +30,7 @@ from app.api.deps import get_current_user
 from app.core.db import get_db
 from app.core.utils import utcnow
 from app.models.conversation import Conversation, Message
+from app.models.task import Task
 from app.models.user import User
 from app.schemas.llm_config import ChatIn
 from app.services import llm_service
@@ -80,6 +81,32 @@ def _persist_chat(db: Session, user: User | None, body: ChatIn, full_text: str) 
     db.commit()
 
 
+def _build_task_summary(db: Session, task_id: str, user: User | None) -> str:
+    """迭代补充模式：构建任务用例的压缩摘要，附在对话上下文里。"""
+    if not task_id:
+        return ""
+    task = db.get(Task, task_id)
+    if not task or (user and task.user_id != user.id and user.role != "admin"):
+        return ""
+    if not task.cases_json:
+        return f"【任务上下文】任务「{task.name}」暂无已生成用例"
+    try:
+        cases = json.loads(task.cases_json)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(cases, list) or not cases:
+        return ""
+    from collections import Counter
+    by_module = Counter(c.get("module") or "未分类" for c in cases)
+    by_type = Counter(c.get("case_type") or "正向" for c in cases)
+    lines = [f"【任务上下文】正在迭代任务「{task.name}」，已有 {len(cases)} 条用例："]
+    lines.append(f"类型分布：{dict(by_type)}")
+    for mod, cnt in by_module.items():
+        titles = [c.get("title", "")[:30] for c in cases if (c.get("module") or "未分类") == mod][:8]
+        lines.append(f"- 模块「{mod}」（{cnt} 条）：{'、'.join(titles)}")
+    return "\n".join(lines)[:2000]
+
+
 async def _run(db: Session, user: User | None, body: ChatIn, source: str):
     """异步 SSE 事件流 generator。
 
@@ -88,8 +115,9 @@ async def _run(db: Session, user: User | None, body: ChatIn, source: str):
     流式结束后（finally）把 user + assistant 消息落库到会话，实现对话持久化。
     """
     full_text = ""
+    task_summary = _build_task_summary(db, body.task_id, user)
     try:
-        async for ev, payload in llm_service.chat_stream(db, user, body.message, body.history, ""):
+        async for ev, payload in llm_service.chat_stream(db, user, body.message, body.history, task_summary):
             if ev == "delta":
                 full_text += payload
                 yield _sse("delta", {"content": payload})

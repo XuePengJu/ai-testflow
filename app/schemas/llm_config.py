@@ -53,3 +53,4 @@ class ChatIn(BaseModel):
     message: str
     history: list[dict] = []         # [{role:"user"/"assistant", content:"..."}]
     conversation_id: str | None = None   # 归属会话（落库对话记录用；None 则不落库）
+    task_id: str | None = None       # 迭代补充模式：关联的任务 id，AI 回复时附该任务用例摘要
