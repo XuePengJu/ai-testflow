@@ -30,7 +30,7 @@ from app.workflow.agents.import_agent import import_cases, ImportError
 from app.workflow.agents.reviewer_agent import run_reviewer
 from app.workflow.agents.supplement_agent import run_supplement
 from app.workflow.agents.exporter_agent import run_exporter
-from src.models.testcase import TestCase, align_step_expectations
+from src.models.testcase import TestCase, align_step_expectations, ensure_case_ids
 
 
 def _parse_cases_json(cases_json: str | None) -> list[TestCase]:
@@ -236,6 +236,7 @@ def run_iterate(
         # ---- 落库 ----
         new_task.status = "completed"
         new_task.cases_count = len(merged)
+        merged = ensure_case_ids(merged)  # 补全缺失的用例ID（TC-xxx 序号）
         new_task.cases_json = cases_to_json(merged)
         new_task.report_json = json.dumps(report, ensure_ascii=False, default=str)
         new_task.finished_at = utcnow()

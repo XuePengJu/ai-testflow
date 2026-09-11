@@ -1,4 +1,5 @@
 """测试用例数据模型（Pydantic v2，缺失时降级 dataclass，保证零依赖也能跑）。"""
+import re
 from enum import Enum
 from typing import List, Optional
 
@@ -50,6 +51,28 @@ def align_step_expectations(
     if len(steps) == 1:
         return [exp]
     return [exp] * len(steps)
+
+
+def ensure_case_ids(cases: list) -> list:
+    """补全缺失的用例ID，保证每条用例都有 TC 编号（兼容 TestCase 对象与 dict）。
+
+    规则：沿用现有最大的 `TC-数字` 序号（兼容 TC-001 / TC001 / TC-1）递增；
+    全部缺失时从 TC-001 开始。已有 ID 保持不变。
+    """
+    _get = lambda c: (c.case_id if not isinstance(c, dict) else (c.get("case_id") or ""))
+    _set = lambda c, v: (setattr(c, "case_id", v) if not isinstance(c, dict) else c.__setitem__("case_id", v))
+
+    max_n = 0
+    for c in cases:
+        cid = str(_get(c) or "").strip()
+        m = re.match(r"^TC-?0*(\d+)$", cid)
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+    for c in cases:
+        if not str(_get(c) or "").strip():
+            max_n += 1
+            _set(c, f"TC-{max_n:03d}")
+    return cases
 
 
 if _PYDANTIC:

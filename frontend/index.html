@@ -2543,6 +2543,18 @@ function renderCasesPane(cases){
     box.innerHTML=`<div class="case-empty">暂无结构化用例数据 · 任务生成完成后会自动填充</div>`;
     return;
   }
+  // 补全缺失的用例ID：沿用现有最大 TC-序号递增（兼容 TC-001 / TC001 / TC-1），存量数据兜底
+  let maxTC=0;
+  cases.forEach(c=>{
+    const m=(c.case_id||'').trim().match(/^TC-?0*(\d+)$/);
+    if(m)maxTC=Math.max(maxTC,parseInt(m[1],10));
+  });
+  cases.forEach(c=>{
+    if(!(c.case_id||'').trim()){
+      maxTC+=1;
+      c.case_id='TC-'+String(maxTC).padStart(3,'0');
+    }
+  });
   // 按 module 分组
   const groups={};
   cases.forEach(c=>{

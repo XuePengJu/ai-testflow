@@ -4,10 +4,12 @@
 出参：(files, output_summary)  files: {fmt: 绝对路径}
 """
 from app.services.pipeline_lib import lib_export
-from src.models.testcase import TestCase
+from src.models.testcase import TestCase, ensure_case_ids
 
 
 def run_exporter(cases: list[TestCase], output_path: str, formats):
+    # 导出前补全缺失的用例ID，保证导出文件（xlsx 用例ID 列等）完整
+    cases = ensure_case_ids(cases)
     files = lib_export(cases, output_path, formats)
     summary = "导出：" + (", ".join(files.keys()) if files else "无")
     return files, summary, ""

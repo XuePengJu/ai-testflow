@@ -14,6 +14,7 @@ from app.models.task import Task, StepLog
 from app.models.user import User
 from app.services import llm_service
 from app.services.pipeline_lib import cases_to_json
+from src.models.testcase import ensure_case_ids
 from app.workflow.agents import (
     parser_agent, generator_agent, reviewer_agent, exporter_agent,
 )
@@ -138,6 +139,7 @@ def run_task(task_id: str) -> None:
                 return
 
         cases = data["cases"]
+        cases = ensure_case_ids(cases)  # 补全缺失的用例ID（TC-xxx 序号）
         task.status = "completed"
         task.cases_count = len(cases)
         task.cases_json = cases_to_json(cases)
