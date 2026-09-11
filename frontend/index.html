@@ -2567,7 +2567,11 @@ function renderCasesPane(cases){
         <td>${c.priority?`<span class="cpri ${esc(c.priority)}">${esc(c.priority)}</span>`:'<span class="dash">-</span>'}</td>
         <td class="ct-text">${c.pre_condition?esc(c.pre_condition):'<span class="dash">-</span>'}</td>
         <td class="ct-text">${c.test_data?esc(c.test_data):'<span class="dash">-</span>'}</td>
-        <td class="ct-text">${(c.steps&&c.steps.length)?c.steps.map((s,i)=>`${i+1}. ${esc(s)}`).join('\n'):'<span class="dash">-</span>'}</td>
+        <td class="ct-text">${(c.steps&&c.steps.length)?c.steps.map((s,i)=>{
+          const se=(c.step_expectations&&c.step_expectations[i])?c.step_expectations[i]:(i===c.steps.length-1?c.expected:'');
+          const stepLine=`${i+1}. ${esc(s)}`;
+          return se?`${stepLine}\n   ↳ 预期: ${esc(se)}`:stepLine;
+        }).join('\n'):'<span class="dash">-</span>'}</td>
         <td class="ct-text">${c.expected?esc(c.expected):'<span class="dash">-</span>'}</td>
       </tr>`).join('');
     return `
@@ -2952,9 +2956,10 @@ function buildMindmapData(cases){
     if (c.test_data)     kids.push({ id: uid(), topic: c.test_data,     tags: ['测试数据'] });
     (c.steps || []).forEach((s, i) => {
       const sn = { id: uid(), topic: (i + 1) + '. ' + s, tags: ['操作步骤'] };
-      // 把"预期结果"挂到最后一步的子节点，跟 XMind 截图一致
-      if (i === (c.steps.length - 1) && c.expected) {
-        sn.children = [{ id: uid(), topic: c.expected, tags: ['预期结果'] }];
+      // 每个步骤挂对应的预期结果（V2.7：优先逐步预期，旧数据兜底整体预期）
+      const se = (c.step_expectations && c.step_expectations[i]) ? c.step_expectations[i] : c.expected;
+      if (se) {
+        sn.children = [{ id: uid(), topic: se, tags: ['预期结果'] }];
       }
       kids.push(sn);
     });

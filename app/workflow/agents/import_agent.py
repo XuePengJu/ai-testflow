@@ -13,7 +13,7 @@ import zipfile
 from collections import Counter
 from xml.etree import ElementTree as ET
 
-from src.models.testcase import TestCase, CaseType, Priority
+from src.models.testcase import TestCase, CaseType, Priority, align_step_expectations
 
 
 class ImportError(Exception):
@@ -72,6 +72,9 @@ def import_json(path: str) -> list[TestCase]:
         if not isinstance(item, dict):
             continue
         try:
+            steps = item.get("steps") or item.get("步骤") or []
+            expected = str(item.get("expected") or item.get("预期结果") or "")
+            se = item.get("step_expectations") or item.get("步骤预期") or []
             cases.append(TestCase(
                 case_id=str(item.get("case_id") or item.get("用例ID") or ""),
                 title=str(item.get("title") or item.get("标题") or "未命名用例"),
@@ -79,8 +82,9 @@ def import_json(path: str) -> list[TestCase]:
                 case_type=_to_case_type(item.get("case_type") or item.get("类型") or "正向"),
                 priority=_to_priority(item.get("priority") or item.get("优先级") or "P1"),
                 pre_condition=str(item.get("pre_condition") or item.get("前置条件") or ""),
-                steps=item.get("steps") or item.get("步骤") or [],
-                expected=str(item.get("expected") or item.get("预期结果") or ""),
+                steps=steps,
+                step_expectations=align_step_expectations(steps, se, expected),
+                expected=expected,
                 test_data=item.get("test_data") or item.get("测试数据"),
             ))
         except Exception as e:  # noqa: BLE001
@@ -101,6 +105,7 @@ _COL_ALIASES = {
     "priority": ["优先级", "priority"],
     "pre_condition": ["前置条件", "pre_condition", "precondition", "前置"],
     "steps": ["步骤", "steps", "操作步骤", "测试步骤"],
+    "step_expectations": ["步骤预期", "step_expectations", "步骤预期结果"],
     "expected": ["预期结果", "expected", "预期"],
     "test_data": ["测试数据", "test_data", "testdata", "数据"],
 }
@@ -148,6 +153,9 @@ def import_xlsx(path: str) -> list[TestCase]:
             return "" if v is None else str(v).strip()
         steps_raw = _get("steps")
         steps = [s.strip() for s in steps_raw.split("\n") if s.strip()] if steps_raw else []
+        se_raw = _get("step_expectations")
+        se = [s.strip() for s in se_raw.split("\n") if s.strip()] if se_raw else []
+        expected = _get("expected")
         try:
             cases.append(TestCase(
                 case_id=_get("case_id"),
@@ -157,7 +165,8 @@ def import_xlsx(path: str) -> list[TestCase]:
                 priority=_to_priority(_get("priority") or "P1"),
                 pre_condition=_get("pre_condition"),
                 steps=steps,
-                expected=_get("expected"),
+                step_expectations=align_step_expectations(steps, se, expected),
+                expected=expected,
                 test_data=_get("test_data") or None,
             ))
         except Exception as e:  # noqa: BLE001
@@ -201,6 +210,7 @@ def _parse_case_topic_xml(topic: ET.Element, ns: str) -> TestCase:
     test_data = ""
     expected = ""
     steps: list[str] = []
+    step_exps: list[str] = []
     children = topic.find(f"{ns}children/{ns}topics")
     if children is not None:
         for child in children.findall(f"{ns}topic"):
@@ -218,17 +228,25 @@ def _parse_case_topic_xml(topic: ET.Element, ns: str) -> TestCase:
                 test_data = ctitle
             elif label_text == "操作步骤":
                 steps.append(_strip_step_num(ctitle))
-                # 预期结果挂在最后一个操作步骤下
-                exp_child = child.find(f"{ns}children/{ns}topics/{ns}topic")
+                # 每个操作步骤下可能有对应的预期结果子节点（V2.7 新格式）
+                exp_child = child.find(f"{ns}children/{ns}topics")
+                step_exp = ""
                 if exp_child is not None:
-                    elabels = exp_child.find(f"{ns}labels")
-                    if elabels is not None:
-                        elabel = elabels.find(f"{ns}label")
-                        if elabel is not None and (elabel.text or "").strip() == "预期结果":
-                            etitle = exp_child.find(f"{ns}title")
-                            expected = (etitle.text or "").strip() if etitle is not None else ""
+                    for ec in exp_child.findall(f"{ns}topic"):
+                        elabels = ec.find(f"{ns}labels")
+                        if elabels is not None:
+                            elabel = elabels.find(f"{ns}label")
+                            if elabel is not None and (elabel.text or "").strip() == "预期结果":
+                                etitle = ec.find(f"{ns}title")
+                                step_exp = (etitle.text or "").strip() if etitle is not None else ""
+                                break
+                step_exps.append(step_exp)
             elif label_text == "预期结果":
                 expected = ctitle
+
+    # 整体预期兜底：xmind 无独立整体节点时，取最后一步预期作为 expected（保证非空）
+    if not expected and step_exps:
+        expected = step_exps[-1]
 
     return TestCase(
         title=clean_title or "未命名用例",
@@ -237,6 +255,7 @@ def _parse_case_topic_xml(topic: ET.Element, ns: str) -> TestCase:
         priority=_to_priority(priority),
         pre_condition=pre_condition,
         steps=steps,
+        step_expectations=align_step_expectations(steps, step_exps, expected),
         expected=expected,
         test_data=test_data or None,
     )
@@ -339,6 +358,7 @@ def _parse_case_topic_json(topic: dict) -> TestCase:
     test_data = ""
     expected = ""
     steps: list[str] = []
+    step_exps: list[str] = []
     children = (topic.get("children") or {}).get("attached") or []
     for child in children:
         clabels = child.get("labels") or []
@@ -350,14 +370,21 @@ def _parse_case_topic_json(topic: dict) -> TestCase:
             test_data = ctitle
         elif label_text == "操作步骤":
             steps.append(_strip_step_num(ctitle))
-            # 预期结果挂在最后一个操作步骤下
+            # 每个操作步骤下可能有对应的预期结果子节点（V2.7 新格式）
+            step_exp = ""
             exp_children = (child.get("children") or {}).get("attached") or []
             for ec in exp_children:
                 elabels = ec.get("labels") or []
                 if elabels and str(elabels[0]) == "预期结果":
-                    expected = ec.get("title", "")
+                    step_exp = ec.get("title", "")
+                    break
+            step_exps.append(step_exp)
         elif label_text == "预期结果":
             expected = ctitle
+
+    # 整体预期兜底：xmind 无独立整体节点时，取最后一步预期作为 expected（保证非空）
+    if not expected and step_exps:
+        expected = step_exps[-1]
 
     return TestCase(
         title=clean_title or "未命名用例",
@@ -366,6 +393,7 @@ def _parse_case_topic_json(topic: dict) -> TestCase:
         priority=_to_priority(priority),
         pre_condition=pre_condition,
         steps=steps,
+        step_expectations=align_step_expectations(steps, step_exps, expected),
         expected=expected,
         test_data=test_data or None,
     )

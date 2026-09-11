@@ -24,6 +24,34 @@ class Priority(str, Enum):
     P3 = "P3"
 
 
+def align_step_expectations(
+    steps: list[str],
+    step_expectations: list[str] | None,
+    expected: str,
+) -> list[str]:
+    """保证「每个步骤都有预期结果」的硬约束。
+
+    规则：
+    1. step_expectations 数量与步骤数一致且全部非空 → 原样使用
+    2. 只有 1 个步骤 → 用整体 expected 作为该步骤预期
+    3. 多步骤但逐步预期缺失/不齐 → 每步挂整体 expected（冗余但信息完整）
+    4. steps 为空 → 返回空列表
+
+    返回与过滤空串后的 steps 一一对应的预期列表。
+    """
+    steps = [s for s in (steps or []) if str(s).strip()]
+    if not steps:
+        return []
+    if step_expectations and len(step_expectations) == len(steps) and all(
+        str(x).strip() for x in step_expectations
+    ):
+        return [str(x).strip() for x in step_expectations]
+    exp = (expected or "").strip()
+    if len(steps) == 1:
+        return [exp]
+    return [exp] * len(steps)
+
+
 if _PYDANTIC:
     class TestCase(BaseModel):
         case_id: str = ""
@@ -33,13 +61,19 @@ if _PYDANTIC:
         priority: Priority = Priority.P1
         pre_condition: str = ""
         steps: List[str] = Field(default_factory=list)
+        step_expectations: List[str] = Field(default_factory=list)
         expected: str = ""
         test_data: Optional[str] = None
+
+        def resolved_expectations(self) -> list[str]:
+            """返回与 steps 一一对应的逐步预期（旧数据缺失时自动兜底）。"""
+            return align_step_expectations(self.steps, self.step_expectations, self.expected)
 
         def to_row(self):
             return [self.case_id, self.title, self.module, self.case_type.value,
                     self.priority.value, self.pre_condition,
-                    "\n".join(self.steps), self.expected, self.test_data or ""]
+                    "\n".join(self.steps), "\n".join(self.resolved_expectations()),
+                    self.expected, self.test_data or ""]
 
         def to_dict(self):
             return self.model_dump()
@@ -62,19 +96,26 @@ else:
         priority: Priority = Priority.P1
         pre_condition: str = ""
         steps: List[str] = field(default_factory=list)
+        step_expectations: List[str] = field(default_factory=list)
         expected: str = ""
         test_data: Optional[str] = None
+
+        def resolved_expectations(self) -> list[str]:
+            """返回与 steps 一一对应的逐步预期（旧数据缺失时自动兜底）。"""
+            return align_step_expectations(self.steps, self.step_expectations, self.expected)
 
         def to_row(self):
             return [self.case_id, self.title, self.module, self.case_type.value,
                     self.priority.value, self.pre_condition,
-                    "\n".join(self.steps), self.expected, self.test_data or ""]
+                    "\n".join(self.steps), "\n".join(self.resolved_expectations()),
+                    self.expected, self.test_data or ""]
 
         def to_dict(self):
             return {
                 "case_id": self.case_id, "title": self.title, "module": self.module,
                 "case_type": self.case_type.value, "priority": self.priority.value,
                 "pre_condition": self.pre_condition, "steps": self.steps,
+                "step_expectations": self.step_expectations,
                 "expected": self.expected, "test_data": self.test_data,
             }
 

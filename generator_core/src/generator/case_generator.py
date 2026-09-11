@@ -2,7 +2,7 @@
 import json
 import re
 from config import settings
-from src.models.testcase import TestCase, RequirementUnit
+from src.models.testcase import TestCase, RequirementUnit, align_step_expectations
 from src.generator.llm_client import BailianClient
 from src.generator.mock_generator import mock_generate
 
@@ -32,17 +32,21 @@ class CaseGenerator:
 
     @staticmethod
     def _normalize(raw: dict) -> dict:
-        """兼容 LLM 返回的字段名大小写/中英差异。"""
+        """兼容 LLM 返回的字段名大小写/中英差异，并对齐逐步预期。"""
         ct = raw.get("case_type") or raw.get("caseType") or "正向"
         pr = raw.get("priority") or raw.get("优先级") or "P1"
+        steps = raw.get("steps", []) or []
+        expected = raw.get("expected", "")
+        se = raw.get("step_expectations") or raw.get("stepExpectations") or []
         return {
             "title": raw.get("title", "未命名用例"),
             "module": raw.get("module", ""),
             "case_type": ct,
             "priority": pr,
             "pre_condition": raw.get("pre_condition", "") or raw.get("preCondition", ""),
-            "steps": raw.get("steps", []) or [],
-            "expected": raw.get("expected", ""),
+            "steps": steps,
+            "step_expectations": align_step_expectations(steps, se, expected),
+            "expected": expected,
             "test_data": raw.get("test_data") or raw.get("testData"),
         }
 

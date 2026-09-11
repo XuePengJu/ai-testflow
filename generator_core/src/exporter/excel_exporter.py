@@ -2,7 +2,7 @@
 import csv
 from src.models.testcase import TestCase
 
-HEADERS = ["用例ID", "标题", "模块", "类型", "优先级", "前置条件", "步骤", "预期结果", "测试数据"]
+HEADERS = ["用例ID", "标题", "模块", "类型", "优先级", "前置条件", "步骤", "步骤预期", "预期结果", "测试数据"]
 
 
 def export_excel(cases: list[TestCase], out_path: str) -> str:

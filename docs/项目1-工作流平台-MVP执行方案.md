@@ -1,5 +1,12 @@
 # 项目1 · AI 测试工作流平台（MVP 执行方案）
 
+> ⚠️ **修订记录（2026-09-11 V2.7 增强）**：步骤级预期结果（xmind 格式修复）：
+> 1. TestCase 加 `step_expectations`（与 steps 一一对应）+ `align_step_expectations()` 对齐兜底，保证每步必有预期。
+> 2. 四份 LLM prompt 统一要求逐步输出预期；mock_generator 16 条用例配逐步预期。
+> 3. xmind 导出每步挂预期子节点；xlsx 新增「步骤预期」列；导入层还原逐步预期并兼容旧格式。
+> 4. 前端思维导图每步挂预期、用例表格内联逐步预期。
+> 5. 新增 `tests/test_step_expected.py`（16 条），全量 130 条通过。详见「8.1.7」。
+
 > ⚠️ **修订记录（2026-09-09 V2.7）**：新增用例迭代与导入功能（FR-M）：
 > 1. 数据模型：Task 加 `parent_task_id` 字段，`_ensure_columns()` 自动迁移。
 > 2. 新增 `app/workflow/agents/import_agent.py`（xmind/xlsx/json 用例文件导入解析器）、`app/workflow/agents/supplement_agent.py`（带已有用例上下文的增量生成）、`app/workflow/iterate.py`（迭代流水线：加载基础用例→增量生成→合并去重→质量校验→导出）。
@@ -274,6 +281,17 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
   - **API**：`POST /api/tasks/{task_id}/iterate`（FormData: instruction + 可选 file + conversation_id），预创建子任务空壳后后台执行，与 create_task 模式一致；权限校验（仅 owner/admin）、状态校验（仅 completed/failed）、并发保护（running 子任务拒绝重复提交）。
   - **对话上下文**：ChatIn 加可选 `task_id`，AI 回复时自动携带任务用例摘要（模块分布+标题列表），补充模式下 AI 知道当前在给哪个任务补用例。
   - **前端**：上传 accept 扩展 xmind/xlsx/json；已完成任务气泡加「➕ 继续补充」按钮进入补充模式；AI 确认按钮根据 supplementTaskId 切换「✨ 补充生成」；详情抽屉测试用例 Tab 加迭代版本链（v1→v2→v3，点击切换查看/预览/下载）。
+
+### 8.1.7 V2.7 · 步骤级预期结果（xmind 格式修复）
+- **动机**：xmind/思维导图中"有操作步骤但无预期结果"——原实现把整体预期只挂在最后一步下，前面步骤只有操作描述。
+- **方案**：
+  - **数据模型**：`TestCase` 加 `step_expectations: list[str]`（与 `steps` 一一对应），保留 `expected` 作整体总结；`align_step_expectations()` 强制对齐兜底（数量一致全非空→原样用；单步→整体预期；多步缺失→每步挂整体预期），保证"每步必有预期"。
+  - **生成层**：requirement/api/supplement/reviewer 四份 prompt 统一要求输出 `step_expectations` 且与 steps 严格一一对应；各 `_normalize`/`_parse` 解析后对齐兜底；mock_generator 16 条用例配逐步预期。
+  - **导出层**：xmind 每个步骤节点下挂对应预期子节点（不再只挂最后一步）；xlsx 新增「步骤预期」列（`to_row` 同步 10 列）。
+  - **导入层**：xmind XML/JSON 解析每个步骤下的预期子节点还原 `step_expectations`，旧格式（仅最后一步有）自动兜底，整体预期缺失时取最后一步预期；xlsx/json 新增列别名兼容新旧格式。
+  - **兼容层**：`iterate._parse_cases_json` 读旧库数据自动补齐字段，老任务迭代不丢内容。
+  - **前端**：思维导图每步挂对应预期子节点；用例表格步骤列内联 `↳ 预期: xxx`，不增加列不挤布局。
+  - **测试**：新增 `tests/test_step_expected.py` 16 条（对齐兜底 7、xmind 导出/导入闭环 3、mock 2、导入兼容 4），全量 130 条通过。
 
 ---
 

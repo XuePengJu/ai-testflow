@@ -30,11 +30,14 @@ from app.workflow.agents.import_agent import import_cases, ImportError
 from app.workflow.agents.reviewer_agent import run_reviewer
 from app.workflow.agents.supplement_agent import run_supplement
 from app.workflow.agents.exporter_agent import run_exporter
-from src.models.testcase import TestCase
+from src.models.testcase import TestCase, align_step_expectations
 
 
 def _parse_cases_json(cases_json: str | None) -> list[TestCase]:
-    """从 Task.cases_json 反序列化为 TestCase 列表。"""
+    """从 Task.cases_json 反序列化为 TestCase 列表。
+
+    兼容旧数据：库中无 step_expectations 字段时自动对齐兜底（每步挂整体预期）。
+    """
     if not cases_json:
         return []
     try:
@@ -48,6 +51,9 @@ def _parse_cases_json(cases_json: str | None) -> list[TestCase]:
         if not isinstance(item, dict):
             continue
         try:
+            steps = item.get("steps") or []
+            expected = str(item.get("expected") or "")
+            se = item.get("step_expectations") or []
             out.append(TestCase(
                 case_id=str(item.get("case_id") or ""),
                 title=str(item.get("title") or "未命名用例"),
@@ -55,8 +61,9 @@ def _parse_cases_json(cases_json: str | None) -> list[TestCase]:
                 case_type=item.get("case_type") or "正向",
                 priority=item.get("priority") or "P1",
                 pre_condition=str(item.get("pre_condition") or ""),
-                steps=item.get("steps") or [],
-                expected=str(item.get("expected") or ""),
+                steps=steps,
+                step_expectations=align_step_expectations(steps, se, expected),
+                expected=expected,
                 test_data=item.get("test_data"),
             ))
         except Exception:  # noqa: BLE001

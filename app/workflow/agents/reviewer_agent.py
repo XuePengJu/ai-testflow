@@ -10,7 +10,7 @@ import re
 from collections import Counter
 
 from app.services import llm_service
-from src.models.testcase import TestCase, CaseType, Priority
+from src.models.testcase import TestCase, CaseType, Priority, align_step_expectations
 
 
 _FILL_PROMPT = """你是资深测试工程师。请为以下「测试点」补充测试用例，使其覆盖缺失的维度。
@@ -28,11 +28,13 @@ _FILL_PROMPT = """你是资深测试工程师。请为以下「测试点」补�
     "priority": "P0|P1|P2|P3",
     "pre_condition": "前置条件",
     "steps": ["步骤1", "步骤2"],
-    "expected": "预期结果",
+    "step_expectations": ["步骤1的预期结果", "步骤2的预期结果"],
+    "expected": "整体预期结果（各步骤预期的总结）",
     "test_data": "测试数据"
   }}
 ]
 
+要求：step_expectations 必须与 steps 一一对应、数量严格一致。
 只输出 JSON，不要解释。"""
 
 _MISSING_THRESHOLD = {
@@ -65,6 +67,9 @@ def _build_cases_from_json(arr: list) -> list[TestCase]:
             continue
         ct = item.get("case_type") or item.get("caseType") or "正向"
         pr = item.get("priority") or item.get("优先级") or "P1"
+        steps = item.get("steps", []) or []
+        expected = item.get("expected", "")
+        se = item.get("step_expectations") or item.get("stepExpectations") or []
         try:
             out.append(TestCase(
                 title=item.get("title", "未命名用例"),
@@ -75,8 +80,9 @@ def _build_cases_from_json(arr: list) -> list[TestCase]:
                           CaseType.SCENARIO,
                 priority=Priority(pr),
                 pre_condition=item.get("pre_condition", "") or item.get("preCondition", ""),
-                steps=item.get("steps", []) or [],
-                expected=item.get("expected", ""),
+                steps=steps,
+                step_expectations=align_step_expectations(steps, se, expected),
+                expected=expected,
                 test_data=item.get("test_data") or item.get("testData"),
             ))
         except Exception:

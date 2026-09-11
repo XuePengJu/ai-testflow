@@ -12,7 +12,7 @@ import json
 import re
 from collections import Counter
 
-from src.models.testcase import TestCase, CaseType, Priority
+from src.models.testcase import TestCase, CaseType, Priority, align_step_expectations
 
 
 _SUPPLEMENT_PROMPT = """你是资深测试工程师。请根据补充要求，为已有测试用例集**增量补充**用例。
@@ -35,11 +35,13 @@ _SUPPLEMENT_PROMPT = """你是资深测试工程师。请根据补充要求，�
     "priority": "P0|P1|P2|P3",
     "pre_condition": "前置条件",
     "steps": ["步骤1", "步骤2"],
-    "expected": "预期结果",
+    "step_expectations": ["步骤1的预期结果", "步骤2的预期结果"],
+    "expected": "整体预期结果（各步骤预期的总结）",
     "test_data": "测试数据"
   }}
 ]
-4. 只输出 JSON，不要解释、不要 markdown 代码块包裹"""
+4. step_expectations 必须与 steps 一一对应、数量严格一致，每个步骤都要有明确的预期结果
+5. 只输出 JSON，不要解释、不要 markdown 代码块包裹"""
 
 
 def build_existing_summary(cases: list[TestCase], max_per_module: int = 15) -> str:
@@ -64,17 +66,21 @@ def build_existing_summary(cases: list[TestCase], max_per_module: int = 15) -> s
 
 
 def _normalize(raw: dict) -> dict:
-    """兼容 LLM 返回的字段名大小写/中英差异（复用 CaseGenerator 逻辑）。"""
+    """兼容 LLM 返回的字段名大小写/中英差异，并对齐逐步预期。"""
     ct = raw.get("case_type") or raw.get("caseType") or "正向"
     pr = raw.get("priority") or raw.get("优先级") or "P1"
+    steps = raw.get("steps", []) or []
+    expected = raw.get("expected", "")
+    se = raw.get("step_expectations") or raw.get("stepExpectations") or []
     return {
         "title": raw.get("title", "未命名用例"),
         "module": raw.get("module", ""),
         "case_type": ct,
         "priority": pr,
         "pre_condition": raw.get("pre_condition", "") or raw.get("preCondition", ""),
-        "steps": raw.get("steps", []) or [],
-        "expected": raw.get("expected", ""),
+        "steps": steps,
+        "step_expectations": align_step_expectations(steps, se, expected),
+        "expected": expected,
         "test_data": raw.get("test_data") or raw.get("testData"),
     }
 
@@ -101,6 +107,7 @@ def _parse_llm(text: str) -> list[TestCase]:
                 priority=Priority(n["priority"]) if n["priority"] in ("P0", "P1", "P2", "P3") else Priority.P1,
                 pre_condition=n["pre_condition"],
                 steps=n["steps"],
+                step_expectations=n["step_expectations"],
                 expected=n["expected"],
                 test_data=n["test_data"],
             ))
@@ -120,12 +127,21 @@ def _mock_supplement(instruction: str, existing_cases: list[TestCase]) -> list[T
     if not target_module:
         target_module = instruction[:10] or "补充模块"
     templates = [
-        ("补充-异常输入校验", "异常", "P1", "输入非法数据", ["输入非法格式数据", "提交"], "系统提示错误并拒绝提交"),
-        ("补充-边界值验证", "边界值", "P2", "输入边界值", ["输入最小边界值", "输入最大边界值", "提交"], "系统正确处理边界值"),
-        ("补充-空值处理", "异常", "P1", "必填项为空", ["清空必填字段", "提交"], "系统提示必填项不能为空"),
+        ("补充-异常输入校验", "异常", "P1", "输入非法数据",
+         ["输入非法格式数据", "提交"],
+         ["非法数据可正常录入", "系统提示错误并拒绝提交"],
+         "系统提示错误并拒绝提交"),
+        ("补充-边界值验证", "边界值", "P2", "输入边界值",
+         ["输入最小边界值", "输入最大边界值", "提交"],
+         ["最小边界值被正常接受", "最大边界值被正常接受", "系统正确处理边界值"],
+         "系统正确处理边界值"),
+        ("补充-空值处理", "异常", "P1", "必填项为空",
+         ["清空必填字段", "提交"],
+         ["必填字段已清空", "系统提示必填项不能为空"],
+         "系统提示必填项不能为空"),
     ]
     cases = []
-    for title, ct, pr, pre, steps, exp in templates:
+    for title, ct, pr, pre, steps, se, exp in templates:
         cases.append(TestCase(
             title=title,
             module=target_module,
@@ -133,6 +149,7 @@ def _mock_supplement(instruction: str, existing_cases: list[TestCase]) -> list[T
             priority=Priority(pr),
             pre_condition=pre,
             steps=steps,
+            step_expectations=se,
             expected=exp,
         ))
     return cases

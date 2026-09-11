@@ -5,8 +5,8 @@
 结构说明（对齐老板模板 测试用例模板.xmind）：
 - 每个模块作为一个 topic
 - 每个用例作为一个 topic：标题 `序号. 操作概括->预期概括`，labels 标注 类型+优先级（如 正向用例/P0）
-- 子节点用 labels 标注字段：前置条件 / 测试数据 / 操作步骤（最后一步下挂 预期结果）
-- 无"步骤"聚合节点，操作步骤直接平铺；预期结果作为最后一步的子节点
+- 子节点用 labels 标注字段：前置条件 / 测试数据 / 操作步骤（每个步骤下挂对应的预期结果）
+- 无"步骤"聚合节点，操作步骤直接平铺；预期结果作为每个步骤的子节点（V2.7：逐步预期，不再只挂最后一步）
 """
 import re
 import time
@@ -69,7 +69,7 @@ def _case_topic(c: TestCase, idx: int) -> str:
     子节点（labels 标注字段，输入在前、操作在后）：
       - 前置条件（可选）
       - 测试数据（可选）
-      - 操作步骤 1..N，最后一步下挂 预期结果
+      - 操作步骤 1..N，**每个步骤下挂对应的预期结果**（V2.7 修复：不再只挂最后一步）
     """
     children: list[str] = []
 
@@ -81,20 +81,22 @@ def _case_topic(c: TestCase, idx: int) -> str:
     if c.test_data:
         children.append(_topic(c.test_data, labels=["测试数据"]))
 
-    # 操作步骤（带编号平铺），最后一步下挂预期结果
+    # 操作步骤（带编号平铺），每个步骤下挂对应预期结果
     steps = [s for s in c.steps if s]
+    exps = c.resolved_expectations()  # 与 steps 一一对应（旧数据自动兜底）
     exp = c.expected.strip() if c.expected else ""
     if steps:
         for i, s in enumerate(steps, 1):
             sub = None
-            if i == len(steps) and exp:
-                sub = [_topic(exp, labels=["预期结果"])]
+            se = exps[i - 1] if i - 1 < len(exps) else exp
+            if se:
+                sub = [_topic(se, labels=["预期结果"])]
             children.append(_topic(f"{i}. {s}", children=sub, labels=["操作步骤"]))
     elif exp:
         # 无步骤时预期结果兜底放同级，不丢数据
         children.append(_topic(exp, labels=["预期结果"]))
 
-    # 标题：序号. 操作概括->预期概括（预期取第一分句，完整预期在最后一步子节点）
+    # 标题：序号. 操作概括->预期概括（预期取第一分句，完整预期在每个步骤子节点）
     exp_short = exp.split("，")[0].split(",")[0].strip() if exp else ""
     title = f"{idx}. {_case_title(c)}"
     if exp_short:
