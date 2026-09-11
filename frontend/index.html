@@ -362,10 +362,10 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   /* footer 与 chat-wrap 间距 */
   .footer{margin:20px auto 30px;max-width:1400px;padding:0 24px;color:var(--sub);font-size:11px;text-align:center}
 
-  /* ===== 详情抽屉 ===== */
+  /* ===== 详情抽屉：flex 上下分栏，头部固定、内容区独立滚动 ===== */
   .overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(3px);z-index:50;display:none;align-items:flex-end;justify-content:center}
   .overlay.open{display:flex}
-  .drawer{background:#fff;width:100%;max-width:94vw;max-height:96vh;overflow:auto;border-radius:20px 20px 0 0;padding:16px 24px 28px;animation:rise .28s cubic-bezier(.2,.8,.2,1)}
+  .drawer{background:#fff;width:100%;max-width:94vw;max-height:96vh;height:96vh;display:flex;flex-direction:column;overflow:hidden;border-radius:20px 20px 0 0;padding:16px 24px 28px;animation:rise .28s cubic-bezier(.2,.8,.2,1)}
   @media(min-width:720px){.overlay{align-items:center}.drawer{border-radius:20px;animation:pop .28s cubic-bezier(.2,.8,.2,1)}}
   @keyframes rise{from{transform:translateY(40px);opacity:.6}to{transform:none;opacity:1}}
   @keyframes pop{from{transform:scale(.96);opacity:.6}to{transform:none;opacity:1}}
@@ -382,16 +382,22 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .dmeta b{color:var(--text)}
 
   /* ===== 详情抽屉 · 2 tab (思维导图 / 测试用例) ===== */
-  /* 固定头部：标题+状态+tab 栏整体吸顶（横向铺满抽屉宽度，盖住左右 padding） */
-  .drawer-fixed{position:sticky;top:0;z-index:6;background:#fff;margin:0 -24px 12px;padding:0 24px;border-bottom:1px solid #e5e7eb;box-shadow:0 2px 8px rgba(15,23,42,.05)}
+  /* 固定头部：标题+状态+tab 栏，不参与滚动（横向铺满抽屉宽度） */
+  .drawer-fixed{flex:none;background:#fff;margin:0 -24px 12px;padding:0 24px;border-bottom:1px solid #e5e7eb;box-shadow:0 2px 8px rgba(15,23,42,.05)}
   .drawer-fixed .drawer-head{margin:0 0 8px}
   .dtabs{display:flex;gap:4px;background:#f1f3f9;border-radius:11px;padding:4px;margin:0 0 10px;box-sizing:border-box}
   .dtab{flex:1;border:0;background:transparent;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;color:var(--sub);transition:.15s;display:flex;align-items:center;justify-content:center;gap:6px}
   .dtab:hover{color:var(--text)}
   .dtab.on{background:#fff;color:var(--brand1);box-shadow:0 1px 3px rgba(15,23,42,.08)}
   .dtab .ct{font-size:11px;background:#e0e7ff;color:#4338ca;border-radius:9px;padding:1px 7px;font-weight:700}
-  .dtab-pane{display:none}
+  /* tab 内容区：占据头部以下的剩余高度，内容区内部各自滚动 */
+  .dtab-pane{display:none;flex:1;min-height:0}
   .dtab-pane.on{display:block}
+  #pane-cases{flex-direction:column}
+  #pane-cases.on{display:flex}
+  /* 用例内容区独立滚动：滚动条只管这里，头部/导出栏不动 */
+  #dCases{flex:1;overflow-y:auto;min-height:0;padding-right:6px;scrollbar-gutter:stable}
+  #dIterations{flex:none}
 
   /* 测试用例 tab · 模块分组卡片 */
   .case-module{background:#fafbfc;border:1px solid #e5e7eb;border-radius:11px;padding:13px 14px;margin-bottom:12px}
@@ -427,7 +433,8 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
      表格 width:100% + fixed layout 不会溢出，横向滚动由抽屉整体承担 */
   .case-table-wrap{overflow:visible}
   .case-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;background:#fff}
-  .case-table thead th{position:sticky;top:var(--dhead-h,120px);z-index:5;background:#f1f3f9;color:var(--sub);font-weight:700;font-size:12px;text-align:left;padding:9px 10px;border:1px solid #e5e7eb;white-space:nowrap}
+  /* 表头吸附在内容滚动区顶部（头部在滚动区外，天然不动） */
+  .case-table thead th{position:sticky;top:0;z-index:5;background:#f1f3f9;color:var(--sub);font-weight:700;font-size:12px;text-align:left;padding:9px 10px;border:1px solid #e5e7eb;white-space:nowrap}
   .case-table td{padding:8px 10px;border:1px solid #e5e7eb;vertical-align:top;color:#334155;line-height:1.55}
   .case-table tbody tr:hover td{background:#fafbff}
   .case-table .ct-id{font-weight:700;color:#4338ca;white-space:nowrap;text-align:center}
@@ -436,7 +443,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .case-table .dash{color:#cbd5e1}
 
   /* 思维导图 tab · mind-elixir 容器 */
-  .map-host{width:100%;height:82vh;min-height:480px;border:1px solid #e5e7eb;border-radius:11px;background:#fafbfc;overflow:hidden}
+  .map-host{width:100%;height:100%;min-height:400px;border:1px solid #e5e7eb;border-radius:11px;background:#fafbfc;overflow:hidden}
   .map-host .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--sub);font-size:13px}
   .map-host .empty .ico{font-size:34px;margin-bottom:8px;opacity:.6}
 
@@ -2507,9 +2514,6 @@ async function renderDetail(id){
   $("dTitle").textContent=t.name;
   $("dMeta").innerHTML=`<span><b>${statusText(t.status)}</b></span><span>用例 <b>${t.cases_count}</b> 条</span><span>耗时 <b>${t.duration_ms?t.duration_ms.toFixed(0):'-'}</b>ms</span><span>${fmtTime(t.created_at)}</span>`;
   $("ctCases").textContent=t.cases_count||0;
-  // 记录固定头部高度，供表格表头 sticky 对齐（标题/状态换行时自适应）
-  const dHead=$("dHead");
-  if(dHead)document.documentElement.style.setProperty('--dhead-h', dHead.offsetHeight+'px');
 
   // 测试用例 tab #pane-cases（核心 · 默认展开）
   renderCasesPane(t.cases||[]);
