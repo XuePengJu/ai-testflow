@@ -382,8 +382,10 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .dmeta b{color:var(--text)}
 
   /* ===== 详情抽屉 · 2 tab (思维导图 / 测试用例) ===== */
-  /* tab 栏吸顶：滚动查看用例时导航不消失（固定高度供下方 sticky 表头对齐） */
-  .dtabs{display:flex;gap:4px;background:#f1f3f9;border-radius:11px;padding:4px;margin:0 0 10px;position:sticky;top:0;z-index:6;height:46px;box-sizing:border-box;box-shadow:0 2px 6px rgba(15,23,42,.04)}
+  /* 固定头部：标题+状态+tab 栏整体吸顶（横向铺满抽屉宽度，盖住左右 padding） */
+  .drawer-fixed{position:sticky;top:0;z-index:6;background:#fff;margin:0 -24px 12px;padding:0 24px;border-bottom:1px solid #e5e7eb;box-shadow:0 2px 8px rgba(15,23,42,.05)}
+  .drawer-fixed .drawer-head{margin:0 0 8px}
+  .dtabs{display:flex;gap:4px;background:#f1f3f9;border-radius:11px;padding:4px;margin:0 0 10px;box-sizing:border-box}
   .dtab{flex:1;border:0;background:transparent;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;color:var(--sub);transition:.15s;display:flex;align-items:center;justify-content:center;gap:6px}
   .dtab:hover{color:var(--text)}
   .dtab.on{background:#fff;color:var(--brand1);box-shadow:0 1px 3px rgba(15,23,42,.08)}
@@ -425,7 +427,7 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
      表格 width:100% + fixed layout 不会溢出，横向滚动由抽屉整体承担 */
   .case-table-wrap{overflow:visible}
   .case-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;background:#fff}
-  .case-table thead th{position:sticky;top:46px;z-index:5;background:#f1f3f9;color:var(--sub);font-weight:700;font-size:12px;text-align:left;padding:9px 10px;border:1px solid #e5e7eb;white-space:nowrap}
+  .case-table thead th{position:sticky;top:var(--dhead-h,120px);z-index:5;background:#f1f3f9;color:var(--sub);font-weight:700;font-size:12px;text-align:left;padding:9px 10px;border:1px solid #e5e7eb;white-space:nowrap}
   .case-table td{padding:8px 10px;border:1px solid #e5e7eb;vertical-align:top;color:#334155;line-height:1.55}
   .case-table tbody tr:hover td{background:#fafbff}
   .case-table .ct-id{font-weight:700;color:#4338ca;white-space:nowrap;text-align:center}
@@ -651,16 +653,19 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
 <!-- 详情抽屉 -->
 <div class="overlay" id="overlay" onclick="if(event.target===this)closeDetail()">
   <div class="drawer" id="drawer">
-    <div class="drawer-head">
-      <div style="flex:1"><h3 id="dTitle"></h3></div>
-      <button class="close" onclick="closeDetail()">✕</button>
-    </div>
-    <div class="dmeta" id="dMeta"></div>
+    <!-- 固定头部：标题 + 状态 + tab 栏 整体吸顶，滚动时不消失 -->
+    <div class="drawer-fixed" id="dHead">
+      <div class="drawer-head">
+        <div style="flex:1"><h3 id="dTitle"></h3></div>
+        <button class="close" onclick="closeDetail()">✕</button>
+      </div>
+      <div class="dmeta" id="dMeta"></div>
 
-    <!-- 2 tab：默认停在「思维导图」（xmind 预览核心）；工作流步骤已在会话内展示，详情不再重复 -->
-    <div class="dtabs" id="dTabs" role="tablist">
-      <button class="dtab on" data-pane="mindmap" role="tab">🧠 思维导图（预览 xmind）</button>
-      <button class="dtab"    data-pane="cases"   role="tab">📋 测试用例 <span class="ct" id="ctCases"></span></button>
+      <!-- 2 tab：默认停在「思维导图」（xmind 预览核心）；工作流步骤已在会话内展示，详情不再重复 -->
+      <div class="dtabs" id="dTabs" role="tablist">
+        <button class="dtab on" data-pane="mindmap" role="tab">🧠 思维导图（预览 xmind）</button>
+        <button class="dtab"    data-pane="cases"   role="tab">📋 测试用例 <span class="ct" id="ctCases"></span></button>
+      </div>
     </div>
 
     <!-- tab 内容：思维导图（mind-elixir 渲染 + tags 胶囊，默认展开） -->
@@ -2502,6 +2507,9 @@ async function renderDetail(id){
   $("dTitle").textContent=t.name;
   $("dMeta").innerHTML=`<span><b>${statusText(t.status)}</b></span><span>用例 <b>${t.cases_count}</b> 条</span><span>耗时 <b>${t.duration_ms?t.duration_ms.toFixed(0):'-'}</b>ms</span><span>${fmtTime(t.created_at)}</span>`;
   $("ctCases").textContent=t.cases_count||0;
+  // 记录固定头部高度，供表格表头 sticky 对齐（标题/状态换行时自适应）
+  const dHead=$("dHead");
+  if(dHead)document.documentElement.style.setProperty('--dhead-h', dHead.offsetHeight+'px');
 
   // 测试用例 tab #pane-cases（核心 · 默认展开）
   renderCasesPane(t.cases||[]);
