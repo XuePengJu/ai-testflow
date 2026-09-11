@@ -1,9 +1,9 @@
 # AI 测试工作流平台
 
-> 作品集「门面担当」全栈产品，当前版本 **V2.4**。
-> 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测的工作流**，配可视化前端。支持多厂商大模型、多级分类、思维导图预览、三级用户体系与流量分级加密。
+> 作品集「门面担当」全栈产品，当前版本 **V2.7**。
+> 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端。支持多厂商大模型、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
 
-在线演示：[ai.clickscope.in](https://ai.clickscope.in)
+在线演示：[https://f1572f5.r1.cpolar.top](https://f1572f5.r1.cpolar.top)
 
 ***
 
@@ -49,6 +49,24 @@
 - 📋 **测试用例**：按模块分组卡片，表格展示完整用例字段（前置 / 步骤 / 预期）
 
 - ⚙️ **工作流步骤**：四步时间线，每步日志与质量报告
+
+### 对话驱动助手（V2.6）
+
+- **Buddy 测试专家助手**：对话流式输出（SSE），折叠展示思考过程
+
+- 会话持久化：历史会话列表，跨会话不丢
+
+- 对话内直接提交任务：需求聊清楚后点击「生成测试用例」，任务节点内联展示在对话流中，点击可展开详情
+
+### 用例迭代与导入（V2.7）
+
+- **任务级迭代**：对已完成任务补充新需求，生成新版本子任务（parent_task 版本链，链式/星形迭代均不重名）
+
+- 合并去重：去重键 = 标题 + 模块 + 用例类型 + 预期结果前 20 字；已有用例 ID 保持不变，缺失的按最大序号递增补全
+
+- 步骤级预期结果：用例步骤支持独立「预期结果」字段
+
+- 用例导入：迭代时上传本地 xmind / xlsx / json 用例文件，与原任务用例合并去重作为基础用例集（解析失败明确报错不静默）
 
 ### 多格式导出
 
@@ -119,8 +137,6 @@
 
 - 顶栏模型状态胶囊：实时显示当前生效模型与来源
 
-- 隧道慢速提示条（Cloudflare 隧道访问时显示，可关闭记住）
-
 ***
 
 ## 技术栈
@@ -135,7 +151,7 @@
 | 前端    | 原生 HTML + JS（单文件，零构建，零依赖）                        |
 | 思维导图  | **MindElixir**（120KB，可编辑，原生标签支持）                 |
 | 任务调度  | APScheduler（访客清理定时任务）                            |
-| 测试    | pytest（68 条自动化用例）                                |
+| 测试    | pytest（136 条自动化用例）                               |
 
 ***
 
@@ -198,7 +214,26 @@ python main.py              # 等价于 uvicorn main:app --port 8000
 | POST | `/api/tasks`                    | 提交任务：`file` 或 `text` + `kind` + `formats` |
 | GET  | `/api/tasks`                    | 任务列表（admin 加 `?all=true` 看全部）             |
 | GET  | `/api/tasks/{id}`               | 任务详情 + 四步骤日志 + 用例列表                       |
+| DELETE | `/api/tasks/{id}`             | 删除任务（仅本人/admin）                           |
+| POST | `/api/tasks/{id}/iterate`      | 迭代补充：`instruction` + 可选 `file`（用例导入）+ 可选 `conversation_id`，生成新版本子任务 |
 | GET  | `/api/tasks/{id}/download?fmt=` | 下载导出文件（xlsx/json/xmind）                   |
+
+### 会话（V2.6）
+
+| 方法     | 路径                              | 说明                    |
+| ------ | ------------------------------- | --------------------- |
+| GET    | `/api/conversations`           | 会话列表（按更新时间倒序）          |
+| POST   | `/api/conversations`           | 新建会话                  |
+| GET    | `/api/conversations/{id}`       | 会话详情（含全部消息，含思考过程）     |
+| POST   | `/api/conversations/{id}/messages` | 追加消息（前端断线恢复用）     |
+| DELETE | `/api/conversations/{id}`       | 删除会话                  |
+
+### 对话（V2.6）
+
+| 方法   | 路径                | 说明                          |
+| ---- | ----------------- | --------------------------- |
+| POST | `/api/chat/stream` | Buddy 流式对话（SSE），支持注入任务摘要上下文 |
+| POST | `/api/chat`        | 非流式对话（兜底）                   |
 
 ### 分类
 
@@ -214,14 +249,17 @@ python main.py              # 等价于 uvicorn main:app --port 8000
 
 ### 模型配置
 
-| 方法   | 路径                          | 说明                 |
-| ---- | --------------------------- | ------------------ |
-| GET  | `/api/llm/config`           | 获取当前用户配置（Key 脱敏）   |
-| POST | `/api/llm/config`           | 保存用户配置（Key 加密落库）   |
-| POST | `/api/llm/test`             | 测试连通（用已保存或传入的配置）   |
-| GET  | `/api/llm/providers`        | 获取厂商预设列表           |
-| GET  | `/api/llm/platform-default` | （admin）获取/设置平台默认配置 |
-| PUT  | `/api/llm/platform-default` | （admin）设置平台默认配置    |
+| 方法     | 路径                              | 说明                 |
+| ------ | --------------------------- | ------------------ |
+| GET  | `/api/llm/config`            | 获取当前用户配置（Key 脱敏）   |
+| PUT  | `/api/llm/config`            | 保存用户配置（Key 加密落库）   |
+| DELETE | `/api/llm/config/{slot}`   | 删除某槽位配置（text/vision） |
+| POST | `/api/llm/test`              | 测试连通（用已保存或传入的配置）   |
+| GET  | `/api/llm/providers`         | 获取厂商预设列表           |
+| GET  | `/api/llm/effective`         | 当前生效配置（用户 > 平台默认 > 环境变量 > mock） |
+| GET  | `/api/llm/platform-config`   | （admin）获取平台默认配置 |
+| PUT  | `/api/llm/platform-config`   | （admin）设置平台默认配置    |
+| POST | `/api/llm/test-default/{slot}` | （admin）测试平台默认配置 |
 
 ### 管理后台（admin）
 
@@ -274,7 +312,7 @@ ai-testflow/
 │       └── mind-elixir/
 ├── scripts/
 │   └── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
-├── tests/                       # 68 条自动化用例（认证 + 分级加密 + 权限，pytest）
+├── tests/                       # 136 条自动化用例（认证 + 分级加密 + 权限 + 对话 + 迭代导入，pytest）
 ├── app/
 │   ├── core/
 │   │   ├── config.py            # 配置加载
@@ -296,12 +334,15 @@ ai-testflow/
 │   │   └── llm_service.py       # OpenAI 兼容 LLM 客户端
 │   ├── workflow/
 │   │   ├── engine.py            # 状态机 + 步骤调度
-│   │   └── agents/              # 四 Agent（parser/generator/reviewer/exporter）
+│   │   ├── iterate.py           # 迭代流水线（加载基础用例→增量生成→合并去重→校验→导出）
+│   │   └── agents/              # Agent（parser/generator/reviewer/exporter/import/supplement）
 │   ├── api/                     # API 路由
 │   │   ├── auth.py
 │   │   ├── guest.py
 │   │   ├── tasks.py
 │   │   ├── categories.py
+│   │   ├── chat.py              # 对话流式/非流式（V2.6）
+│   │   ├── conversations.py     # 会话持久化（V2.6）
 │   │   ├── llm_config.py
 │   │   ├── users.py             # admin 用户管理
 │   │   └── deps.py              # 鉴权依赖
@@ -310,6 +351,7 @@ ai-testflow/
 ├── uploads/  outputs/           # 上传 / 导出目录（按用户分目录，已 gitignore）
 └── docs/                        # 项目文档
     ├── PRD.md                   # 产品需求文档
+    ├── DEPLOY.md                # 部署指南（同源单服务 + cpolar）
     └── 项目1-工作流平台-MVP执行方案.md  # 技术实现方案
 ```
 
@@ -317,23 +359,26 @@ ai-testflow/
 
 ## 部署架构
 
-- **前端**：Vercel 静态托管，品牌域名 [ai.clickscope.in](https://ai.clickscope.in)
+- **同源单服务**：FastAPI（8000 端口）同时提供 API（`/api`）与前端静态页（相对路径调用，无跨域）；systemd 管理 uvicorn
 
-- **后端**：阿里云服务器（39.106.200.147），systemd 管理 uvicorn，经 Cloudflare 命名隧道暴露
+- **服务器**：阿里云 ECS，宝塔面板运维
 
-- **API 域名**：[api.clickscope.in](https://api.clickscope.in)（Cloudflare 代理 + 命名隧道）
+- **公网访问**：cpolar 内网穿透隧道（web 隧道为本平台入口）
 
-- **被测系统**：DBERP 进销存，[erp.clickscope.in](https://erp.clickscope.in)
+- **被测系统**：DBERP 进销存，同样部署于该服务器，经 cpolar erp 隧道访问
 
-详见 `DEPLOY.md` 与 `deploy/cloudflared-setup.md`。
+详见 `docs/DEPLOY.md`。
 
 ***
 
-## 后续演进
+## 版本演进与后续规划
 
 | 版本       | 内容                              | 状态    |
 | -------- | ------------------------------- | ----- |
-| V2.5（规划） | React + TS 前端重写（当前为原生 HTML 过渡版） | 📋 规划 |
-| V2.6（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
-| V2.7（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
+| V2.5（已发布） | 任务详情页 3 Tab（思维导图 / 用例表格 / 步骤时间线） | ✅ 已上线 |
+| V2.6（已发布） | 对话驱动 Buddy 助手 + 会话持久化           | ✅ 已上线 |
+| V2.7（已发布） | 用例迭代与导入 + 步骤级预期结果               | ✅ 已上线 |
+| V2.8（规划） | React + TS 前端重写（当前为原生 HTML 过渡版） | 📋 规划 |
+| V2.9（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
+| V3.0（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
 

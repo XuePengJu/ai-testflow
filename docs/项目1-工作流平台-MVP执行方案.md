@@ -1,5 +1,10 @@
 # 项目1 · AI 测试工作流平台（MVP 执行方案）
 
+> ⚠️ **修订记录（2026-09-12 V2.7.1）**：按 V2.7 发布后的 4 个修复提交同步：
+> 1. 用例 ID 兜底（`97c9a70`）：新增 `generator_core/src/models/testcase.py#ensure_case_ids()`，在生成入库、迭代合并、导出、前端展示四处兜底；已有 ID 保持不变，缺失的按现有最大序号递增补全（兼容 TC-001/TC001/TC-1 格式），保证用例 ID 列永不为空。新增 `tests/test_case_id.py`（6 条），全量 136 条通过。
+> 2. 详情抽屉体验（`c6c0e3a`/`f0540c3`）：抽屉头部（标题+状态+Tab 栏）吸顶固定，内容区上下分栏、独立滚动。
+> 3. 本文同步：第3节目录树补 `iterate.py`/`import_agent.py`/`supplement_agent.py`；第4.2 节 llm 端点表按实际路由重写，补任务迭代/删除端点；第5节补抽屉交互描述。
+
 > ⚠️ **修订记录（2026-09-11 V2.7 增强）**：步骤级预期结果（xmind 格式修复）：
 > 1. TestCase 加 `step_expectations`（与 steps 一一对应）+ `align_step_expectations()` 对齐兜底，保证每步必有预期。
 > 2. 四份 LLM prompt 统一要求逐步输出预期；mock_generator 16 条用例配逐步预期。
@@ -23,7 +28,7 @@
 > 4. 第5节前端：更新为 Buddy 对话驱动首页 + 左侧边栏 + 详情抽屉。
 > 5. 第8节后新增「8.1.3 V2.4 模型配置」「8.1.4 V2.5 详情页增强」「8.1.5 V2.6 对话驱动」。
 >
-> ⚠️ **修订记录（2026-08-29）**：本方案初稿写于 MVP 立项阶段，后经 V2 认证、V2.1 API 分级加密、V2.3 任务分类多次迭代。本次按**实际代码实现**做了如下更正/补充，原 MVP 规划存档见 `项目1-工作流平台-MVP执行方案-存档20260829.md`：
+> ⚠️ **修订记录（2026-08-29）**：本方案初稿写于 MVP 立项阶段，后经 V2 认证、V2.1 API 分级加密、V2.3 任务分类多次迭代。本次按**实际代码实现**做了如下更正/补充（原 MVP 立项存档已于 2026-09-12 删除，内容已被本文全量取代，历史版本可溯 git）：
 > 1. 第0节：原 CLI 原型 `ai-testcase-generator/` 已于 2026-08-29 确认废弃并删除，其能力已整体并入 `generator_core/`；平台为唯一入口。
 > 2. 第3节目录树：更新为实际结构（去掉不存在的 `app/models/case.py`、`app/services/{parser,generator,exporter}.py`，补入 V2/V2.1/V2.3 新增的 `app/api/{auth,guest,users,categories}.py`、`app/core/{crypto,middleware}.py`、`app/jobs/`、`app/models/category.py`、`generator_core/`）。
 > 3. 第8节后新增「8.1 已落地补充」，记录 V2.1 分级加密与 V2.3 任务分类。
@@ -119,11 +124,14 @@ ai-testflow/
 │   │   └── sample_seeder.py # 示例数据播种
 │   ├── workflow/
 │   │   ├── engine.py        # 状态机 + 步骤调度
+│   │   ├── iterate.py       # 迭代流水线：加载基础用例→增量生成→合并去重→质量校验→导出（V2.7）
 │   │   └── agents/
 │   │       ├── parser_agent.py
 │   │       ├── generator_agent.py
 │   │       ├── reviewer_agent.py
-│   │       └── exporter_agent.py
+│   │       ├── exporter_agent.py
+│   │       ├── import_agent.py      # 用例文件导入解析（xmind/xlsx/json，V2.7）
+│   │       └── supplement_agent.py  # 带已有用例上下文的增量生成（V2.7）
 │   ├── api/
 │   │   ├── tasks.py         # 任务 REST 端点（含上传/下载）
 │   │   ├── auth.py          # 注册/登录/改密/me（V2）
@@ -175,11 +183,20 @@ ai-testflow/
 | GET | `/api/tasks` | 任务列表（状态/进度/用例数，admin 可 `?all=true`） |
 | GET | `/api/tasks/{id}` | 任务详情 + 四步骤日志 + 用例概览 |
 | GET | `/api/tasks/{id}/download?fmt=xlsx` | 下载导出文件 |
+| POST | `/api/tasks/{id}/iterate` | 用例迭代：instruction + 可选导入文件，生成子任务版本链（V2.7） |
+| DELETE | `/api/tasks/{id}` | 删除任务 |
 | POST | `/api/chat/stream` | Buddy 对话 SSE 流式输出（V2.6） |
+| POST | `/api/chat` | Buddy 对话（非流式兜底，V2.6） |
 | POST/GET/DELETE | `/api/conversations` | 会话创建/列表/删除（V2.6） |
 | POST | `/api/conversations/{id}/messages` | 追加消息（V2.6） |
-| GET/POST | `/api/llm-config` | 模型配置读取/保存（V2.4） |
-| POST | `/api/llm-config/test` | 连通测试（V2.4） |
+| GET | `/api/llm/providers` | 厂商预设列表（V2.4） |
+| GET | `/api/llm/effective` | 当前生效配置（用户级覆盖平台级，V2.4） |
+| GET/PUT | `/api/llm/config` | 用户模型配置读取/保存（Key 脱敏返回/加密落库，V2.4） |
+| DELETE | `/api/llm/config/{slot}` | 删除指定槽位用户配置（V2.4） |
+| GET/PUT | `/api/llm/platform-config` | （admin）平台默认配置读取/设置（V2.4） |
+| DELETE | `/api/llm/platform-config/{slot}` | （admin）删除平台默认槽位（V2.4） |
+| POST | `/api/llm/test-default/{slot}` | （admin）平台默认配置连通测试（V2.4） |
+| POST | `/api/llm/test` | 模型连通测试（用户配置或平台默认，V2.4） |
 | GET | `/health` | 健康检查 |
 
 FastAPI 自带 `/docs` Swagger 交互文档。
@@ -202,7 +219,7 @@ FastAPI 自带 `/docs` Swagger 交互文档。
   - 历史会话列表（按时间倒序，点击切换）
   - 任务分类树（全部/未分类/自定义多级分类，拖拽归类）
 
-- **任务详情抽屉**（右侧滑出，3 Tab）：
+- **任务详情抽屉**（右侧滑出，3 Tab；头部含标题+状态+Tab 栏吸顶固定，内容区上下分栏、独立滚动）：
   - 🧠 思维导图（MindElixir 在线渲染）
   - 📋 测试用例表格（按模块分组）
   - ⚙️ 工作流步骤（四步时间线 + 质量报告）
