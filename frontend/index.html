@@ -381,8 +381,9 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .dmeta{font-size:11px;color:var(--sub);margin:3px 0 10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   .dmeta b{color:var(--text)}
 
-  /* ===== 详情抽屉 · 3 tab (测试用例 / 思维导图 / 工作流步骤) ===== */
-  .dtabs{display:flex;gap:4px;background:#f1f3f9;border-radius:11px;padding:4px;margin:0 0 10px}
+  /* ===== 详情抽屉 · 2 tab (思维导图 / 测试用例) ===== */
+  /* tab 栏吸顶：滚动查看用例时导航不消失（固定高度供下方 sticky 表头对齐） */
+  .dtabs{display:flex;gap:4px;background:#f1f3f9;border-radius:11px;padding:4px;margin:0 0 10px;position:sticky;top:0;z-index:6;height:46px;box-sizing:border-box;box-shadow:0 2px 6px rgba(15,23,42,.04)}
   .dtab{flex:1;border:0;background:transparent;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;color:var(--sub);transition:.15s;display:flex;align-items:center;justify-content:center;gap:6px}
   .dtab:hover{color:var(--text)}
   .dtab.on{background:#fff;color:var(--brand1);box-shadow:0 1px 3px rgba(15,23,42,.08)}
@@ -419,10 +420,12 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
   .case-card .step-item{padding:3px 0;border-bottom:1px dashed #f1f5f9}
   .case-card .step-item:last-child{border-bottom:0}
   .case-empty{text-align:center;color:var(--sub);font-size:13px;padding:32px 16px;background:#fafbfc;border:1px dashed #e5e7eb;border-radius:11px}
-  /* 用例表格（横向铺满宽度，替代卡片竖排） */
-  .case-table-wrap{overflow-x:auto}
+  /* 用例表格（横向铺满宽度，替代卡片竖排）
+     注意：此处不能设 overflow-x:auto——那会创建独立滚动容器，导致 thead sticky 相对它失效。
+     表格 width:100% + fixed layout 不会溢出，横向滚动由抽屉整体承担 */
+  .case-table-wrap{overflow:visible}
   .case-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;background:#fff}
-  .case-table th{background:#f1f3f9;color:var(--sub);font-weight:700;font-size:12px;text-align:left;padding:9px 10px;border:1px solid #e5e7eb;white-space:nowrap}
+  .case-table thead th{position:sticky;top:46px;z-index:5;background:#f1f3f9;color:var(--sub);font-weight:700;font-size:12px;text-align:left;padding:9px 10px;border:1px solid #e5e7eb;white-space:nowrap}
   .case-table td{padding:8px 10px;border:1px solid #e5e7eb;vertical-align:top;color:#334155;line-height:1.55}
   .case-table tbody tr:hover td{background:#fafbff}
   .case-table .ct-id{font-weight:700;color:#4338ca;white-space:nowrap;text-align:center}
@@ -654,11 +657,10 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
     </div>
     <div class="dmeta" id="dMeta"></div>
 
-    <!-- 3 tab：默认停在「思维导图」（xmind 预览核心），另外两个放次要位置 -->
+    <!-- 2 tab：默认停在「思维导图」（xmind 预览核心）；工作流步骤已在会话内展示，详情不再重复 -->
     <div class="dtabs" id="dTabs" role="tablist">
       <button class="dtab on" data-pane="mindmap" role="tab">🧠 思维导图（预览 xmind）</button>
       <button class="dtab"    data-pane="cases"   role="tab">📋 测试用例 <span class="ct" id="ctCases"></span></button>
-      <button class="dtab"    data-pane="steps"   role="tab">⚙️ 工作流步骤</button>
     </div>
 
     <!-- tab 内容：思维导图（mind-elixir 渲染 + tags 胶囊，默认展开） -->
@@ -672,10 +674,6 @@ if(new URLSearchParams(location.search).get('task'))document.documentElement.cla
       </div>
       <div id="dCases"></div>
       <div id="dIterations" class="iterations" style="margin-top:16px"></div>
-    </div>
-    <!-- tab 内容：工作流步骤（原 stepper，分析步骤降级为次要） -->
-    <div class="dtab-pane" id="pane-steps">
-      <div class="stepper" id="dSteps"></div>
     </div>
 
   </div>
@@ -2504,21 +2502,6 @@ async function renderDetail(id){
   $("dTitle").textContent=t.name;
   $("dMeta").innerHTML=`<span><b>${statusText(t.status)}</b></span><span>用例 <b>${t.cases_count}</b> 条</span><span>耗时 <b>${t.duration_ms?t.duration_ms.toFixed(0):'-'}</b>ms</span><span>${fmtTime(t.created_at)}</span>`;
   $("ctCases").textContent=t.cases_count||0;
-
-  // 工作流步骤（次要 tab #pane-steps）
-  $("dSteps").innerHTML=t.steps.map(s=>{
-    const detailHTML = s.input_summary ? formatStepDetail(s.name, JSON.parse(s.input_summary)) : '';
-    return `
-    <div class="step ${s.status}">
-      <div class="ring">${s.status==='completed'?'✓':s.status==='failed'?'!':(STEP_ICON[s.name]||'•')}</div>
-      <div>
-        <div class="sname">${esc(s.title)}<span class="badge ${s.status}">${statusText(s.status)}</span>${s.duration_ms?'<span class="smini">'+s.duration_ms.toFixed(0)+'ms</span>':''}</div>
-        ${s.output_summary?`<div class="sout">${esc(s.output_summary)}</div>`:''}
-        ${detailHTML?`<div class="step-detail-body open">${detailHTML}</div>`:''}
-        ${s.error?`<div class="serr">${esc(s.error)}</div>`:''}
-      </div>
-    </div>`;
-  }).join('');
 
   // 测试用例 tab #pane-cases（核心 · 默认展开）
   renderCasesPane(t.cases||[]);
