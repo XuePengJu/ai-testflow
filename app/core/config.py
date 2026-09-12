@@ -53,8 +53,9 @@ def jwt_secret_is_placeholder() -> bool:
 # 内置的用例生成核心库（已整合，使项目自包含、clone 即跑）
 GENERATOR_CORE_DIR = BASE_DIR / "generator_core"
 
-# 前端静态目录（前后端分离后，前端独立部署到 Vercel，这里仅作本地/同源兜底）
-STATIC_DIR = BASE_DIR / "frontend"
+# 前端静态目录（V2.8 重构期：旧原生单文件前端改名 frontend-legacy 继续同源伺服，
+# 切换期回退用；React 新前端在 frontend/（Vite 工程），稳定后 STATIC_DIR 切指 frontend/dist）
+STATIC_DIR = BASE_DIR / "frontend-legacy"
 
 
 def is_mock() -> bool:
