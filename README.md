@@ -1,6 +1,6 @@
 # AI 测试工作流平台
 
-> 作品集「门面担当」全栈产品，当前版本 **V2.7**。
+> 作品集「门面担当」全栈产品，当前版本 **V2.8**。
 > 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端。支持多厂商大模型、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
 
 在线演示：[https://f1572f5.r1.cpolar.top](https://f1572f5.r1.cpolar.top)
@@ -18,7 +18,7 @@
 
 - 过程：四 Agent 编排，每步可观测、可重试、可定位错误
 
-- 扩展：用户级模型配置、任务分类拖拽、思维导图在线评审
+- 扩展：用户级模型配置、任务分类管理、思维导图在线评审
 
 ***
 
@@ -36,11 +36,11 @@
 
 - 任务列表（左右分栏：左分类树 / 右任务卡片）
 
-- 多级分类树：新建 / 重命名 / 删除 / 拖拽移动（防环校验）
+- 多级分类树：新建（含子分类）/ 重命名 / 删除（子分类级联，任务回落未分类）
 
-- 拖拽归类：任务拖入分类即关联，拖回「未分类」即移出
+- 任务归类：每任务「🏷」菜单一键归入/移出分类，计数实时更新
 
-- 点击分类节点过滤，实时显示各节点任务数
+- 点击分类节点过滤任务列表，实时显示各节点任务数
 
 ### 任务详情（3 Tab）
 
@@ -148,10 +148,10 @@
 | 认证    | **bcrypt + JWT**（passlib / pyjwt）+ 每请求回查用户状态     |
 | 加密    | **AES-256-GCM**（Python cryptography + 前端纯 JS 实现） |
 | AI 模型 | OpenAI 兼容协议 HTTP 直连，支持 7+ 厂商；无 Key 自动 mock 兜底    |
-| 前端    | 原生 HTML + JS（单文件，零构建，零依赖）                        |
+| 前端    | **React 18 + TypeScript + Vite**（zustand 状态管理），构建产物纯静态、FastAPI 同源托管 |
 | 思维导图  | **MindElixir**（120KB，可编辑，原生标签支持）                 |
 | 任务调度  | APScheduler（访客清理定时任务）                            |
-| 测试    | pytest（136 条自动化用例）                               |
+| 测试    | pytest（136 条后端自动化用例）+ Playwright（M1~M5 浏览器端到端验证脚本）          |
 
 ***
 
@@ -163,6 +163,17 @@ cp .env.example .env        # 可选：填 DASHSCOPE_API_KEY 接真模型；留�
 python scripts/migrate_v2.py  # 首次/升级时执行（幂等）：建用户表 + 预置 admin + 存量数据迁移
 python main.py              # 等价于 uvicorn main:app --port 8000
 ```
+
+前端（仅开发机需要 Node，服务器不装）：
+
+```bash
+cd frontend
+npm install
+npm run dev     # 开发热更新：http://localhost:5173（/api 代理到 8000，与生产同源架构一致）
+npm run build   # 构建 → frontend/dist（产物入库，服务器 git pull 即用）
+```
+
+> 前端版本切换：默认伺服 React 版（`frontend/dist`）；出问题时设 `AITF_FRONTEND=legacy` 重启即回退旧版单文件前端（`frontend-legacy/`），无需回滚代码。
 
 首次访问**无需注册**：可直接「游客体验」，或注册账号（首个注册用户自动成为管理员）。
 
@@ -277,7 +288,7 @@ python main.py              # 等价于 uvicorn main:app --port 8000
 
 | 方法  | 路径           | 说明           |
 | --- | ------------ | ------------ |
-| GET | `/config.js` | 前端配置（API 基址） |
+| GET | `/config.js` | 前端配置（仅旧版单文件前端需要；React 版走相对路径） |
 | GET | `/health`    | 健康检查         |
 
 ***
@@ -305,11 +316,17 @@ ai-testflow/
 │   │   └── exporter/            # 多格式导出（xlsx/json/xmind）
 │   └── config/
 ├── examples/                    # DBERP 接口规格 / 业务需求样本
-├── frontend/                    # 前端（原生 HTML+JS，单文件零构建）
-│   ├── index.html               # 主页面
-│   ├── config.js                # 前端配置（API_BASE）
-│   └── vendor/                  # 第三方库（mind-elixir 等）
-│       └── mind-elixir/
+├── frontend/                    # React + TS + Vite 工程（V2.8 重构）
+│   ├── src/
+│   │   ├── api/                 # client.ts（fetch 封装 + AES 加密层）
+│   │   ├── contexts/            # AuthContext（认证/加密快照）
+│   │   ├── store/               # zustand（chat/task/settings/category）
+│   │   ├── components/          # chat/ task/ settings/ admin/ common/
+│   │   └── styles/              # 样式（自旧版平移 + 迭代）
+│   ├── dist/                    # 构建产物（入库，FastAPI 同源伺服）
+│   ├── public/
+│   └── scripts/                 # Playwright e2e（M1~M5 里程碑验证脚本）
+├── frontend-legacy/             # 旧原生单文件前端（回退保留：AITF_FRONTEND=legacy）
 ├── scripts/
 │   └── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
 ├── tests/                       # 136 条自动化用例（认证 + 分级加密 + 权限 + 对话 + 迭代导入，pytest）
@@ -359,7 +376,7 @@ ai-testflow/
 
 ## 部署架构
 
-- **同源单服务**：FastAPI（8000 端口）同时提供 API（`/api`）与前端静态页（相对路径调用，无跨域）；systemd 管理 uvicorn
+- **同源单服务**：FastAPI（8000 端口）同时提供 API（`/api`）与前端静态资源（`frontend/dist`，相对路径调用，无跨域）；systemd 管理 uvicorn
 
 - **服务器**：阿里云 ECS，宝塔面板运维
 
@@ -378,7 +395,7 @@ ai-testflow/
 | V2.5（已发布） | 任务详情页 3 Tab（思维导图 / 用例表格 / 步骤时间线） | ✅ 已上线 |
 | V2.6（已发布） | 对话驱动 Buddy 助手 + 会话持久化           | ✅ 已上线 |
 | V2.7（已发布） | 用例迭代与导入 + 步骤级预期结果               | ✅ 已上线 |
-| V2.8（规划） | React + TS 前端重写（当前为原生 HTML 过渡版） | 📋 规划 |
+| V2.8（已完成） | React + TS 前端重构：组件化拆分、zustand 状态、Playwright e2e 全覆盖、dist 同源托管 | ✅ 已完成（本地） |
 | V2.9（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
 | V3.0（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
 

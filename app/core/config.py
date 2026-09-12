@@ -53,9 +53,12 @@ def jwt_secret_is_placeholder() -> bool:
 # 内置的用例生成核心库（已整合，使项目自包含、clone 即跑）
 GENERATOR_CORE_DIR = BASE_DIR / "generator_core"
 
-# 前端静态目录（V2.8 重构期：旧原生单文件前端改名 frontend-legacy 继续同源伺服，
-# 切换期回退用；React 新前端在 frontend/（Vite 工程），稳定后 STATIC_DIR 切指 frontend/dist）
-STATIC_DIR = BASE_DIR / "frontend-legacy"
+# 前端静态目录（V2.8 React 重构完成，默认切指 frontend/dist 构建产物）
+# 一键切回旧版：环境变量 AITF_FRONTEND=legacy 后重启（不动代码、不回滚 git）
+_FRONTEND_MODE = os.getenv("AITF_FRONTEND", "react").strip().lower()
+if _FRONTEND_MODE not in ("react", "legacy"):
+    _FRONTEND_MODE = "react"
+STATIC_DIR = BASE_DIR / ("frontend-legacy" if _FRONTEND_MODE == "legacy" else "frontend/dist")
 
 
 def is_mock() -> bool:

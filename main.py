@@ -78,13 +78,13 @@ def index():
 
 @app.get("/config.js")
 def config_js():
-    """前端 API 基址配置（本地同源伺服，避免 404 导致 API_BASE 缺失）"""
+    """前端 API 基址配置（仅旧版单文件前端需要；React 版走相对路径 /api）"""
     from fastapi.responses import PlainTextResponse
 
-    return PlainTextResponse(
-        (STATIC_DIR / "config.js").read_text(encoding="utf-8"),
-        media_type="application/javascript",
-    )
+    _f = STATIC_DIR / "config.js"
+    if not _f.exists():
+        return PlainTextResponse("/* React 前端无需 config.js */", media_type="application/javascript")
+    return PlainTextResponse(_f.read_text(encoding="utf-8"), media_type="application/javascript")
 
 
 @app.get("/favicon.svg")
@@ -96,9 +96,16 @@ def favicon():
     return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
 
 
-# 前端第三方库（mind-elixir 等）本地化 vendor 目录，同源伺服
-# 让本地单服务（8000）即可完整加载思维导图，无需另起静态服务器
-app.mount("/vendor", StaticFiles(directory=str(STATIC_DIR / "vendor")), name="vendor")
+# 静态资源：目录存在才挂载，同一份代码兼容新旧前端
+# - React 版（frontend/dist）：/assets/*（Vite 构建产物，带内容哈希可永久缓存）
+# - 旧版（frontend-legacy）：/vendor/*（mind-elixir 等第三方库本地化）
+_assets_dir = STATIC_DIR / "assets"
+if _assets_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+
+_vendor_dir = STATIC_DIR / "vendor"
+if _vendor_dir.is_dir():
+    app.mount("/vendor", StaticFiles(directory=str(_vendor_dir)), name="vendor")
 
 
 if __name__ == "__main__":

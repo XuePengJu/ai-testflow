@@ -90,8 +90,9 @@ try {
     els.map((e) => (e.textContent || "").replace(/\s+/g, " ").trim()),
   );
   ok("④ 任务列表出现任务（" + taskItems.length + " 条）");
-  // 当前会话内点击任务列表项 → 滚动定位 + 高亮任务卡
-  await page.click(".task-panel .task-item >> nth=0");
+  // 当前会话内点击任务「⌖」定位按钮 → 滚动定位 + 高亮任务卡
+  // （M3/M4 交互演进：任务项整行点击=打开详情抽屉，定位收敛到 ⌖ 按钮）
+  await page.click(".task-panel .t-locate >> nth=0");
   await page.waitForTimeout(600);
   const flashed = await page.$eval(".task-steps-card", (el) => el.classList.contains("flash")).catch(() => false);
   if (flashed) ok("④ 点击任务列表项 → 定位滚动 + 高亮任务卡");
@@ -99,7 +100,7 @@ try {
   // 切新对话后点击 → 应提示「不在当前会话」而非静默
   await page.click(".conv-panel .side-head .qtag"); // ＋ 新对话
   await page.waitForSelector(".welcome", { timeout: 5000 });
-  await page.click(".task-panel .task-item >> nth=0");
+  await page.click(".task-panel .t-locate >> nth=0");
   await page.waitForFunction(
     () => {
       const toasts = document.querySelectorAll(".toast, [class*=toast]");
