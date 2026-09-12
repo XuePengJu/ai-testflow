@@ -1,11 +1,13 @@
 # 项目1 · AI 测试工作流平台（MVP 执行方案）
 
 > ⚠️ **修订记录（2026-09-12 V2.7.1）**：按 V2.7 发布后的 4 个修复提交同步：
+>
 > 1. 用例 ID 兜底（`97c9a70`）：新增 `generator_core/src/models/testcase.py#ensure_case_ids()`，在生成入库、迭代合并、导出、前端展示四处兜底；已有 ID 保持不变，缺失的按现有最大序号递增补全（兼容 TC-001/TC001/TC-1 格式），保证用例 ID 列永不为空。新增 `tests/test_case_id.py`（6 条），全量 136 条通过。
 > 2. 详情抽屉体验（`c6c0e3a`/`f0540c3`）：抽屉头部（标题+状态+Tab 栏）吸顶固定，内容区上下分栏、独立滚动。
 > 3. 本文同步：第3节目录树补 `iterate.py`/`import_agent.py`/`supplement_agent.py`；第4.2 节 llm 端点表按实际路由重写，补任务迭代/删除端点；第5节补抽屉交互描述。
 
 > ⚠️ **修订记录（2026-09-11 V2.7 增强）**：步骤级预期结果（xmind 格式修复）：
+>
 > 1. TestCase 加 `step_expectations`（与 steps 一一对应）+ `align_step_expectations()` 对齐兜底，保证每步必有预期。
 > 2. 四份 LLM prompt 统一要求逐步输出预期；mock_generator 16 条用例配逐步预期。
 > 3. xmind 导出每步挂预期子节点；xlsx 新增「步骤预期」列；导入层还原逐步预期并兼容旧格式。
@@ -13,6 +15,7 @@
 > 5. 新增 `tests/test_step_expected.py`（16 条），全量 130 条通过。详见「8.1.7」。
 
 > ⚠️ **修订记录（2026-09-09 V2.7）**：新增用例迭代与导入功能（FR-M）：
+>
 > 1. 数据模型：Task 加 `parent_task_id` 字段，`_ensure_columns()` 自动迁移。
 > 2. 新增 `app/workflow/agents/import_agent.py`（xmind/xlsx/json 用例文件导入解析器）、`app/workflow/agents/supplement_agent.py`（带已有用例上下文的增量生成）、`app/workflow/iterate.py`（迭代流水线：加载基础用例→增量生成→合并去重→质量校验→导出）。
 > 3. API：新增 `POST /api/tasks/{task_id}/iterate`（FormData: instruction + 可选 file + conversation_id），预创建子任务空壳后后台执行，与 create_task 模式一致。
@@ -22,6 +25,7 @@
 > 7. 测试：新增 `tests/test_iterate.py`（18 条），全量 114 条通过。
 
 > ⚠️ **修订记录（2026-09-09）**：按 V2.6 实际代码实现做全面更正：
+>
 > 1. 第1节技术栈：AI 模型从"阿里百炼"更新为多厂商支持（7+ 预设）；前端从"原生 HTML+JS MVP"更新为对话驱动 Buddy 助手；部署更新为 FastAPI 同源伺服 + cpolar 内网穿透。
 > 2. 第3节目录树：全面更新为实际结构（前端移至 `frontend/`，补入 `app/api/{chat,conversations,llm_config}.py`、`app/core/providers.py`、`app/models/{conversation,llm_config}.py`、`app/schemas/{conversation,llm_config}.py`、`app/services/{llm_service,sample_seeder}.py`）。
 > 3. 第4节 API 设计：补充全部路由模块（auth/guest/users/categories/llm_config/chat/conversations）。
@@ -29,12 +33,13 @@
 > 5. 第8节后新增「8.1.3 V2.4 模型配置」「8.1.4 V2.5 详情页增强」「8.1.5 V2.6 对话驱动」。
 >
 > ⚠️ **修订记录（2026-08-29）**：本方案初稿写于 MVP 立项阶段，后经 V2 认证、V2.1 API 分级加密、V2.3 任务分类多次迭代。本次按**实际代码实现**做了如下更正/补充（原 MVP 立项存档已于 2026-09-12 删除，内容已被本文全量取代，历史版本可溯 git）：
+>
 > 1. 第0节：原 CLI 原型 `ai-testcase-generator/` 已于 2026-08-29 确认废弃并删除，其能力已整体并入 `generator_core/`；平台为唯一入口。
 > 2. 第3节目录树：更新为实际结构（去掉不存在的 `app/models/case.py`、`app/services/{parser,generator,exporter}.py`，补入 V2/V2.1/V2.3 新增的 `app/api/{auth,guest,users,categories}.py`、`app/core/{crypto,middleware}.py`、`app/jobs/`、`app/models/category.py`、`generator_core/`）。
 > 3. 第8节后新增「8.1 已落地补充」，记录 V2.1 分级加密与 V2.3 任务分类。
 > 4. 第9.3.1 示例代码变量名 `SECRET_KEY` 统一为实际 `config.JWT_SECRET`；第9.4 补 `POST /api/admin/guests/clean-all`。
 
-> 定位：作品集「门面担当」全栈产品的**第一版**。原规划描述——接口管理 + AI 自动生成用例 + 定时执行 + 报告 + 质量看板，AI Agent 编排测试流程，在线可演示。
+> 定位：作品集「门面担当」全栈产品的**第一版**。原规划描述——接口管理 + AI 自动生成用例 + 定时执行 + 报告 + 质量看板，AI Agent 编排测试流程，在线可演示。  
 > 本方案锁定 **后端 + Agent 编排优先** 形态，前端完整版（React）后补。
 
 ---
@@ -46,6 +51,7 @@
 `generator_core/`（DBERP 实战版内核）是**已验证的原型逻辑载体**：解析、生成、导出、DBERP 接口/业务素材都已跑通。
 
 本平台 = 把原型**平台化 / 生产化**：
+
 - 复用：`generator_core/` 下的解析器、用例模型、生成策略、导出器、DBERP 素材、mock 兜底逻辑
 - 新增：任务调度状态机、多 Agent 编排、可观测日志、REST API、轻量前端、用户认证与多用户隔离（V2）、API 分级加密（V2.1）、任务多级分类（V2.3）
 
@@ -53,15 +59,15 @@
 
 ## 1. 技术栈
 
-| 层 | 选型 | 说明 |
-|----|------|------|
-| 后端框架 | **FastAPI** | 异步、自带 Swagger、Python AI 生态友好 |
-| AI 模型 | **多厂商 OpenAI 兼容协议** | 7+ 预设（阿里百炼/智谱/腾讯混元/DeepSeek/Kimi/豆包/自定义），用户级 API Key 自管；无 Key 时 mock 兜底 |
-| 数据库 | **SQLite** | 轻量，存任务/步骤日志/用例/用户/会话/分类/模型配置；后续可换 MySQL |
-| 任务编排 | 自研状态机 + 步骤调度 | 四 Agent 串联，每步可观测、可重试 |
-| 对话驱动 | **SSE 流式输出 + 会话持久化** | Buddy 助手自然语言交互，多轮上下文，对话与消息落库可回放 |
-| 前端 | **原生 HTML+JS 单文件（无构建）** | 对话驱动首页 + 左侧边栏 + 详情抽屉 + MindElixir 思维导图；完整 React 版后补 |
-| 部署 | **FastAPI 同源伺服（单端口 8000）+ 阿里云 + cpolar 内网穿透** | 前端静态文件由 FastAPI 挂载，前后端同域同机房，避免跨域和跨太平洋延迟 |
+| 层     | 选型                                              | 说明                                                                      |
+| ----- | ----------------------------------------------- | ----------------------------------------------------------------------- |
+| 后端框架  | **FastAPI**                                     | 异步、自带 Swagger、Python AI 生态友好                                            |
+| AI 模型 | **多厂商 OpenAI 兼容协议**                             | 7+ 预设（阿里百炼/智谱/腾讯混元/DeepSeek/Kimi/豆包/自定义），用户级 API Key 自管；无 Key 时 mock 兜底 |
+| 数据库   | **SQLite**                                      | 轻量，存任务/步骤日志/用例/用户/会话/分类/模型配置；后续可换 MySQL                                 |
+| 任务编排  | 自研状态机 + 步骤调度                                    | 四 Agent 串联，每步可观测、可重试                                                    |
+| 对话驱动  | **SSE 流式输出 + 会话持久化**                            | Buddy 助手自然语言交互，多轮上下文，对话与消息落库可回放                                         |
+| 前端    | **原生 HTML+JS 单文件（无构建）**                         | 对话驱动首页 + 左侧边栏 + 详情抽屉 + MindElixir 思维导图；完整 React 版后补                     |
+| 部署    | **FastAPI 同源伺服（*单端口 8000*）+ 阿里云 + cpolar 内网穿透** | 前端静态文件由 FastAPI 挂载，前后端同域同机房，避免跨域和跨太平洋延迟                                 |
 
 ---
 
@@ -74,18 +80,19 @@
                                  每步写入 step_log（状态/输入摘要/输出摘要/耗时/错误）
 ```
 
-| Agent | 职责 | 输入 → 输出 |
-|-------|------|------------|
-| **ParserAgent** | 解析规格为测试单元 | 规格文件/文本 → `ApiEndpoint[]` / `RequirementUnit[]` |
+| Agent              | 职责         | 输入 → 输出                                          |
+| ------------------ | ---------- | ------------------------------------------------ |
+| **ParserAgent**    | 解析规格为测试单元  | 规格文件/文本 → `ApiEndpoint[]` / `RequirementUnit[]`  |
 | **GeneratorAgent** | 按策略调模型生成用例 | 测试单元 + 策略(等价类/边界值/场景/异常) → `TestCase[]`（mock 兜底） |
-| **ReviewerAgent** | 校验 + 质量门禁 | `TestCase[]` → 校验报告(结构/Pydantic/覆盖率/异常占比/去重) |
-| **ExporterAgent** | 导出多格式 | `TestCase[]` → xlsx / json / xmind 文件 |
+| **ReviewerAgent**  | 校验 + 质量门禁  | `TestCase[]` → 校验报告(结构/Pydantic/覆盖率/异常占比/去重)     |
+| **ExporterAgent**  | 导出多格式      | `TestCase[]` → xlsx / json / xmind 文件            |
 
 **任务状态机**：`pending → running → completed | failed`（任一步骤失败 → failed，记录错误步骤）。
 
 **可观测**：每个 step 记录 `name / status / started_at / finished_at / duration_ms / input_summary / output_summary / error`。
 
 ---
+
 
 ## 3. 目录结构（已更新为 V2.6 实际实现）
 
@@ -164,40 +171,41 @@ ai-testflow/
 
 ### 4.1 核心路由模块
 
-| 路由文件 | 前缀 | 说明 |
-|---------|------|------|
-| `tasks.py` | `/api` | 任务 CRUD、上传、下载、详情 |
-| `auth.py` | `/api` | 注册/登录/改密/me |
-| `guest.py` | `/api` | 访客 token / 转正 |
-| `users.py` | `/api` | 用户管理 / 访客治理 / 统计（admin） |
-| `categories.py` | `/api` | 分类 CRUD + 任务归类（V2.3） |
-| `llm_config.py` | `/api` | 模型配置 / 连通测试（V2.4） |
-| `chat.py` | `/api` | Buddy 对话 SSE 流式（V2.6） |
-| `conversations.py` | `/api` | 会话 CRUD + 消息（V2.6） |
+| 路由文件               | 前缀     | 说明                      |
+| ------------------ | ------ | ----------------------- |
+| `tasks.py`         | `/api` | 任务 CRUD、上传、下载、详情        |
+| `auth.py`          | `/api` | 注册/登录/改密/me             |
+| `guest.py`         | `/api` | 访客 token / 转正           |
+| `users.py`         | `/api` | 用户管理 / 访客治理 / 统计（admin） |
+| `categories.py`    | `/api` | 分类 CRUD + 任务归类（V2.3）    |
+| `llm_config.py`    | `/api` | 模型配置 / 连通测试（V2.4）       |
+| `chat.py`          | `/api` | Buddy 对话 SSE 流式（V2.6）   |
+| `conversations.py` | `/api` | 会话 CRUD + 消息（V2.6）      |
+
 
 ### 4.2 核心端点
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/tasks` | 提交任务：上传规格文件 **或** 粘贴文本 + 选素材类型(api/business) + 导出格式 |
-| GET | `/api/tasks` | 任务列表（状态/进度/用例数，admin 可 `?all=true`） |
-| GET | `/api/tasks/{id}` | 任务详情 + 四步骤日志 + 用例概览 |
-| GET | `/api/tasks/{id}/download?fmt=xlsx` | 下载导出文件 |
-| POST | `/api/tasks/{id}/iterate` | 用例迭代：instruction + 可选导入文件，生成子任务版本链（V2.7） |
-| DELETE | `/api/tasks/{id}` | 删除任务 |
-| POST | `/api/chat/stream` | Buddy 对话 SSE 流式输出（V2.6） |
-| POST | `/api/chat` | Buddy 对话（非流式兜底，V2.6） |
-| POST/GET/DELETE | `/api/conversations` | 会话创建/列表/删除（V2.6） |
-| POST | `/api/conversations/{id}/messages` | 追加消息（V2.6） |
-| GET | `/api/llm/providers` | 厂商预设列表（V2.4） |
-| GET | `/api/llm/effective` | 当前生效配置（用户级覆盖平台级，V2.4） |
-| GET/PUT | `/api/llm/config` | 用户模型配置读取/保存（Key 脱敏返回/加密落库，V2.4） |
-| DELETE | `/api/llm/config/{slot}` | 删除指定槽位用户配置（V2.4） |
-| GET/PUT | `/api/llm/platform-config` | （admin）平台默认配置读取/设置（V2.4） |
-| DELETE | `/api/llm/platform-config/{slot}` | （admin）删除平台默认槽位（V2.4） |
-| POST | `/api/llm/test-default/{slot}` | （admin）平台默认配置连通测试（V2.4） |
-| POST | `/api/llm/test` | 模型连通测试（用户配置或平台默认，V2.4） |
-| GET | `/health` | 健康检查 |
+| 方法              | 路径                                  | 说明                                                  |
+| --------------- | ----------------------------------- | --------------------------------------------------- |
+| POST            | `/api/tasks`                        | 提交任务：上传规格文件 **或** 粘贴文本 + 选素材类型(api/business) + 导出格式 |
+| GET             | `/api/tasks`                        | 任务列表（状态/进度/用例数，admin 可 `?all=true`）                 |
+| GET             | `/api/tasks/{id}`                   | 任务详情 + 四步骤日志 + 用例概览                                 |
+| GET             | `/api/tasks/{id}/download?fmt=xlsx` | 下载导出文件                                              |
+| POST            | `/api/tasks/{id}/iterate`           | 用例迭代：instruction + 可选导入文件，生成子任务版本链（V2.7）            |
+| DELETE          | `/api/tasks/{id}`                   | 删除任务                                                |
+| POST            | `/api/chat/stream`                  | Buddy 对话 SSE 流式输出（V2.6）                             |
+| POST            | `/api/chat`                         | Buddy 对话（非流式兜底，V2.6）                                |
+| POST/GET/DELETE | `/api/conversations`                | 会话创建/列表/删除（V2.6）                                    |
+| POST            | `/api/conversations/{id}/messages`  | 追加消息（V2.6）                                          |
+| GET             | `/api/llm/providers`                | 厂商预设列表（V2.4）                                        |
+| GET             | `/api/llm/effective`                | 当前生效配置（用户级覆盖平台级，V2.4）                               |
+| GET/PUT         | `/api/llm/config`                   | 用户模型配置读取/保存（Key 脱敏返回/加密落库，V2.4）                     |
+| DELETE          | `/api/llm/config/{slot}`            | 删除指定槽位用户配置（V2.4）                                    |
+| GET/PUT         | `/api/llm/platform-config`          | （admin）平台默认配置读取/设置（V2.4）                            |
+| DELETE          | `/api/llm/platform-config/{slot}`   | （admin）删除平台默认槽位（V2.4）                               |
+| POST            | `/api/llm/test-default/{slot}`      | （admin）平台默认配置连通测试（V2.4）                             |
+| POST            | `/api/llm/test`                     | 模型连通测试（用户配置或平台默认，V2.4）                              |
+| GET             | `/health`                           | 健康检查                                                |
 
 FastAPI 自带 `/docs` Swagger 交互文档。
 
@@ -213,19 +221,15 @@ FastAPI 自带 `/docs` Swagger 交互文档。
   - 预设场景卡片（Web 登录用例 / 接口参数校验 / App 端功能 / 需求文档解析）
   - 对话内联展示任务生成进度：四 Agent 节点实时刷新，点击节点展开详情
   - 任务完成后"查看完整用例"按钮，当前页弹出详情抽屉（不新开标签页）
-
 - **左侧边栏**：
   - 「+ 新对话」按钮
   - 历史会话列表（按时间倒序，点击切换）
   - 任务分类树（全部/未分类/自定义多级分类，拖拽归类）
-
 - **任务详情抽屉**（右侧滑出，3 Tab；头部含标题+状态+Tab 栏吸顶固定，内容区上下分栏、独立滚动）：
   - 🧠 思维导图（MindElixir 在线渲染）
   - 📋 测试用例表格（按模块分组）
   - ⚙️ 工作流步骤（四步时间线 + 质量报告）
-
 - **顶栏**：身份徽标（访客倒计时/用户名/管理员）、模型状态胶囊、退出按钮、产品路线图悬浮入口
-
 - **安全**：AES-256-GCM 纯 JS 解密（user/guest 角色 API 流量加密），不依赖 crypto.subtle
 
 完整 React + 质量看板版本作为第二阶段。
@@ -267,28 +271,35 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
 > 以下为初稿未覆盖、但已随迭代实装的模块，供与实际代码对照。
 
 ### 8.1.1 V2.1 · API 分级加密（防抓包明文泄露）
+
 - **动机**：平台走 HTTP 演示时，响应体明文可被抓包直接读取。对 `user` / `guest` 角色的敏感响应做端到端加密，`admin` 保持明文便于 Swagger 调试。
 - **方案**：`app/core/crypto.py` 实现纯 JS 可解密的 **AES-256-GCM**（NIST 测试向量验证 + Python 双向互通）；会话密钥由 `HKDF(JWT_SECRET, user_id)` 确定性派生，不落库。
 - **落地**：`app/core/middleware.py` 在响应返回前对受保护字段加密、请求体（如需）解密；前端 `index.html` 用 Web Crypto / 纯 JS 解密。强制加密、无后门。
 
 ### 8.1.2 V2.3 · 任务多级分类 + 拖拽归类（FR-H）
+
 - **动机**：任务列表从「扁平列表」升级为「按系统/模块组织的多级分类树」，支持自由拖拽归类。
 - **方案**：`app/models/category.py` 多级树（name / parent_id / user_id 隔离 / sort）；`app/api/categories.py` 提供分类 CRUD、重命名/移动（防环校验）、任务归类接口（`PUT /api/categories/move-task/{task_id}`）、级联删除回落未分类；前端 `index.html` 用 HTML5 原生拖拽（任务拖到分类归类、分类拖到另一分类变子级、目标高亮）。
 
 ### 8.1.3 V2.4 · 多厂商模型配置 + 双模型视觉理解（FR-I）
+
 - **动机**：解决「平台只能 mock 跑」的问题，让每个用户配置自己的大模型 API Key，真实调用 LLM 生成用例。
 - **方案**：`app/core/providers.py` 内置 7+ 厂商预设（阿里百炼/智谱/腾讯混元/DeepSeek/Kimi/豆包/自定义），选中预设只需填 API Key；`app/services/llm_service.py` OpenAI 兼容协议 HTTP 直连（去除 SDK 依赖）；`app/api/llm_config.py` 配置 CRUD + 连通测试；`app/models/llm_config.py` 用户级配置持久化；API Key AES-256-GCM 加密落库，回显脱敏。
 - **双模型**：可选配置图像识别模型，输入含截图时两段式——视觉模型逐图识别输出文字描述 → 与文档文本合并后交默认模型生成用例。
 
 ### 8.1.4 V2.5 · 任务详情 3 Tab 重构 + 思维导图在线预览（FR-J）
+
 - **动机**：任务详情从「四步骤时间线」扩展为三 Tab 布局，强化用例可视化与评审体验。
 - **方案**：详情抽屉右侧滑出（不新开页面），默认停在思维导图 Tab；`frontend/vendor/` 本地化 MindElixir 渲染库（120KB，零依赖），模块→用例层级展开，节点挂载类型/优先级标签（彩色胶囊）；测试用例 Tab 按模块分组表格展示完整字段；工作流步骤 Tab 保留四步时间线 + 质量报告。
 
 ### 8.1.5 V2.6 · 对话驱动 Buddy 助手 + 会话持久化（FR-L）
+
 - **动机**：产品核心交互形态升级，从「表单提交任务」变为「自然语言对话驱动」，降低使用门槛，增强 AI 产品体验。
 - **方案**：`app/api/chat.py` 实现 `POST /api/chat/stream` SSE 流式输出（逐字渲染 + 思考过程可折叠）；`app/api/conversations.py` 会话 CRUD + 消息追加；`app/models/conversation.py` Conversation（id/user_id/title/created_at/updated_at）+ Message（id/conversation_id/role/content/thinking/task_id/created_at）；assistant 消息关联 task_id，回放时按 task_id 实时拉取任务节点与用例，避免冗余存储；前端首页改为对话流，左侧边栏历史会话列表，对话内联展示任务生成进度，详情抽屉替代新标签页。
 
+
 ### 8.1.6 V2.7 · 用例迭代与导入（FR-M）
+
 - **动机**：解决「生成后无法再修改」的痛点——AI 首次生成的用例可能不完善，用户需要在会话中继续补充；同时本地已有的 xmind/xlsx 用例文件需要上传解析后检查完善。
 - **方案**：
   - **数据模型**：Task 加 `parent_task_id`（迭代来源），`_ensure_columns()` 自动迁移。
@@ -300,6 +311,7 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
   - **前端**：上传 accept 扩展 xmind/xlsx/json；已完成任务气泡加「➕ 继续补充」按钮进入补充模式；AI 确认按钮根据 supplementTaskId 切换「✨ 补充生成」；详情抽屉测试用例 Tab 加迭代版本链（v1→v2→v3，点击切换查看/预览/下载）。
 
 ### 8.1.7 V2.7 · 步骤级预期结果（xmind 格式修复）
+
 - **动机**：xmind/思维导图中"有操作步骤但无预期结果"——原实现把整体预期只挂在最后一步下，前面步骤只有操作描述。
 - **方案**：
   - **数据模型**：`TestCase` 加 `step_expectations: list[str]`（与 `steps` 一一对应），保留 `expected` 作整体总结；`align_step_expectations()` 强制对齐兜底（数量一致全非空→原样用；单步→整体预期；多步缺失→每步挂整体预期），保证"每步必有预期"。
@@ -316,17 +328,18 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
 
 > 目标：从"单机单用户演示"升级为"多用户 SaaS 形态"——三级角色（**访客 guest / 注册用户 user / 管理员 admin**），访客免注册按 IP 体验、数据 24h 自动回收；注册用户数据持久；管理员负责用户与访客治理。这也是面试讲点：**认证安全 + 数据权限隔离 + 多租户数据生命周期** 是测试工程师做测开/平台必备考点。
 
+
 ### 9.0 角色与数据生命周期总览
 
-| 维度 | 访客 guest | 普通用户 user | 管理员 admin |
-|------|-----------|--------------|--------------|
-| 身份来源 | 按 IP 自动创建（`guest_<ip_hash>`） | 注册（用户名+邮箱+密码） | 首个注册用户 / 环境变量预置 |
-| 登录方式 | 免登录，首次访问自动发 guest token | 账号密码 → JWT | 账号密码 → JWT |
-| 数据保留 | **1 天（24h）**，到期自动删除 | 永久（用户注销前） | 永久 |
-| 文件目录 | `uploads/guest_<ip_hash>/`、`outputs/guest_<ip_hash>/`（临时目录） | `uploads/u_<user_id>/`、`outputs/u_<user_id>/` | 同 user |
-| 任务上限 | 单访客 ≤10 个任务（防滥用） | 无硬限制（可配） | 无限制 |
-| 可见任务 | 仅自己的 | 仅自己的 | 全部（`?all=true`） |
-| 管理能力 | 无 | 无 | 用户管理 / 访客治理 / 全局任务 |
+| 维度   | 访客 guest                                                    | 普通用户 user                                     | 管理员 admin          |
+| ---- | ----------------------------------------------------------- | --------------------------------------------- | ------------------ |
+| 身份来源 | 按 IP 自动创建（`guest_<ip_hash>`）                                | 注册（用户名+邮箱+密码）                                 | 首个注册用户 / 环境变量预置    |
+| 登录方式 | 免登录，首次访问自动发 guest token                                     | 账号密码 → JWT                                    | 账号密码 → JWT         |
+| 数据保留 | **1 天（24h）**，到期自动删除                                         | 永久（用户注销前）                                     | 永久                 |
+| 文件目录 | `uploads/guest_<ip_hash>/`、`outputs/guest_<ip_hash>/`（临时目录） | `uploads/u_<user_id>/`、`outputs/u_<user_id>/` | 同 user             |
+| 任务上限 | 单访客 ≤10 个任务（防滥用）                                            | 无硬限制（可配）                                      | 无限制                |
+| 可见任务 | 仅自己的                                                        | 仅自己的                                          | 全部（`?all=true`）    |
+| 管理能力 | 无                                                           | 无                                             | 用户管理 / 访客治理 / 全局任务 |
 
 ```
 访客生命周期：
@@ -345,16 +358,17 @@ IP 首次访问 ──▶ 创建 guest 用户（expires_at = now + 24h）
 
 ### 9.1 技术选型
 
-| 组件 | 选型 | 理由 |
-|------|------|------|
-| 密码哈希 | `passlib[bcrypt]` | 业界标准，自带盐，不存明文 |
-| Token | `pyjwt`（JWT HS256） | 无状态、FastAPI 生态最简；不引入 session/Redis 复杂度 |
-| 鉴权方式 | `OAuth2PasswordBearer` | FastAPI 原生支持，`/docs` 里可直接调试探 Token |
-| 依赖新增 | `passlib[bcrypt]>=1.7` `pyjwt>=2.8` `bcrypt<4.1` | 轻量，无编译依赖（bcrypt≥4.1 与 passlib 1.7.x 不兼容，必须 pin） |
+| 组件    | 选型                                               | 理由                                              |
+| ----- | ------------------------------------------------ | ----------------------------------------------- |
+| 密码哈希  | `passlib[bcrypt]`                                | 业界标准，自带盐，不存明文                                   |
+| Token | `pyjwt`（JWT HS256）                               | 无状态、FastAPI 生态最简；不引入 session/Redis 复杂度          |
+| 鉴权方式  | `OAuth2PasswordBearer`                           | FastAPI 原生支持，`/docs` 里可直接调试探 Token              |
+| 依赖新增  | `passlib[bcrypt]>=1.7` `pyjwt>=2.8` `bcrypt<4.1` | 轻量，无编译依赖（bcrypt≥4.1 与 passlib 1.7.x 不兼容，必须 pin） |
 
 ```bash
 pip install "passlib[bcrypt]" pyjwt
 ```
+
 
 ### 9.2 数据模型变更
 
@@ -403,6 +417,7 @@ class CleanLog(Base):
 - **防滥用计数独立建表**：`guest_creation_log` 只记录 ip_hash + 时间，不随 guest 清理删除——否则计数器随 guest 记录一起被删，"单 IP 24h ≤ 5"形同虚设；超限返回 429
 - 文件隔离：上传/导出按 `data_dir` 分目录，访客临时目录随 TTL 整目录删除，注册用户目录独立互不影响
 
+
 ### 9.3 认证流程
 
 ```
@@ -424,6 +439,7 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
 ```
 
 **安全细节**：
+
 - 密码强度：≥8 位且含字母+数字（注册时校验）
 - JWT secret 从 `.env` 读取（`JWT_SECRET`），`.env.example` 提供占位；**启动时检测**：若为默认占位值则打 WARNING（演示可跑），生产环境拒绝启动
 - 限速：登录接口失败 5 次锁 10 分钟（内存计数即可，MVP 不引 Redis；注意仅在单进程 uvicorn 下有效，多 worker 需换共享存储——MVP 明确单进程部署）
@@ -434,6 +450,7 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
 - **依赖版本坑**：`passlib 1.7.x` 与 `bcrypt>=4.1` 组合会报 `__about__` 警告/异常，requirements 里 pin `bcrypt<4.1`；bcrypt 仅取密码前 72 字节，注册时顺带校验长度上限
 
 **访客清理任务（TTL 24h）**：
+
 - `app/jobs/guest_cleaner.py`，APScheduler 每小时执行（随 FastAPI 生命周期启动，不引 Celery）
 - 逻辑：`DELETE FROM users WHERE role='guest' AND expires_at < now`
   - 级联删除该 guest 的 tasks / step_logs（DB 外键 ON DELETE CASCADE 或手动删）
@@ -441,6 +458,7 @@ GET / 或 POST /api/guest/token ──▶ 取 IP → ip_hash
 - 兜底：启动时也跑一次（服务重启间隔可能超 1h）
 - **懒清理**：guest 请求进来发现 `expires_at < now` 时同步执行清理再返回 401——把"过期后数据仍存活最长 1h"的窗口收窄到"该访客下次访问即清"
 - 删除动作写 `clean_log` 表（admin 可见"今晨清理了 N 个访客"），面试可讲数据生命周期治理
+
 
 ### 9.3.1 关键实现示例（评审问题的落地代码）
 
@@ -512,27 +530,28 @@ if config.JWT_SECRET == DEFAULT_PLACEHOLDER:
     logger.warning("JWT_SECRET 为默认占位值，仅限本地演示")
 ```
 
+
 ### 9.4 API 变更
 
-| 方法 | 路径 | 鉴权 | 说明 |
-|------|------|------|------|
-| POST | `/api/guest/token` | 无 | 按 IP 建/复用访客身份，返回 guest JWT + 剩余有效时长；超 24h/5 个上限 → 429 |
-| POST | `/api/guest/upgrade` | Bearer + guest | 访客转注册用户（任务与文件迁移到新账户） |
-| POST | `/api/auth/register` | 无 | 注册，返回用户信息（不含 hash） |
-| POST | `/api/auth/login` | 无 | 返回 `access_token` + `token_type` |
-| POST | `/api/auth/change-password` | Bearer | 修改本人密码（旧密码校验，改后旧 token 仍有效至 exp，可接受） |
-| GET | `/api/auth/me` | Bearer | 当前用户信息（guest 含 expires_at 倒计时） |
-| GET | `/api/users` | Bearer + admin | 用户列表（含 guest，标记角色/过期时间/任务数） |
-| PATCH | `/api/users/{id}` | Bearer + admin | 启用/禁用注册用户；禁用 guest = 立即清理其数据 |
-| DELETE | `/api/users/{id}` | Bearer + admin | 删除用户（级联任务/文件；admin 本人不可删） |
-| POST | `/api/admin/guests/clean` | Bearer + admin | 手动触发访客清理（返回清理数量） |
-| POST | `/api/admin/guests/clean-all` | Bearer + admin | 批量清空**全部**访客及其数据（定向清理之外的兜底，初稿未列） |
-| GET | `/api/admin/stats` | Bearer + admin | 统计：注册用户数 / 活跃访客数 / 24h 清理数 |
-| POST | `/api/tasks` | Bearer | 创建时写入 `user_id`，文件落 `data_dir` 目录 |
-| GET | `/api/tasks` | Bearer | **只返回当前用户的任务**（admin 可带 `?all=true` 看全部） |
-| GET | `/api/tasks/{id}` | Bearer | 非本人且非 admin → 404 |
-| GET | `/api/tasks/{id}/download` | Bearer | 同上（防 URL 直链越权下载） |
-| GET | `/health` | 无 | 保持公开 |
+| 方法     | 路径                            | 鉴权             | 说明                                                    |
+| ------ | ----------------------------- | -------------- | ----------------------------------------------------- |
+| POST   | `/api/guest/token`            | 无              | 按 IP 建/复用访客身份，返回 guest JWT + 剩余有效时长；超 24h/5 个上限 → 429 |
+| POST   | `/api/guest/upgrade`          | Bearer + guest | 访客转注册用户（任务与文件迁移到新账户）                                  |
+| POST   | `/api/auth/register`          | 无              | 注册，返回用户信息（不含 hash）                                    |
+| POST   | `/api/auth/login`             | 无              | 返回 `access_token` + `token_type`                      |
+| POST   | `/api/auth/change-password`   | Bearer         | 修改本人密码（旧密码校验，改后旧 token 仍有效至 exp，可接受）                  |
+| GET    | `/api/auth/me`                | Bearer         | 当前用户信息（guest 含 expires_at 倒计时）                        |
+| GET    | `/api/users`                  | Bearer + admin | 用户列表（含 guest，标记角色/过期时间/任务数）                           |
+| PATCH  | `/api/users/{id}`             | Bearer + admin | 启用/禁用注册用户；禁用 guest = 立即清理其数据                          |
+| DELETE | `/api/users/{id}`             | Bearer + admin | 删除用户（级联任务/文件；admin 本人不可删）                             |
+| POST   | `/api/admin/guests/clean`     | Bearer + admin | 手动触发访客清理（返回清理数量）                                      |
+| POST   | `/api/admin/guests/clean-all` | Bearer + admin | 批量清空**全部**访客及其数据（定向清理之外的兜底，初稿未列）                      |
+| GET    | `/api/admin/stats`            | Bearer + admin | 统计：注册用户数 / 活跃访客数 / 24h 清理数                            |
+| POST   | `/api/tasks`                  | Bearer         | 创建时写入 `user_id`，文件落 `data_dir` 目录                     |
+| GET    | `/api/tasks`                  | Bearer         | **只返回当前用户的任务**（admin 可带 `?all=true` 看全部）              |
+| GET    | `/api/tasks/{id}`             | Bearer         | 非本人且非 admin → 404                                     |
+| GET    | `/api/tasks/{id}/download`    | Bearer         | 同上（防 URL 直链越权下载）                                      |
+| GET    | `/health`                     | 无              | 保持公开                                                  |
 
 ### 9.5 前端改动（MVP 原生 HTML）
 
@@ -547,6 +566,7 @@ if config.JWT_SECRET == DEFAULT_PLACEHOLDER:
 ### 9.6 数据迁移（SQLite）
 
 自写轻量迁移脚本 `scripts/migrate_v2.py`：
+
 1. `ALTER TABLE tasks ADD COLUMN user_id INTEGER`（SQLite 支持 ADD COLUMN）
 2. 建表 `users` / `guest_creation_log` / `clean_log`（email/password_hash 可空，含 ip_hash/expires_at/data_dir），创建默认 admin（用户名 `admin`，密码从环境变量读，默认随机生成打印一次）
 3. `UPDATE tasks SET user_id = <admin_id> WHERE user_id IS NULL`
@@ -557,17 +577,17 @@ if config.JWT_SECRET == DEFAULT_PLACEHOLDER:
 
 认证模块是**接口测试实战素材**，`tests/` 补充以下用例集：
 
-| 类别 | 用例 |
-|------|------|
-| 注册 | 正常注册 / 用户名重复 409 / 邮箱格式非法 422 / 密码强度不足 422 / 用户名超长 |
-| 登录 | 正确密码 / 密码错误 401（提示模糊化）/ 用户不存在 401（与密码错误同文案，防枚举）/ 禁用用户 403 / 连续错 5 次锁定 |
-| Token | 缺失 Authorization 401 / 格式错误 401 / 过期 401（伪造 exp 验证）/ 篡改签名 401 / **用户被禁用后存量 token 立即 401（DB 回查生效）** |
-| 越权 | 用户 A 访问用户 B 的任务详情 404 / 越权下载他人导出文件 404 / user 调 admin 接口 403 / guest 调 admin 接口 403 |
-| 防滥用 | 同 IP 24h 第 6 个 guest → 429（guest 记录已删计数仍在）/ guest 第 11 个任务 → 429 / 伪造 X-Forwarded-For 在直连部署下不影响判 IP |
-| 并发 | 同一账号并发登录多端 token 互不影响（无状态 JWT 天然支持） |
+| 类别     | 用例                                                                                                                                                                  |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 注册     | 正常注册 / 用户名重复 409 / 邮箱格式非法 422 / 密码强度不足 422 / 用户名超长                                                                                                                  |
+| 登录     | 正确密码 / 密码错误 401（提示模糊化）/ 用户不存在 401（与密码错误同文案，防枚举）/ 禁用用户 403 / 连续错 5 次锁定                                                                                               |
+| Token  | 缺失 Authorization 401 / 格式错误 401 / 过期 401（伪造 exp 验证）/ 篡改签名 401 / **用户被禁用后存量 token 立即 401（DB 回查生效）**                                                                  |
+| 越权     | 用户 A 访问用户 B 的任务详情 404 / 越权下载他人导出文件 404 / user 调 admin 接口 403 / guest 调 admin 接口 403                                                                                 |
+| 防滥用    | 同 IP 24h 第 6 个 guest → 429（guest 记录已删计数仍在）/ guest 第 11 个任务 → 429 / 伪造 X-Forwarded-For 在直连部署下不影响判 IP                                                                 |
+| 并发     | 同一账号并发登录多端 token 互不影响（无状态 JWT 天然支持）                                                                                                                                 |
 | 访客生命周期 | 同 IP 首访自动建 guest / 同 IP 二访复用同一 guest / 不同 IP 各自 guest 互相隔离 / guest 任务上限第 11 个 429 / 过期 guest token 401 / 过期 guest 数据与临时目录被清理 / 清理后同 IP 再访新建 guest / 访客转注册后任务与文件完整迁移 |
-| 访客清理任务 | 到期 guest 的 tasks/step_logs 被级联删 / 临时目录（上传+导出）被删 / 未到期 guest 不被误删 / 服务重启后清理兜底执行 / admin 手动清理接口生效并返回数量 / **懒清理：过期 guest 携旧 token 访问 → 401 且数据同步被清** |
-| 角色权限矩阵 | 三角色 × 核心接口状态码全组合（guest/user/admin × 8 接口 = 24 条断言，表驱动参数化跑） |
+| 访客清理任务 | 到期 guest 的 tasks/step_logs 被级联删 / 临时目录（上传+导出）被删 / 未到期 guest 不被误删 / 服务重启后清理兜底执行 / admin 手动清理接口生效并返回数量 / **懒清理：过期 guest 携旧 token 访问 → 401 且数据同步被清**                   |
+| 角色权限矩阵 | 三角色 × 核心接口状态码全组合（guest/user/admin × 8 接口 = 24 条断言，表驱动参数化跑）                                                                                                          |
 
 ### 9.8 实施拆分（V2 迭代）
 
@@ -586,7 +606,7 @@ if config.JWT_SECRET == DEFAULT_PLACEHOLDER:
 - [ ] 用户 A 无法看到/下载用户 B 的任何任务（404）
 - [ ] admin 可查看全部任务、管理用户启停、手动清理访客、看到统计
 - [ ] 密码哈希入库（非明文）、JWT 过期自动登出
-- [ ] **访客：同 IP 免登录自动获得身份；数据/文件隔离在 guest_<ip_hash> 临时目录；24h 后任务、日志、文件全部自动删除且同 IP 再访是全新身份**
+- [ ] **访客：同 IP 免登录自动获得身份；数据/文件隔离在 guest\_<ip_hash> 临时目录；24h 后任务、日志、文件全部自动删除且同 IP 再访是全新身份**
 - [ ] 访客任务上限 10 个生效；同 IP 24h 第 6 个 guest 身份 → 429；访客转注册后数据完整迁移不丢
 - [ ] admin 禁用用户后，该用户**存量 token 立即 401**（get_current_user 回查 DB）
 - [ ] 越权/认证/访客生命周期测试用例集 ≥ 30 条且全部通过
