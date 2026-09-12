@@ -1,0 +1,92 @@
+/* V2.8 M1 基础样式：登录弹窗 + 应用壳（后续里程碑按组件拆分扩展） */
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #f5f7fa;
+  color: #1f2329;
+}
+
+.m1-shell { min-height: 100%; display: flex; flex-direction: column; }
+.m1-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; height: 56px; background: #fff; border-bottom: 1px solid #e5e6eb;
+  position: sticky; top: 0; z-index: 10;
+}
+.m1-logo { font-weight: 700; font-size: 16px; }
+.m1-identity { display: flex; align-items: center; gap: 12px; }
+.uc {
+  font-size: 13px; padding: 4px 10px; border-radius: 12px;
+  background: #e8f3ff; color: #165dff;
+}
+.uc.guest { background: #fff7e8; color: #d25f00; }
+.uc.admin { background: #ffece8; color: #d83931; }
+
+.m1-main { flex: 1; max-width: 860px; width: 100%; margin: 0 auto; padding: 48px 24px; }
+.m1-main h1 { font-size: 24px; margin: 0 0 8px; }
+.m1-desc { color: #646a73; line-height: 1.7; margin: 0 0 32px; }
+.m1-card {
+  background: #fff; border: 1px solid #e5e6eb; border-radius: 12px; padding: 24px;
+}
+.m1-card h3 { margin: 0 0 8px; font-size: 16px; }
+.m1-hint { color: #646a73; font-size: 13px; line-height: 1.8; }
+.m1-pre {
+  margin-top: 16px; padding: 16px; background: #171a1f; color: #d7e3f4;
+  border-radius: 8px; font-size: 12px; line-height: 1.7; white-space: pre-wrap;
+  word-break: break-all; max-height: 320px; overflow: auto;
+}
+.m1-loading { display: grid; place-items: center; height: 100vh; color: #646a73; }
+
+.btn {
+  border: 1px solid #dcdfe6; background: #fff; color: #1f2329;
+  border-radius: 6px; padding: 7px 16px; font-size: 14px; cursor: pointer;
+}
+.btn:hover { border-color: #165dff; color: #165dff; }
+.btn.primary { background: #165dff; border-color: #165dff; color: #fff; }
+.btn.out { font-size: 13px; padding: 5px 12px; }
+
+/* ===== 登录弹窗（对齐旧版 authOverlay 视觉） ===== */
+.auth-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
+  display: grid; place-items: center; z-index: 100;
+}
+.auth-modal {
+  width: 360px; background: #fff; border-radius: 14px; padding: 28px;
+  display: flex; flex-direction: column; gap: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+.auth-modal h2 { margin: 0 0 4px; font-size: 20px; text-align: center; }
+.auth-tabs { display: flex; gap: 8px; }
+.auth-tabs button {
+  flex: 1; padding: 8px 0; border: 1px solid #dcdfe6; background: #fff;
+  border-radius: 8px; cursor: pointer; font-size: 14px;
+}
+.auth-tabs button.on { border-color: #165dff; color: #165dff; background: #f0f6ff; }
+.auth-modal input {
+  padding: 10px 12px; border: 1px solid #dcdfe6; border-radius: 8px;
+  font-size: 14px; outline: none;
+}
+.auth-modal input:focus { border-color: #165dff; }
+.auth-error { color: #d83931; font-size: 13px; }
+.auth-btn {
+  padding: 10px 0; background: #165dff; color: #fff; border: none;
+  border-radius: 8px; font-size: 15px; cursor: pointer;
+}
+.auth-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.guest-btn {
+  padding: 9px 0; background: #fff; border: 1px dashed #b8bcc4; color: #646a73;
+  border-radius: 8px; font-size: 13px; cursor: pointer;
+}
+.upgrade-link {
+  border: none; background: none; color: #165dff; font-size: 13px; cursor: pointer;
+  text-align: center; padding: 4px 0;
+}
+
+/* ===== Toast（对齐旧版） ===== */
+.toast {
+  position: fixed; top: 24px; left: 50%; transform: translateX(-50%) translateY(-8px);
+  background: rgba(23, 26, 31, 0.92); color: #fff; padding: 10px 20px;
+  border-radius: 8px; font-size: 14px; opacity: 0; pointer-events: none;
+  transition: opacity 0.25s, transform 0.25s; z-index: 200;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
