@@ -1,9 +1,9 @@
 /**
- * M3：用例列表 Tab。
+ * M3 / M5-fix：用例列表 Tab。
  * - 统计条：总数 / 优先级分布 / 类型分布（从 cases 现算，后端 TaskOut 不含 report）
  * - 搜索：按 case_id / 标题 / 模块过滤
- * - 用例卡片：前置条件 / 步骤+预期成对展示 / 预期结果 / 测试数据
- * - focusCaseId（导图节点点击跳转）：滚动定位 + 高亮
+ * - M5-fix：折叠卡片 → 恢复 V2.7 表格（一行一条、表头 sticky、步骤+预期内联）
+ * - focusCaseId（外部定位）：滚动定位 + 行高亮
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task } from "../../types";
@@ -19,20 +19,16 @@ const PRIORITY_CLS: Record<string, string> = { P0: "fail", P1: "run", P2: "sub" 
 export default function CaseListTab({ task, focusCaseId, focusSeq }: Props) {
   const cases = task.cases || [];
   const [q, setQ] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const stats = useMemo(() => {
     const pri: Record<string, number> = {};
     const typ: Record<string, number> = {};
-    const mod: Record<string, number> = {};
     for (const c of cases) {
       if (c.priority) pri[c.priority] = (pri[c.priority] || 0) + 1;
       if (c.case_type) typ[c.case_type] = (typ[c.case_type] || 0) + 1;
-      const m = (c.module || "").trim() || "未分组";
-      mod[m] = (mod[m] || 0) + 1;
     }
-    return { pri, typ, mod };
+    return { pri, typ };
   }, [cases]);
 
   const filtered = useMemo(() => {
@@ -46,14 +42,9 @@ export default function CaseListTab({ task, focusCaseId, focusSeq }: Props) {
     );
   }, [cases, q]);
 
-  // 导图跳转：展开 + 滚动 + 高亮
+  // 外部定位：滚动 + 行高亮
   useEffect(() => {
     if (!focusCaseId || !listRef.current) return;
-    setExpanded((prev) => {
-      const n = new Set(prev);
-      n.add(focusCaseId);
-      return n;
-    });
     const t = window.setTimeout(() => {
       const el = listRef.current?.querySelector(`[data-case-id="${focusCaseId}"]`);
       if (el) {
@@ -68,6 +59,8 @@ export default function CaseListTab({ task, focusCaseId, focusSeq }: Props) {
   if (cases.length === 0) {
     return <div className="drawer-empty">该任务暂无用例数据</div>;
   }
+
+  const dash = <span className="dash">—</span>;
 
   return (
     <div className="case-tab">
@@ -97,76 +90,67 @@ export default function CaseListTab({ task, focusCaseId, focusSeq }: Props) {
         {filtered.length === 0 ? (
           <div className="drawer-empty">无匹配用例</div>
         ) : (
-          filtered.map((c) => {
-            const open = expanded.has(c.case_id);
-            const steps = c.steps || [];
-            const exps = c.step_expectations || [];
-            return (
-              <div key={c.case_id} className={`case-card ${open ? "open" : ""}`} data-case-id={c.case_id}>
-                <button
-                  type="button"
-                  className="case-head"
-                  onClick={() =>
-                    setExpanded((prev) => {
-                      const n = new Set(prev);
-                      if (n.has(c.case_id)) n.delete(c.case_id);
-                      else n.add(c.case_id);
-                      return n;
-                    })
-                  }
-                >
-                  <span className="case-id">{c.case_id}</span>
-                  <span className="case-title">{c.title}</span>
-                  {c.priority && (
-                    <span className={`pill pill-${PRIORITY_CLS[c.priority] || "sub"}`}>{c.priority}</span>
-                  )}
-                  {c.case_type && <span className="pill pill-sub">{c.case_type}</span>}
-                  <span className="case-arrow">{open ? "▾" : "▸"}</span>
-                </button>
-                {open && (
-                  <div className="case-body">
-                    {c.module && (
-                      <div className="case-row">
-                        <span className="case-k">模块</span>
-                        <span>{c.module}</span>
-                      </div>
-                    )}
-                    {c.pre_condition && (
-                      <div className="case-row">
-                        <span className="case-k">前置</span>
-                        <span>{c.pre_condition}</span>
-                      </div>
-                    )}
-                    {steps.length > 0 && (
-                      <div className="case-steps">
-                        {steps.map((s, i) => (
-                          <div key={i} className="case-step">
-                            <span className="case-step-n">{i + 1}</span>
-                            <div className="case-step-main">
-                              <div>{s}</div>
-                              {exps[i] && <div className="case-step-exp">预期：{exps[i]}</div>}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {c.expected && (
-                      <div className="case-row">
-                        <span className="case-k">预期</span>
-                        <span>{c.expected}</span>
-                      </div>
-                    )}
-                    {c.test_data && (
-                      <div className="case-row">
-                        <span className="case-k">数据</span>
-                        <span>{c.test_data}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })
+          <div className="case-table-wrap">
+            <table className="case-table">
+              <colgroup>
+                <col style={{ width: "9%" }} />
+                <col style={{ width: "18%" }} />
+                <col style={{ width: "7%" }} />
+                <col style={{ width: "6%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "26%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "10%" }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>编号</th>
+                  <th>标题</th>
+                  <th>类型</th>
+                  <th>优先级</th>
+                  <th>前置条件</th>
+                  <th>操作步骤 → 预期</th>
+                  <th>预期结果</th>
+                  <th>测试数据</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((c) => {
+                  const steps = c.steps || [];
+                  const exps = c.step_expectations || [];
+                  return (
+                    <tr key={c.case_id} data-case-id={c.case_id}>
+                      <td className="ct-id">{c.case_id}</td>
+                      <td className="ct-name">{c.title || dash}</td>
+                      <td className="ct-text">{c.case_type || dash}</td>
+                      <td className="ct-text">
+                        {c.priority ? (
+                          <span className={`pill pill-${PRIORITY_CLS[c.priority] || "sub"}`}>{c.priority}</span>
+                        ) : (
+                          dash
+                        )}
+                      </td>
+                      <td className="ct-text">{c.pre_condition || dash}</td>
+                      <td className="ct-text">
+                        {steps.length > 0
+                          ? steps.map((s, i) => (
+                              <div key={i} className="ct-step">
+                                <div>
+                                  {i + 1}. {s}
+                                </div>
+                                {exps[i] && <div className="ct-step-exp">预期：{exps[i]}</div>}
+                              </div>
+                            ))
+                          : dash}
+                      </td>
+                      <td className="ct-text">{c.expected || dash}</td>
+                      <td className="ct-text">{c.test_data || dash}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

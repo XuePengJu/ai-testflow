@@ -1,8 +1,7 @@
 /**
- * M3：任务详情抽屉（720px 右滑 + 遮罩）。
- * - 3 Tab：用例列表 / 思维导图 / 导出&迭代
+ * M3 / M5-fix：任务详情居中弹窗（遮罩 + scale 弹出，恢复 V2.7 modal 形态）。
+ * - 3 Tab：用例列表（表格）/ 思维导图 / 导出&迭代
  * - running 状态：显示步骤进度卡（复用 TaskStepsCard）+ 2s 详情轮询（taskStore.pollDrawer）
- * - 导图节点点击 → 切 Tab1 + focusCase 定位高亮
  */
 import { useEffect, useState } from "react";
 import { useTaskStore } from "../../store/taskStore";
@@ -19,7 +18,6 @@ export default function TaskDetailDrawer() {
   const detail = useTaskStore((s) => s.detail);
   const detailLoading = useTaskStore((s) => s.detailLoading);
   const closeDetail = useTaskStore((s) => s.closeDetail);
-  const focusCase = useTaskStore((s) => s.focusCase);
   const focusCaseId = useTaskStore((s) => s.focusCaseId);
   const focusCaseSeq = useTaskStore((s) => s.focusCaseSeq);
   const [tab, setTab] = useState<TabKey>("cases");
@@ -33,12 +31,6 @@ export default function TaskDetailDrawer() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [drawerTaskId, closeDetail]);
-
-  // 导图跳用例：切 Tab + 定位（focusCase 内部 +1 触发）
-  function handleSelectCase(caseId: string) {
-    setTab("cases");
-    focusCase(caseId);
-  }
 
   if (!drawerTaskId) return null;
 
@@ -102,7 +94,7 @@ export default function TaskDetailDrawer() {
 
             <div className="drawer-body">
               {tab === "cases" && <CaseListTab task={t} focusCaseId={focusCaseId} focusSeq={focusCaseSeq} />}
-              {tab === "mindmap" && <MindMapTab task={t} onSelectCase={handleSelectCase} />}
+              {tab === "mindmap" && <MindMapTab task={t} />}
               {tab === "export" && <ExportTab task={t} />}
             </div>
           </>

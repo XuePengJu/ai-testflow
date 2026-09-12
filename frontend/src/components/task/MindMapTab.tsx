@@ -1,8 +1,11 @@
 /**
- * M3：思维导图 Tab（mind-elixir 4.6.2 npm 版）。
+ * M3 / M5-fix：思维导图 Tab（mind-elixir 4.6.2 npm 版）。
  * 数据来源：前端从 task.cases 现场构建树（后端无 mind_map 字段）：
  *   root(任务名) → 模块 → 用例（case_id + 标题）
- * 节点点击（用例节点）→ 跳「用例列表」Tab 并定位高亮。
+ * M5-fix：
+ *   - 容器显式宽高 + ResizeObserver：容器尺寸变化时 refresh() + toCenter()，
+ *     修复窄容器初始化后节点布局错位（堆角落）的问题
+ *   - 去掉节点点击跳转（selectNode → 切 Tab），点击只选中
  * 样式由 mind-elixir 构建产物内嵌（vite-plugin-css-injected-by-js），无需 import css。
  */
 import { useEffect, useRef } from "react";
@@ -12,11 +15,7 @@ import type { CaseItem, Task } from "../../types";
 
 interface Props {
   task: Task;
-  /** 用例节点被点击（case_id 不带前缀） */
-  onSelectCase: (caseId: string) => void;
 }
-
-const CASE_PREFIX = "case:";
 
 /** cases → mind-elixir 树（root → module → case） */
 function buildMapData(task: Task, cases: CaseItem[]): MindElixirData {
@@ -35,7 +34,7 @@ function buildMapData(task: Task, cases: CaseItem[]): MindElixirData {
         id: `mod-${i}`,
         topic: `${mod}（${list.length}）`,
         children: list.map((c) => ({
-          id: CASE_PREFIX + c.case_id,
+          id: `case:${c.case_id}`,
           topic: `${c.case_id} ${c.title}`,
           tags: c.priority ? [c.priority] : [],
         })),
@@ -44,7 +43,7 @@ function buildMapData(task: Task, cases: CaseItem[]): MindElixirData {
   };
 }
 
-export default function MindMapTab({ task, onSelectCase }: Props) {
+export default function MindMapTab({ task }: Props) {
   const elRef = useRef<HTMLDivElement | null>(null);
   const mindRef = useRef<MindElixirInstance | null>(null);
   const cases = task.cases || [];
@@ -63,13 +62,27 @@ export default function MindMapTab({ task, onSelectCase }: Props) {
       keypress: false,
     }) as unknown as MindElixirInstance;
     mind.init(buildMapData(task, cases));
-    mind.bus.addListener("selectNode", (obj: unknown) => {
-      // mind-elixir 4.x：selectNode 第一个参数就是 NodeObj（含 id），非 DOM 元素
-      const id = (obj as { id?: string } | null)?.id || "";
-      if (id.startsWith(CASE_PREFIX)) onSelectCase(id.slice(CASE_PREFIX.length));
-    });
     mindRef.current = mind;
+
+    // 画布适配：先 toCenter 用 1e4 坐标滚到画布中心，再 scaleFit() 设置 .map-canvas transform。
+    // scaleFit 不改 scroll，画布视觉中心=容器中心（已被 toCenter 校准过），子节点应全在可视区。
+    const fit = () => {
+      try {
+        mind.toCenter();
+        mind.scaleFit();
+      } catch {
+        /* 兜底 */
+      }
+    };
+    const raf = requestAnimationFrame(fit);
+
+    // 容器尺寸变化（弹窗弹出动画 / 窗口缩放）→ 重排 + 自适应 + 居中
+    const ro = new ResizeObserver(() => fit());
+    ro.observe(elRef.current);
+
     return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
       try {
         mind.destroy();
       } catch {
@@ -87,8 +100,8 @@ export default function MindMapTab({ task, onSelectCase }: Props) {
 
   return (
     <div className="mindmap-wrap">
-      <div className="mindmap-hint">点击用例节点可跳转到用例列表</div>
-      <div ref={elRef} className="map-container" style={{ flex: 1, minHeight: 0 }} />
+      <div className="mindmap-hint">拖拽画布可平移，滚轮可缩放</div>
+      <div ref={elRef} className="map-container" />
     </div>
   );
 }

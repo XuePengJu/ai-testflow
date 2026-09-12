@@ -28,7 +28,7 @@ const SHOT_DIR = "/tmp/e2e-m4";
 fs.mkdirSync(SHOT_DIR, { recursive: true });
 
 const ROOT = "/Users/xp/Documents/软件测试示例项目/ai-testflow";
-const DB = `${ROOT}/app.db`;
+const DB = process.env.AITF_E2E_DB || `${ROOT}/app.db`;
 
 const USER = "e2e_m4_user";
 const ADMIN = "e2e_m4_admin";

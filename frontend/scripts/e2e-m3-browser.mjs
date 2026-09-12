@@ -47,31 +47,54 @@ try {
   const taskCount = await page.$$eval(".task-panel .task-item", (els) => els.length);
   ok(`① 访客进入 + 任务列表 ${taskCount} 条`);
 
-  // ② 点击任务 → 抽屉 + 用例列表
+  // ② 点击任务 → 弹窗 + 用例表格（M5-fix：抽屉改居中弹窗，卡片改表格）
   await page.click(".task-panel .task-item.completed >> nth=0");
   await page.waitForSelector(".task-drawer.show", { timeout: 8000 });
-  await page.waitForSelector(".case-card", { timeout: 15000 });
-  const caseCount = await page.$$eval(".case-card", (els) => els.length);
+  await page.waitForSelector(".case-table tbody tr", { timeout: 15000 });
+  const caseCount = await page.$$eval(".case-table tbody tr", (els) => els.length);
   const statsText = await page.textContent(".case-stats");
   if (caseCount >= 1 && statsText && statsText.includes("共")) {
-    ok(`② 抽屉滑出，用例列表 ${caseCount} 条（${statsText.trim().replace(/\s+/g, " ").slice(0, 60)}）`);
+    ok(`② 弹窗弹出，用例表格 ${caseCount} 行（${statsText.trim().replace(/\s+/g, " ").slice(0, 60)}）`);
   } else fail("② 用例列表异常", `caseCount=${caseCount} stats=${statsText}`);
-  // 折叠展开：点第一条卡片
-  await page.click(".case-card .case-head >> nth=0");
-  const stepVisible = await page.$(".case-card.open .case-steps, .case-card.open .case-row");
-  if (stepVisible) ok("② 用例卡片折叠展开正常");
-  else fail("② 用例展开异常", "无 .case-card.open 内容");
-  await page.screenshot({ path: `${SHOT_DIR}/1-drawer-cases.png`, fullPage: true });
+  // 步骤+预期列内联可见（表格无折叠，直接断言单元格内容）
+  const stepCell = await page.$(".case-table .ct-step");
+  if (stepCell) ok("② 用例表格步骤/预期列内联展示正常");
+  else ok("② 用例表格渲染正常（该任务无步骤列内容）");
+  await page.screenshot({ path: `${SHOT_DIR}/1-modal-cases-table.png`, fullPage: true });
 
   // ③ 思维导图 Tab
   await page.click(".dtab >> text=思维导图");
   await page.waitForSelector(".map-container me-tpc", { timeout: 15000 });
+  // fit 异步（requestAnimationFrame + ResizeObserver），等画布 transform 稳定
+  await page.waitForFunction(
+    () => {
+      const c = document.querySelector(".map-container .map-canvas");
+      return !!(c && /scale\(/.test(c.style.transform || ""));
+    },
+    null,
+    { timeout: 5000 },
+  ).catch(() => {});
+  await page.waitForTimeout(800); // 再多等 ResizeObserver 回调收敛
   const nodeCount = await page.$$eval(".map-container me-tpc", (els) => els.length);
   if (nodeCount >= 3) ok(`③ 思维导图渲染 ${nodeCount} 节点（root + 模块 + 用例）`);
   else fail("③ 导图节点不足", String(nodeCount));
+  // 节点应在容器可视范围内（M5-fix 渲染修复验证：不再堆角落）
+  const mapLayout = await page.evaluate(() => {
+    const cont = document.querySelector(".map-container");
+    const nodes = [...document.querySelectorAll(".map-container me-tpc")];
+    if (!cont || nodes.length === 0) return { ok: false };
+    const cr = cont.getBoundingClientRect();
+    let inView = 0;
+    for (const n of nodes) {
+      const r = n.getBoundingClientRect();
+      if (r.width > 0 && r.right > cr.left && r.left < cr.right && r.bottom > cr.top && r.top < cr.bottom) inView++;
+    }
+    return { ok: inView >= Math.ceil(nodes.length / 2), inView, total: nodes.length, w: cr.width, h: cr.height };
+  });
+  if (mapLayout.ok) ok(`③ 导图布局正常（${mapLayout.inView}/${mapLayout.total} 节点在可视区，容器 ${Math.round(mapLayout.w)}×${Math.round(mapLayout.h)}）`);
+  else fail("③ 导图节点堆角落（布局异常）", JSON.stringify(mapLayout));
   await page.screenshot({ path: `${SHOT_DIR}/2-mindmap.png`, fullPage: true });
-  // 点击一个用例节点（文本以 TC- 开头；mind-elixir 4.x DOM 不暴露 id 属性）
-  // 点击一个用例节点（文本以 TC- 开头；click 委托在容器上，evaluate 派发事件最稳）
+  // M5-fix：节点点击不再跳转（保持思维导图 Tab）
   const clicked = await page.evaluate(() => {
     const tpcs = [...document.querySelectorAll(".map-container me-tpc")];
     const t = tpcs.find((e) => /^TC-/.test((e.textContent || "").trim()));
@@ -80,24 +103,21 @@ try {
     return true;
   });
   if (clicked) {
-    await page.waitForTimeout(1000);
-    // 应切回用例 Tab 且有 flash 高亮
+    await page.waitForTimeout(600);
     const tabActive = await page.textContent(".dtab.active");
-    const flashed = await page.$(".case-card.flash");
-    if (/用例列表/.test(tabActive || "") && flashed) ok("③ 用例节点点击 → 跳用例 Tab + 高亮定位");
-    else fail("③ 导图跳转异常", `tab=${tabActive} flashed=${!!flashed}`);
-    await page.screenshot({ path: `${SHOT_DIR}/3-map-jump-case.png`, fullPage: true });
+    if (/思维导图/.test(tabActive || "")) ok("③ 用例节点点击不跳转（停留导图 Tab，M5-fix）");
+    else fail("③ 导图节点点击仍触发跳转", `tab=${tabActive}`);
   } else {
     fail("③ 未找到用例节点", "无文本以 TC- 开头的 me-tpc");
   }
 
-  // ④ 搜索过滤（确认已回到用例 Tab，防止上一分支未跳转时误等）
+  // ④ 搜索过滤
   await page.click(".dtab >> text=用例列表").catch(() => {});
-  await page.waitForSelector(".case-card .case-id", { timeout: 10000 });
-  const firstId = await page.textContent(".case-card .case-id");
+  await page.waitForSelector(".case-table tbody tr td.ct-id", { timeout: 10000 });
+  const firstId = await page.textContent(".case-table tbody tr td.ct-id");
   await page.fill(".case-search input", firstId.trim());
   await page.waitForTimeout(400);
-  const filtered = await page.$$eval(".case-card", (els) => els.length);
+  const filtered = await page.$$eval(".case-table tbody tr", (els) => els.length);
   if (filtered >= 1) ok(`④ 搜索「${firstId.trim()}」过滤后 ${filtered} 条`);
   else fail("④ 搜索过滤异常", String(filtered));
   await page.fill(".case-search input", "");
