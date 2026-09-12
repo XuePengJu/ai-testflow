@@ -92,3 +92,33 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<Response
 export function toast(msg: string): void {
   window.dispatchEvent(new CustomEvent("aitf-toast", { detail: msg }));
 }
+
+/**
+ * M3：任务导出文件下载。GET /api/tasks/{id}/download?fmt=xlsx|json|xmind
+ * - FileResponse 二进制流，中间件只加密 JSON → 响应天然明文透传
+ * - GET 无请求体，不受请求侧加密影响；仅需 Bearer
+ */
+export async function downloadTaskFile(taskId: string, fmt: string, taskName: string): Promise<void> {
+  const snap = getAuthSnapshot();
+  const headers: Record<string, string> = {};
+  if (snap.token) headers["Authorization"] = "Bearer " + snap.token;
+  const r = await fetch(`${API}/tasks/${taskId}/download?fmt=${encodeURIComponent(fmt)}`, { headers });
+  if (!r.ok) {
+    let detail = `下载失败（HTTP ${r.status}）`;
+    try {
+      const d = await r.json();
+      if (d && typeof d.detail === "string") detail = d.detail;
+    } catch { /* 非 JSON 错误体 */ }
+    toast(detail);
+    return;
+  }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${taskName || taskId}.${fmt}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

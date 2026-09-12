@@ -19,11 +19,23 @@ interface TaskState {
   /** 详情轮询中的任务（chat 步骤卡实时刷新） */
   activeIds: Set<string>;
   refreshing: boolean;
+  /** M3：详情抽屉 */
+  drawerTaskId: string | null;
+  detail: Task | null;
+  detailLoading: boolean;
+  /** 导图节点 → 用例 Tab 跳转信号（每次 +1 触发 useEffect） */
+  focusCaseSeq: number;
+  focusCaseId: string | null;
 
   refresh: () => Promise<void>;
   startPolling: (taskId: string) => void;
   stopPolling: (taskId: string) => void;
   deleteTask: (taskId: string) => Promise<void>;
+  openDetail: (taskId: string) => Promise<void>;
+  closeDetail: () => void;
+  /** 抽屉内活跃任务轮询（running 状态时 2s 刷新详情直至终态） */
+  pollDrawer: (taskId: string) => void;
+  focusCase: (caseId: string) => void;
 }
 
 /** 单个活跃任务的轮询循环 */
@@ -53,6 +65,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   listLoaded: false,
   activeIds: new Set<string>(),
   refreshing: false,
+  drawerTaskId: null,
+  detail: null,
+  detailLoading: false,
+  focusCaseSeq: 0,
+  focusCaseId: null,
 
   async refresh() {
     const snap = getAuthSnapshot();
@@ -103,9 +120,67 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
     toast("任务已删除");
     get().stopPolling(taskId);
+    if (get().drawerTaskId === taskId) get().closeDetail();
     await get().refresh();
     const { useChatStore } = await import("./chatStore");
     useChatStore.getState().refreshConversations();
+  },
+
+  async openDetail(taskId) {
+    set({ drawerTaskId: taskId, detailLoading: true, detail: null });
+    try {
+      const r = await api(API + "/tasks/" + taskId);
+      if (!r.ok) {
+        toast("加载任务详情失败");
+        set({ detailLoading: false, drawerTaskId: null });
+        return;
+      }
+      const t = (await r.json()) as Task;
+      // 抽屉打开期间任务可能已变化（或正在 running）→ 仅在仍是当前抽屉任务时写入
+      if (get().drawerTaskId !== taskId) return;
+      set({ detail: t, detailLoading: false });
+      if (t.status === "running" || t.status === "pending") get().pollDrawer(taskId);
+    } catch {
+      set({ detailLoading: false });
+      toast("加载任务详情失败");
+    }
+  },
+
+  closeDetail() {
+    set({ drawerTaskId: null, detail: null, detailLoading: false, focusCaseId: null });
+  },
+
+  pollDrawer(taskId) {
+    const timer = window.setInterval(async () => {
+      // 抽屉已关 / 已切到别的任务 → 停
+      if (get().drawerTaskId !== taskId) {
+        window.clearInterval(timer);
+        return;
+      }
+      try {
+        const r = await api(API + "/tasks/" + taskId);
+        if (!r.ok) return;
+        const t = (await r.json()) as Task;
+        if (get().drawerTaskId !== taskId) {
+          window.clearInterval(timer);
+          return;
+        }
+        set({ detail: t });
+        if (t.status === "completed" || t.status === "failed") {
+          window.clearInterval(timer);
+          toast(t.status === "completed" ? `任务完成：${t.cases_count} 个用例` : "任务失败");
+          void get().refresh();
+        }
+      } catch {
+        /* 单次失败继续 */
+      }
+    }, 2000);
+    // 兜底 5 分钟自动停
+    window.setTimeout(() => window.clearInterval(timer), 300_000);
+  },
+
+  focusCase(caseId) {
+    set((s) => ({ focusCaseId: caseId, focusCaseSeq: s.focusCaseSeq + 1 }));
   },
 }));
 

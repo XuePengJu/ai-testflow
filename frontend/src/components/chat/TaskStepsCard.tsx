@@ -56,6 +56,20 @@ export default function TaskStepsCard({ task }: { task: Task }) {
       {task.steps?.some((s) => s.error) && (
         <div className="tsc-error">{task.steps.find((s) => s.error)?.error?.slice(0, 200)}</div>
       )}
+      {task.status === "completed" && (
+        <div className="tsc-actions">
+          <button
+            type="button"
+            className="qtag confirm-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              void import("../../store/taskStore").then((m) => m.useTaskStore.getState().openDetail(task.id));
+            }}
+          >
+            查看用例 / 思维导图 →
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { useTaskStore } from "./store/taskStore";
 import ChatPanel from "./components/chat/ChatPanel";
 import ConversationPicker from "./components/chat/ConversationPicker";
 import TaskList from "./components/task/TaskList";
+import TaskDetailDrawer from "./components/task/TaskDetailDrawer";
 import { toast } from "./api/client";
 
 /**
@@ -88,6 +89,8 @@ export default function App() {
         <ChatPanel />
         <TaskList />
       </main>
+
+      <TaskDetailDrawer />
     </div>
   );
 }

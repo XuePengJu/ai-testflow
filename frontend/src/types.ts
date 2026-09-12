@@ -66,6 +66,20 @@ export interface StepLog {
   error?: string | null;
 }
 
+/** M3：任务详情里的单条用例（详情接口 cases[] 注入） */
+export interface CaseItem {
+  case_id: string;
+  title: string;
+  module?: string;
+  case_type?: string;
+  priority?: string;
+  pre_condition?: string;
+  steps?: string[];
+  step_expectations?: string[];
+  expected?: string;
+  test_data?: string;
+}
+
 /** 与 app/schemas/task.py:TaskOut 对齐（列表接口 cases 为 []） */
 export interface Task {
   id: string;
@@ -81,7 +95,7 @@ export interface Task {
   created_at?: string | null;
   finished_at?: string | null;
   steps: StepLog[];
-  cases?: Record<string, unknown>[];
+  cases?: CaseItem[];
 }
 
 /** 聊天输入草稿（流式回复完成后「生成测试用例」消费） */

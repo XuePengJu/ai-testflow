@@ -1,6 +1,7 @@
 /**
- * 任务列表侧栏：5s 轮询刷新，状态徽章，点击定位聊天内任务卡。
- * 详情抽屉属 M3 范围，本版点击 = 定位滚动 + 高亮。
+ * 任务列表侧栏：5s 轮询刷新，状态徽章。
+ * - 点击任务项 → 打开详情抽屉（M3）
+ * - 「⌖」定位按钮 → 滚动到聊天内任务卡（M2 行为保留）
  */
 import { useEffect } from "react";
 import { startListPolling, useTaskStore } from "../../store/taskStore";
@@ -20,6 +21,7 @@ export default function TaskList() {
   const tasks = useTaskStore((s) => s.tasks);
   const listLoaded = useTaskStore((s) => s.listLoaded);
   const deleteTask = useTaskStore((s) => s.deleteTask);
+  const openDetail = useTaskStore((s) => s.openDetail);
   const focusTask = useChatStore((s) => s.focusTask);
   const { token } = useAuth();
 
@@ -60,14 +62,30 @@ export default function TaskList() {
               <div
                 key={t.id}
                 className={`task-item ${t.status}`}
-                onClick={() => focusTask(t.id)}
-                title="点击定位到对话中的任务卡"
+                onClick={() => void openDetail(t.id)}
+                title="点击查看任务详情（用例 / 思维导图 / 导出）"
               >
                 <div className="t-name">{t.name}</div>
                 <div className="t-meta">
                   <span className={`pill pill-${b.cls}`}>{b.text}</span>
+                  {t.source_type === "iterate" && (
+                    <span className="pill pill-sub" title={`迭代自 ${t.parent_task_id || ""}`}>
+                      迭代
+                    </span>
+                  )}
                   <span>{t.cases_count || 0} 用例</span>
                   <span>{fmtTime(t.created_at)}</span>
+                  <button
+                    className="h-del t-locate"
+                    type="button"
+                    title="定位到对话中的任务卡"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      focusTask(t.id);
+                    }}
+                  >
+                    ⌖
+                  </button>
                   <button
                     className="h-del"
                     type="button"
