@@ -106,3 +106,77 @@ export interface ChatDraft {
   formats: string[];
 }
 
+/* ===== V2.8 M4：设置页 / admin / 分类（与后端对齐） ===== */
+
+/** 与 app/core/providers.py:PROVIDERS 对齐（键为厂商 id） */
+export interface ProviderModel {
+  id: string;
+  label: string;
+  vision: boolean;
+}
+
+export interface ProviderPreset {
+  label: string;
+  base_url: string;
+  note: string;
+  models: ProviderModel[];
+}
+
+export type ProviderMap = Record<string, ProviderPreset>;
+
+/** 与 app/schemas/llm_config.py:LLMConfigOut 对齐 */
+export interface LLMConfigRow {
+  slot: string;
+  provider: string;
+  base_url: string;
+  model: string;
+  /** 如 ****abcd；空 = 未配置 Key */
+  api_key_masked: string;
+}
+
+/** /api/llm/effective 响应（public_view 形态，不含 Key） */
+export interface LLMEffective {
+  source: string;
+  text: { provider: string; provider_label: string; base_url: string; model: string } | null;
+  vision: { provider: string; provider_label: string; base_url: string; model: string } | null;
+}
+
+/** /api/llm/test-default/{slot} 响应 */
+export interface LLMTestResult {
+  ok: boolean;
+  err_type?: string;
+  error_label?: string;
+  error?: string;
+  model?: string | null;
+  provider_label?: string;
+  latency_ms?: number;
+}
+
+/** 与 app/api/users.py:UserRow 对齐 */
+export interface AdminUserRow {
+  id: number;
+  username: string;
+  email: string | null;
+  role: Role;
+  is_active: boolean;
+  expires_at?: string | null;
+  tasks: number;
+  created_at?: string | null;
+}
+
+/** /api/admin/stats 响应 */
+export interface AdminStats {
+  registered_users: number;
+  active_guests: number;
+  cleaned_24h: number;
+  total_tasks: number;
+}
+
+/** /api/categories 响应（扁平列表，parent_id 组树） */
+export interface CategoryNode {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  task_count: number;
+}
+

@@ -20,12 +20,14 @@ import {
 import type { AuthResponse, Me, Role } from "../types";
 import {
   clearPersisted,
+  getAuthSnapshot,
   persist,
   readPersisted,
   setAuthSnapshot,
   TOKEN_KEY,
   type AuthSnapshot,
 } from "./authState";
+import { api } from "../api/client";
 
 type AuthMode = "login" | "register" | "upgrade";
 
@@ -79,6 +81,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState(s);
   }, []);
 
+  /** 登录/注册/转正成功后补拉 /auth/me：登录响应无 id（-1 占位），靠这里补齐真实 id/邮箱等 */
+  const refreshMe = useCallback(async () => {
+    const snap = getAuthSnapshot();
+    if (!snap.token) return;
+    try {
+      const r = await api("/api/auth/me", { keep401: true });
+      if (r.ok) {
+        const me = (await r.json()) as Me;
+        apply({ ...snap, me });
+      }
+    } catch {
+      /* 网络错误：保留登录响应里的 me */
+    }
+  }, [apply]);
+
   /* 初始化：refreshMe + 首开静默访客（旧版 refreshMe/enterGuestSilently 行为） */
   useEffect(() => {
     if (startedRef.current) return;
@@ -124,11 +141,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setReady(true);
         return;
       }
-      // 有 token：刷新 me
+      // 有 token：刷新 me（走 api()：非 admin 响应为 {enc:...} 密文，需透明解密；
+      // keep401 由本处自行处理失效清态，避免 api() 内部的强制登出+reload）
       try {
-        const r = await fetch("/api/auth/me", {
-          headers: { Authorization: "Bearer " + state.token },
-        });
+        const r = await api("/api/auth/me", { keep401: true });
         if (r.ok) {
           const me = (await r.json()) as Me;
           apply({ ...state, me });
@@ -167,19 +183,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       fd.append("password", password);
       const r = await fetch("/api/auth/login", { method: "POST", body: fd });
       const d = (await r.json().catch(() => ({}))) as Partial<AuthResponse> & { detail?: string };
-      if (!r.ok) throw new Error(detailOf(d) || "失败：" + r.status);
-      const me: Me & { enc_key?: string } = {
-        id: -1, // 登录响应无 id，用 /auth/me 刷新后补齐
-        username: d.username || username,
-        email: null,
-        role: d.role || "user",
-        is_active: true,
-        enc_key: d.enc_key,
-      };
-      apply({ token: d.access_token || "", encKey: d.enc_key || "", me });
-      setLoginModal({ open: false, mode: "login" });
-    },
-    [apply],
+    if (!r.ok) throw new Error(detailOf(d) || "失败：" + r.status);
+    const me: Me & { enc_key?: string } = {
+      id: -1, // 登录响应无 id，refreshMe 补齐
+      username: d.username || username,
+      email: null,
+      role: d.role || "user",
+      is_active: true,
+      enc_key: d.enc_key,
+    };
+    apply({ token: d.access_token || "", encKey: d.enc_key || "", me });
+    void refreshMe();
+    setLoginModal({ open: false, mode: "login" });
+  },
+    [apply, refreshMe],
   );
 
   const register = useCallback(
@@ -190,19 +207,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ username, email, password }),
       });
       const d = (await r.json().catch(() => ({}))) as Partial<AuthResponse> & { detail?: string };
-      if (!r.ok) throw new Error(detailOf(d) || "失败：" + r.status);
-      const me: Me & { enc_key?: string } = {
-        id: -1, // 登录响应无 id，用 /auth/me 刷新后补齐
-        username: d.username || username,
-        email: email || null,
-        role: d.role || "user",
-        is_active: true,
-        enc_key: d.enc_key,
-      };
-      apply({ token: d.access_token || "", encKey: d.enc_key || "", me });
-      setLoginModal({ open: false, mode: "login" });
-    },
-    [apply],
+    if (!r.ok) throw new Error(detailOf(d) || "失败：" + r.status);
+    const me: Me & { enc_key?: string } = {
+      id: -1, // 登录响应无 id，refreshMe 补齐
+      username: d.username || username,
+      email: email || null,
+      role: d.role || "user",
+      is_active: true,
+      enc_key: d.enc_key,
+    };
+    apply({ token: d.access_token || "", encKey: d.enc_key || "", me });
+    void refreshMe();
+    setLoginModal({ open: false, mode: "login" });
+  },
+    [apply, refreshMe],
   );
 
   const guest = useCallback(async () => {
@@ -235,19 +253,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ username, email, password }),
       });
       const d = (await r.json().catch(() => ({}))) as Partial<AuthResponse> & { detail?: string };
-      if (!r.ok) throw new Error(detailOf(d) || "失败：" + r.status);
-      const me: Me & { enc_key?: string } = {
-        id: -1, // 登录响应无 id，用 /auth/me 刷新后补齐
-        username: d.username || username,
-        email: email || null,
-        role: d.role || "user",
-        is_active: true,
-        enc_key: d.enc_key,
-      };
-      apply({ token: d.access_token || "", encKey: d.enc_key || "", me });
-      setLoginModal({ open: false, mode: "login" });
-    },
-    [apply],
+    if (!r.ok) throw new Error(detailOf(d) || "失败：" + r.status);
+    const me: Me & { enc_key?: string } = {
+      id: -1, // 登录响应无 id，refreshMe 补齐
+      username: d.username || username,
+      email: email || null,
+      role: d.role || "user",
+      is_active: true,
+      enc_key: d.enc_key,
+    };
+    apply({ token: d.access_token || "", encKey: d.enc_key || "", me });
+    void refreshMe();
+    setLoginModal({ open: false, mode: "login" });
+  },
+    [apply, refreshMe],
   );
 
   const logout = useCallback(() => {

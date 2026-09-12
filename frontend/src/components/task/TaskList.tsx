@@ -2,12 +2,17 @@
  * 任务列表侧栏：5s 轮询刷新，状态徽章。
  * - 点击任务项 → 打开详情抽屉（M3）
  * - 「⌖」定位按钮 → 滚动到聊天内任务卡（M2 行为保留）
+ * - M4：顶部分类树（新建/重命名/删除 + 过滤）+ 每任务「归类」下拉
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { startListPolling, useTaskStore } from "../../store/taskStore";
 import { useChatStore } from "../../store/chatStore";
+import { useCategoryStore } from "../../store/categoryStore";
 import { statusBadge } from "../chat/TaskStepsCard";
+import CategoryTree from "./CategoryTree";
 import { useAuth } from "../../hooks/useAuth";
+import { toast } from "../../api/client";
+import type { Task } from "../../types";
 
 function fmtTime(s?: string | null): string {
   if (!s) return "";
@@ -25,12 +30,26 @@ export default function TaskList() {
   const focusTask = useChatStore((s) => s.focusTask);
   const { token } = useAuth();
 
+  const categories = useCategoryStore((s) => s.categories);
+  const filter = useCategoryStore((s) => s.filter);
+  const refreshCats = useCategoryStore((s) => s.refresh);
+  const moveTask = useCategoryStore((s) => s.moveTask);
+
+  /** 当前展开「归类」菜单的任务 id */
+  const [menuTaskId, setMenuTaskId] = useState<string | null>(null);
+
   // 登录期间 5s 轮询；登出/未登录时停
   useEffect(() => {
     if (!token) return;
     const stop = startListPolling();
     return stop;
   }, [token]);
+
+  // 分类变化（归类后）同步刷新计数；任务列表变化也刷一次分类计数（节流：仅在 task 数量变化时）
+  const taskCount = tasks.length;
+  useEffect(() => {
+    if (token) void refreshCats();
+  }, [token, taskCount, refreshCats]);
 
   if (!token) {
     return (
@@ -41,27 +60,49 @@ export default function TaskList() {
     );
   }
 
+  // 分类过滤
+  const visible: Task[] = tasks.filter((t) => {
+    if (filter === "all") return true;
+    if (filter === "none") return t.category_id == null;
+    return t.category_id === filter;
+  });
+
+  const catName = (id: number | null | undefined): string =>
+    id == null ? "未分类" : categories.find((c) => c.id === id)?.name || "未分类";
+
+  const doMove = async (taskId: string, categoryId: number | null) => {
+    setMenuTaskId(null);
+    if (await moveTask(taskId, categoryId)) {
+      toast("任务已归入「" + (categoryId == null ? "未分类" : catName(categoryId)) + "」");
+    }
+  };
+
+  const filterLabel =
+    filter === "all" ? "" : ` · ${filter === "none" ? "未分类" : catName(filter)}`;
+
   return (
     <aside className="side-panel task-panel">
       <div className="side-head">
-        <span>我的任务{tasks.length ? `（${tasks.length}）` : ""}</span>
+        <span>我的任务{filterLabel ? `（${visible.length}/${tasks.length}${filterLabel}）` : tasks.length ? `（${tasks.length}）` : ""}</span>
       </div>
+
+      <CategoryTree />
+
       <div className="hist-list">
         {!listLoaded && tasks.length === 0 ? (
           <div className="hist-empty">加载中…</div>
-        ) : tasks.length === 0 ? (
+        ) : visible.length === 0 ? (
           <div className="hist-empty">
-            还没有任务
-            <br />
-            在对话中点「✨ 生成测试用例」
+            {tasks.length > 0 ? "该分类下暂无任务" : <>还没有任务<br />在对话中点「✨ 生成测试用例」</>}
           </div>
         ) : (
-          tasks.map((t) => {
+          visible.map((t) => {
             const b = statusBadge(t.status);
             return (
               <div
                 key={t.id}
                 className={`task-item ${t.status}`}
+                data-task-id={t.id}
                 onClick={() => void openDetail(t.id)}
                 title="点击查看任务详情（用例 / 思维导图 / 导出）"
               >
@@ -75,6 +116,18 @@ export default function TaskList() {
                   )}
                   <span>{t.cases_count || 0} 用例</span>
                   <span>{fmtTime(t.created_at)}</span>
+                  <button
+                    className="h-del t-cat-btn"
+                    type="button"
+                    title={`归类（当前：${catName(t.category_id)}）`}
+                    data-testid={`cat-menu-${t.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuTaskId(menuTaskId === t.id ? null : t.id);
+                    }}
+                  >
+                    🏷
+                  </button>
                   <button
                     className="h-del t-locate"
                     type="button"
@@ -98,6 +151,18 @@ export default function TaskList() {
                     🗑
                   </button>
                 </div>
+                {menuTaskId === t.id && (
+                  <div className="cat-move-menu" onClick={(e) => e.stopPropagation()} data-testid={`cat-move-${t.id}`}>
+                    <div className="cmm-title">归类到…</div>
+                    <button type="button" onClick={() => void doMove(t.id, null)}>未分类</button>
+                    {categories.map((c) => (
+                      <button key={c.id} type="button" onClick={() => void doMove(t.id, c.id)}>
+                        {c.name}（{c.task_count}）
+                      </button>
+                    ))}
+                    {categories.length === 0 && <div className="cmm-empty">暂无分类，请先在上方新建</div>}
+                  </div>
+                )}
               </div>
             );
           })

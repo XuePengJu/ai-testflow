@@ -31,10 +31,11 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<Response
   const keep401 = !!opts.keep401;
   delete (o as Record<string, unknown>).keep401;
 
-  if (cryptoOn(snap)) {
-    // JSON 请求体加密；FormData（文件上传）保持明文
-    if (opts.body && typeof opts.body === "string") {
-      headers["Content-Type"] = "application/json";
+  // 字符串 body 一律声明 JSON（admin 不加密时同样需要，否则 text/plain → 422）；
+  // 加密开启时再把明文 JSON 包成 {enc:...}
+  if (opts.body && typeof opts.body === "string") {
+    headers["Content-Type"] = "application/json";
+    if (cryptoOn(snap)) {
       o = { ...o, body: JSON.stringify({ enc: aesGcmEncrypt(snap.encKey!, opts.body) }) };
     }
   }
@@ -43,7 +44,22 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<Response
   const r = await fetch(path, o);
 
   if (r.status === 401) {
-    if (keep401) return r;
+    if (keep401) {
+      // keep401：原样交给调用方，但密文体先透明解密（如改密码"旧密码错误"detail）
+      try {
+        const d = await r.clone().json();
+        if (cryptoOn(snap) && d && d.enc && typeof d.enc === "string") {
+          return new Response(aesGcmDecrypt(snap.encKey!, d.enc), {
+            status: r.status,
+            statusText: r.statusText,
+            headers: r.headers,
+          });
+        }
+      } catch {
+        /* 非 JSON 响应体，原样返回 */
+      }
+      return r;
+    }
     let detail = "";
     try {
       let d = await r.clone().json();
@@ -91,6 +107,40 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<Response
 /** 轻量 toast（事件驱动，避免为 client 引入 React 依赖环） */
 export function toast(msg: string): void {
   window.dispatchEvent(new CustomEvent("aitf-toast", { detail: msg }));
+}
+
+/**
+ * M4：JSON 便捷封装。ok → 解析返回；非 ok → toast 错误 detail 并返回 null。
+ * 统一处理 422 数组校验信息（避免显示 [object Object]）。
+ */
+export async function apiJson<T>(path: string, opts: ApiOptions = {}): Promise<T | null> {
+  let r: Response;
+  try {
+    r = await api(path, opts);
+  } catch {
+    return null;
+  }
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const d = (await r.json()) as { detail?: unknown };
+      if (typeof d.detail === "string") detail = d.detail;
+      else if (Array.isArray(d.detail)) {
+        const first = d.detail[0] as { msg?: string } | undefined;
+        detail = first?.msg || detail;
+      }
+    } catch {
+      /* 非 JSON 错误体 */
+    }
+    toast(detail);
+    return null;
+  }
+  if (r.status === 204) return null;
+  try {
+    return (await r.json()) as T;
+  } catch {
+    return null;
+  }
 }
 
 /**
