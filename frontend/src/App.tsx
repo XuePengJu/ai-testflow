@@ -1,28 +1,50 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "./hooks/useAuth";
+import { useChatStore } from "./store/chatStore";
+import { useTaskStore } from "./store/taskStore";
+import ChatPanel from "./components/chat/ChatPanel";
+import ConversationPicker from "./components/chat/ConversationPicker";
+import TaskList from "./components/task/TaskList";
+import { toast } from "./api/client";
 
 /**
- * M1 脚手架版 App：认证壳 + 加密链路自检。
- * M2 起主页替换为对话驱动视图（chat/），此处结构会随里程碑演进。
+ * V2.8 M2：对话驱动三栏布局。
+ * 左：历史会话 | 中：对话流（SSE 流式 + 任务步骤卡）| 右：任务列表（5s 轮询）。
+ * header 保留 M1 认证区 + 加密链路自检（M2 收为轻量按钮）。
  */
 export default function App() {
-  const { me, role, ready, showLogin, logout } = useAuth();
-  const [check, setCheck] = useState<string>("");
+  const { me, role, ready, token, showLogin, logout } = useAuth();
+  const refreshConversations = useChatStore((s) => s.refreshConversations);
+  const newConversation = useChatStore((s) => s.newConversation);
+  const refreshTasks = useTaskStore((s) => s.refresh);
+  const [checking, setChecking] = useState(false);
+
+  // 登录态变化：拉会话/任务；登出清对话
+  useEffect(() => {
+    if (token) {
+      void refreshConversations();
+      void refreshTasks();
+    } else {
+      newConversation();
+    }
+  }, [token, refreshConversations, refreshTasks, newConversation]);
 
   const runSelfCheck = async () => {
-    setCheck("请求中…");
+    if (checking) return;
+    setChecking(true);
     try {
       const { api } = await import("./api/client");
       const r = await api("/api/auth/me");
       const text = await r.text();
-      setCheck(
-        `HTTP ${r.status}\n${text.slice(0, 400)}` +
-          (role && role !== "admin"
-            ? `\n\n✓ 响应已走 AES-256-GCM 透明解密（role=${role}）`
-            : `\n\n- admin 明文直通（role=${role ?? "未登录"}）`),
-      );
+      const encNote =
+        role && role !== "admin"
+          ? `✓ AES-256-GCM 透明解密正常（role=${role}）`
+          : `- 明文直通（role=${role ?? "未登录"}）`;
+      toast(`HTTP ${r.status} · ${encNote} · ${text.slice(0, 120)}`);
     } catch (e) {
-      setCheck("✗ " + (e instanceof Error ? e.message : String(e)));
+      toast("✗ " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setChecking(false);
     }
   };
 
@@ -31,10 +53,13 @@ export default function App() {
   }
 
   return (
-    <div className="m1-shell">
-      <header className="m1-header">
-        <div className="m1-logo">AI 测试工作流平台</div>
-        <div className="m1-identity">
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-logo">AI 测试工作流平台</div>
+        <div className="app-identity">
+          <button className="btn ghost" onClick={runSelfCheck} disabled={checking} title="验证加密链路透明解密">
+            🔐 自检
+          </button>
           {!me || !role ? (
             <button className="btn" onClick={() => showLogin("login")}>
               登录 / 注册
@@ -58,26 +83,10 @@ export default function App() {
         </div>
       </header>
 
-      <main className="m1-main">
-        <h1>V2.8 · M1 脚手架就绪</h1>
-        <p className="m1-desc">
-          React 18 + TypeScript(strict) + Vite 5 · monorepo（frontend-legacy 可一键回退）。
-          <br />
-          M2 起这里将是对话驱动主页；当前页面用于 M1 验收：三级角色登录 + 加密链路。
-        </p>
-
-        <section className="m1-card">
-          <h3>加密链路自检</h3>
-          <p className="m1-hint">
-            通过 api client 请求 <code>/api/auth/me</code>：
-            user/guest 的 JSON 响应会被后端加密为 <code>{"{enc:...}"}</code>，
-            前端透明解密后应显示明文用户信息——双向打通即证明 AES-256-GCM 迁移无误。
-          </p>
-          <button className="btn primary" onClick={runSelfCheck}>
-            运行自检
-          </button>
-          {check && <pre className="m1-pre">{check}</pre>}
-        </section>
+      <main className="app-main">
+        <ConversationPicker />
+        <ChatPanel />
+        <TaskList />
       </main>
     </div>
   );
