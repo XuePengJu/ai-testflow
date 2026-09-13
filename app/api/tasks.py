@@ -18,7 +18,7 @@ from app.schemas.task import TaskOut, StepLogOut
 from app.services.doc_extract import SUPPORTED_EXTS
 from app.workflow.engine import run_task
 from app.workflow.iterate import run_iterate
-from src.models.testcase import ensure_compound_titles
+from src.models.testcase import ensure_case_ids, ensure_compound_titles
 
 router = APIRouter()
 
@@ -40,14 +40,18 @@ def _parse_cases(cases_json: str | None) -> list[dict]:
 
     返回结构化用例列表。解析失败时兜底返回 []，不让单条脏数据把整个详情接口炸掉。
 
-    读取侧统一把标题补齐为 `动作 -> 预期`：历史任务的 title 是纯动作形式，
-    不补齐的话前端（用例列表 / 思维导图 / 会话回填）会看不到预期信息。
+    读取侧统一补齐两件事：
+    1. 缺失的用例ID按现有最大 TC-序号递增补全（存量任务兜底，前端表格/搜索/导图/会话回填一致）；
+    2. 标题补齐为 `动作 -> 预期`：历史任务的 title 是纯动作形式，不补齐看不到预期信息。
     """
     if not cases_json:
         return []
     try:
         obj = json.loads(cases_json)
-        return ensure_compound_titles(obj) if isinstance(obj, list) else []
+        if not isinstance(obj, list):
+            return []
+        obj = ensure_case_ids(obj)  # 读取侧补全缺失用例ID：存量任务兜底，TC-序号接续递增
+        return ensure_compound_titles(obj)  # 读取侧补齐 `动作 -> 预期` 复合标题
     except (ValueError, TypeError):
         return []
 

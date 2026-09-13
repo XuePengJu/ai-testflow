@@ -8,7 +8,7 @@
  *   腾出的宽度加给「标题」与「测试数据」列；导图/导出同步用复合标题。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Task } from "../../types";
+import type { Task, CaseItem } from "../../types";
 
 interface Props {
   task: Task;
@@ -18,8 +18,24 @@ interface Props {
 
 const PRIORITY_CLS: Record<string, string> = { P0: "fail", P1: "run", P2: "sub" };
 
+// 内存兜底：补全缺失用例ID（等价于后端 ensure_case_ids），防御性双保险——
+// 即使后端返回里个别 case_id 为空（存量数据/异常路径），前端表格/搜索/定位也不丢编号。
+function ensureCaseIds(list: CaseItem[]): CaseItem[] {
+  let maxN = 0;
+  for (const c of list) {
+    const m = (c.case_id || "").trim().match(/^TC-?0*(\d+)$/);
+    if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
+  }
+  return list.map((c) => {
+    if ((c.case_id || "").trim()) return c;
+    maxN += 1;
+    return { ...c, case_id: `TC-${String(maxN).padStart(3, "0")}` };
+  });
+}
+
 export default function CaseListTab({ task, focusCaseId, focusSeq }: Props) {
-  const cases = task.cases || [];
+  const rawCases = task.cases || [];
+  const cases = useMemo(() => ensureCaseIds(rawCases), [rawCases]);
   const [q, setQ] = useState("");
   const listRef = useRef<HTMLDivElement | null>(null);
 
