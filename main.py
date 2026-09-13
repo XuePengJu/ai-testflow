@@ -15,7 +15,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, categories, chat, conversations, guest, llm_config, tasks, users
+
+class NoCacheStaticFiles(StaticFiles):
+    """静态资源挂载：追加 no-cache，避免浏览器缓存旧 index.html/JS 导致「改完不生效」。
+
+    Vite 产物文件名带内容哈希、本就强缓存友好；关键是不让固定名 index.html 命中旧缓存、
+    从而引用旧哈希的 JS。只作用于 /assets 与 /vendor 挂载点，不影响 /api。
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+from app.api import auth, categories, chat, conversations, files, guest, llm_config, tasks, users
 from app.core.config import STATIC_DIR, jwt_secret_is_placeholder, ENV
 from app.core.db import init_db
 
@@ -63,6 +76,7 @@ app.include_router(users.router, prefix="/api")
 app.include_router(categories.router, prefix="/api")
 app.include_router(llm_config.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
+app.include_router(files.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 
 
@@ -101,11 +115,11 @@ def favicon():
 # - 旧版（frontend-legacy）：/vendor/*（mind-elixir 等第三方库本地化）
 _assets_dir = STATIC_DIR / "assets"
 if _assets_dir.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+    app.mount("/assets", NoCacheStaticFiles(directory=str(_assets_dir)), name="assets")
 
 _vendor_dir = STATIC_DIR / "vendor"
 if _vendor_dir.is_dir():
-    app.mount("/vendor", StaticFiles(directory=str(_vendor_dir)), name="vendor")
+    app.mount("/vendor", NoCacheStaticFiles(directory=str(_vendor_dir)), name="vendor")
 
 
 if __name__ == "__main__":
