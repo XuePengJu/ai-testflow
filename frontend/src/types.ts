@@ -104,6 +104,8 @@ export interface ChatDraft {
   file?: File | null;
   kind: string;
   formats: string[];
+  /** 「深度思考」开关（默认开）：关掉则不请求模型思考，也不展示思考面板 */
+  thinking?: boolean;
 }
 
 /* ===== V2.8 M4：设置页 / admin / 分类（与后端对齐） ===== */

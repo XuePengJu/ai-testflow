@@ -54,3 +54,5 @@ class ChatIn(BaseModel):
     history: list[dict] = []         # [{role:"user"/"assistant", content:"..."}]
     conversation_id: str | None = None   # 归属会话（落库对话记录用；None 则不落库）
     task_id: str | None = None       # 迭代补充模式：关联的任务 id，AI 回复时附该任务用例摘要
+    file_id: str | None = None       # 对话附件 id（POST /api/files 返回），AI 读取文档内容后作答
+    thinking: bool = True            # 「深度思考」开关：关掉则不请求思考、也不显示思考面板

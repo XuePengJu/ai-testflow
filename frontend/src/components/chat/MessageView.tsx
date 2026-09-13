@@ -1,34 +1,93 @@
 /**
  * 单条消息气泡：用户 / AI 流式 / AI 完成（含思考折叠 + 生成按钮）/ 任务卡。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import type { ChatMsg } from "../../store/chatStore";
 import { useChatStore } from "../../store/chatStore";
 import { toast } from "../../api/client";
 import TaskStepsCard from "./TaskStepsCard";
 
+// GFM：表格 / 任务列表 / 删除线；breaks：单个换行也换行（保持旧版 <br> 的观感，行距不变）
+marked.setOptions({ gfm: true, breaks: true });
+
+/** 思考面板收起时的高度上限（与 base.css 的 .think-body max-height 保持一致） */
+const THINK_MAX_HEIGHT = 220;
+
+/**
+ * 思考面板：默认展开；内容超过高度上限时给「展开全部 / 收起」；
+ * 点标题行整体折叠/展开。
+ */
 function ThinkingPanel({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false); // 整体折叠（点标题行）
+  const [expanded, setExpanded] = useState(false);   // 展开全部（超出上限时）
+  const [overflow, setOverflow] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // 用固定上限比较而非 scrollHeight/clientHeight：展开后 clientHeight 也变大，
+  // 那样按钮会在点开的瞬间自己消失
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || collapsed) return;
+    setOverflow(el.scrollHeight > THINK_MAX_HEIGHT + 4);
+  }, [text, collapsed, expanded]);
+
   return (
-    <div className={`think-panel ${open ? "open" : ""}`}>
-      <button className="think-head" type="button" onClick={() => setOpen(!open)}>
-        <span className="arrow">{open ? "▾" : "▸"}</span>
+    <div className={`think-panel ${collapsed ? "" : "open"}`}>
+      <button className="think-head" type="button" onClick={() => setCollapsed(!collapsed)}>
+        <span className="arrow">{collapsed ? "▸" : "▾"}</span>
         <span className="label">思考过程</span>
       </button>
-      {open && <div className="think-body">{text}</div>}
+      {!collapsed && (
+        <>
+          {/* 思考内容同样走 markdown（模型推理里常带 `###` 小标题与列表），样式靠 .think-body 内选择器压成紧凑版 */}
+          <div
+            className={`think-body ${expanded ? "expanded" : ""}`}
+            ref={bodyRef}
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
+          />
+          {overflow && (
+            <button className="think-more" type="button" onClick={() => setExpanded(!expanded)}>
+              {expanded ? "收起" : "展开全部"}
+            </button>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-/** 简易 markdown：换行段落 + **加粗**（平移旧版 renderReplyMarkdown，先 escape 再替换） */
-function renderReply(text: string): string {
+/**
+ * markdown → 安全 HTML。
+ *
+ * 旧版是手写简易渲染（只认 **加粗** + 换行），`###` 标题 / 有序列表 / 代码块 / 表格
+ * 全部原样当文本吐出来。现改用 marked 解析 + DOMPurify 消毒。
+ *
+ * 消毒不是可选项：marked 会把 AI 回复里的 HTML 原样输出，而模型输出属不可信内容，
+ * 不过一遍 DOMPurify 等于把 innerHTML 直接交给它（旧版是先 escape 再替换，本身安全）。
+ */
+function renderMarkdown(text: string): string {
+  if (!text) return "";
+  const html = marked.parse(text, { async: false }) as string;
+  return DOMPurify.sanitize(html);
+}
+
+/**
+ * 流式生成期间的轻量渲染：escape + **加粗** + 换行。
+ *
+ * 为什么流式不直接上完整 markdown：
+ *  1. 外层是 <span>（要跟打字光标同行），只能放行内元素，塞 <h3>/<p>/<ul> 属非法嵌套；
+ *  2. 流式文本每帧都在变，` ``` ` 代码块、表格这类结构未闭合时会剧烈抖动；
+ *  3. 收起时才是一次性成型，排版「突然生效」比逐帧重排更顺眼。
+ */
+function renderInline(text: string): string {
   const esc = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   return esc
-    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
-    .replace(/\n\n+/g, "<br><br>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\n/g, "<br>");
 }
 
@@ -41,29 +100,35 @@ export default function MessageView({ msg }: { msg: ChatMsg }) {
       <div className="msg msg-user">
         <div className="avatar">你</div>
         <div className="bubble">
-          {msg.content.split("\n").map((l, i) => (
-            <p key={i}>{l}</p>
-          ))}
+          {/* 附件单独成行显示，不混进正文字本；只传附件时气泡就只有这枚徽标 */}
+          {msg.fileName && <div className="msg-file">📎 {msg.fileName}</div>}
+          {msg.content && msg.content.split("\n").map((l, i) => <p key={i}>{l}</p>)}
         </div>
       </div>
     );
   }
 
   // ---- AI 消息 ----
-  const mockTag = msg.source === "mock" ? <span className="mock-tag">(演示模式)</span> : null;
+  // 演示/未配模型时在标题行给一枚显式徽标（放头像里会被 34px 圆形裁掉，看不出来）
+  const mockTag = msg.source === "mock" ? <span className="mock-tag">演示模式</span> : null;
 
   return (
     <div className="msg msg-ai">
-      <div className="avatar">AI{mockTag}</div>
+      <div className="avatar">AI</div>
       <div className="bubble chat-bubble">
-        <div className="bubble-title">AI 测试工程师</div>
+        <div className="bubble-title">
+          AI 测试工程师
+          {mockTag}
+        </div>
+
+        {msg.notice && <div className="msg-notice">⚠ {msg.notice}</div>}
 
         {msg.thinking && <ThinkingPanel text={msg.thinking} />}
 
         {streaming ? (
           <div className="reply-body streaming">
             {msg.content ? (
-              <span dangerouslySetInnerHTML={{ __html: renderReply(msg.content) }} />
+              <span dangerouslySetInnerHTML={{ __html: renderInline(msg.content) }} />
             ) : (
               <span className="thinking-dots">
                 <span />
@@ -77,7 +142,7 @@ export default function MessageView({ msg }: { msg: ChatMsg }) {
           <div className="reply-body msg-error">⚠ {msg.error || "生成失败"}</div>
         ) : (
           <>
-            <div className="reply-body" dangerouslySetInnerHTML={{ __html: renderReply(msg.content) }} />
+            <div className="reply-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
             {msg.state === "stopped" && <div className="msg-stopped">（已停止生成）</div>}
           </>
         )}

@@ -179,10 +179,113 @@ body {
 }
 .msg-user .bubble { background: #e8f3ff; border-color: #bedaff; }
 .msg-user .bubble p { margin: 0; white-space: pre-wrap; }
-.bubble-title { font-size: 12px; color: #8f959e; margin-bottom: 6px; }
-.mock-tag { font-size: 11px; color: #8f959e; margin-left: 4px; font-weight: 400; }
+/* 用户消息里的附件徽标（📎 文件名）：与正文分行，只传附件时独占气泡 */
+.msg-file {
+  display: inline-block; max-width: 100%; margin-bottom: 6px;
+  padding: 2px 10px; background: #fff; border: 1px solid #bedaff; border-radius: 12px;
+  font-size: 12px; line-height: 1.7; color: #165dff;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+}
+.msg-file:last-child { margin-bottom: 0; }
+/* AI 气泡里的非终态提示（模型降级 / 生成中断）：黄色提示条，不改变消息状态 */
+.msg-notice {
+  margin-bottom: 8px; padding: 6px 10px;
+  background: #fff7e6; border: 1px solid #ffd591; border-radius: 6px;
+  font-size: 12px; line-height: 1.6; color: #a05a00;
+}
+.bubble-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: #8f959e; margin-bottom: 6px;
+}
+/* 演示模式徽标：必须一眼可见。
+   注意别再塞进 .avatar（34px 圆形，会把文字折行裁成一坨噪点，用户看不出没配模型）。 */
+.mock-tag {
+  display: inline-block; flex: none; padding: 1px 8px; border-radius: 9px;
+  font-size: 11px; font-weight: 500; line-height: 16px;
+  color: #d25f00; background: #fff3e8; border: 1px solid #ffcf8b;
+}
 .reply-body p { margin: 0 0 8px; }
 .reply-body p:last-child { margin-bottom: 0; }
+
+/* ---------- markdown 排版 ----------
+   旧版手写渲染只认 **加粗**，### 标题 / 有序列表 / 代码块全成了纯文本；
+   现在交给 marked 解析，样式在这一层收口。
+   标题字号刻意压平：气泡里冒出 # 一级标题会撑破布局。 */
+.reply-body > :first-child { margin-top: 0; }
+.reply-body > :last-child { margin-bottom: 0; }
+.reply-body h1, .reply-body h2, .reply-body h3,
+.reply-body h4, .reply-body h5, .reply-body h6 {
+  margin: 14px 0 8px; font-weight: 600; line-height: 1.5; color: #1f2329;
+}
+.reply-body h1 { font-size: 16px; }
+.reply-body h2 { font-size: 15px; }
+.reply-body h3 { font-size: 14.5px; }
+.reply-body h4, .reply-body h5, .reply-body h6 { font-size: 14px; color: #4e5969; }
+
+.reply-body ul, .reply-body ol { margin: 6px 0 10px; padding-left: 22px; }
+.reply-body ul { list-style: disc; }
+.reply-body ol { list-style: decimal; }
+.reply-body li { margin: 3px 0; }
+.reply-body li::marker { color: #86909c; }
+.reply-body li > p { margin: 0 0 4px; }
+
+.reply-body code {
+  padding: 1px 5px; border-radius: 4px; background: #f2f3f5; color: #c7254e;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+}
+.reply-body pre {
+  margin: 8px 0; padding: 10px 12px; background: #f7f8fa;
+  border: 1px solid #eceef1; border-radius: 6px; overflow-x: auto;
+}
+.reply-body pre code { padding: 0; background: none; color: #1f2329; white-space: pre; }
+
+.reply-body blockquote {
+  margin: 8px 0; padding: 4px 12px; border-left: 3px solid #bedaff;
+  background: #f5f9ff; color: #4e5969;
+}
+.reply-body hr { margin: 12px 0; border: none; border-top: 1px solid #e5e6eb; }
+.reply-body a { color: #165dff; text-decoration: none; }
+.reply-body a:hover { text-decoration: underline; }
+.reply-body img { max-width: 100%; border-radius: 6px; }
+.reply-body strong { font-weight: 600; }
+/* display:block + width:max-content：表格自定义宽度但窄屏可横向滚动，不撑破气泡 */
+.reply-body table {
+  margin: 8px 0; border-collapse: collapse; font-size: 13px;
+  display: block; width: max-content; max-width: 100%; overflow-x: auto;
+}
+.reply-body th, .reply-body td { padding: 5px 10px; border: 1px solid #e5e6eb; text-align: left; }
+.reply-body th { background: #f7f8fa; font-weight: 600; }
+
+/* 思考面板内的 markdown：结构同款，整体压一档，保持「次要信息」的视觉层级 */
+.think-body > :first-child { margin-top: 0; }
+.think-body > :last-child { margin-bottom: 0; }
+.think-body p { margin: 0 0 6px; }
+.think-body h1, .think-body h2, .think-body h3,
+.think-body h4, .think-body h5, .think-body h6 {
+  margin: 8px 0 4px; font-size: 12.5px; font-weight: 600; color: #4e5969;
+}
+.think-body ul, .think-body ol { margin: 4px 0 6px; padding-left: 18px; }
+.think-body ul { list-style: disc; }
+.think-body ol { list-style: decimal; }
+.think-body li { margin: 2px 0; }
+.think-body li::marker { color: #a9aeb8; }
+.think-body code {
+  padding: 0 4px; border-radius: 3px; background: #eceef1; color: #4e5969;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px;
+}
+.think-body pre {
+  margin: 6px 0; padding: 8px 10px; background: #eceef1;
+  border-radius: 5px; overflow-x: auto;
+}
+.think-body pre code { padding: 0; background: none; white-space: pre; }
+.think-body blockquote { margin: 6px 0; padding: 2px 10px; border-left: 3px solid #d9dde3; }
+.think-body hr { margin: 8px 0; border: none; border-top: 1px solid #e5e6eb; }
+.think-body table {
+  margin: 6px 0; border-collapse: collapse; font-size: 12px;
+  display: block; width: max-content; max-width: 100%; overflow-x: auto;
+}
+.think-body th, .think-body td { padding: 3px 8px; border: 1px solid #e5e6eb; text-align: left; }
+.think-body th { background: #eceef1; font-weight: 600; }
 
 /* 流式打字光标 + 思考点 */
 .reply-body.streaming { min-height: 22px; }
@@ -208,8 +311,20 @@ body {
 .think-head:hover { color: #165dff; }
 .think-body {
   margin: 4px 0 4px 8px; padding: 8px 10px; background: #f7f8fa; border-radius: 6px;
-  color: #646a73; font-size: 12.5px; white-space: pre-wrap; max-height: 220px; overflow-y: auto;
+  color: #646a73; font-size: 12.5px; line-height: 1.7;
+  max-height: 220px; overflow-y: auto;   /* 上限值需与 MessageView.THINK_MAX_HEIGHT 一致 */
+  /* 原来是 white-space: pre-wrap（纯文本直出）。改走 markdown 后必须放开，
+     否则 marked 输出的块级元素之间会凭源码缩进多出一堆空行 */
+  white-space: normal;
 }
+/* 「展开全部」：解除上限，完整展示思考内容 */
+.think-body.expanded { max-height: none; overflow-y: visible; }
+.think-more {
+  display: block; margin: 0 0 6px 8px; padding: 0;
+  border: none; background: none; cursor: pointer;
+  color: #165dff; font-size: 12px;
+}
+.think-more:hover { text-decoration: underline; }
 
 /* 操作按钮行 */
 .quick-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
@@ -252,37 +367,67 @@ body {
   border-top: 1px solid #ffbdb8; word-break: break-all;
 }
 
-/* ---- 输入区 ---- */
+/* ---- 输入区（方案B：浮动输入岛） ---- */
 .chat-input-wrap {
-  flex: none; border-top: 1px solid #e5e6eb; background: #fff; padding: 12px 20px 16px;
+  flex: none; background: #f5f7fa; padding: 14px 20px 18px;
 }
-.chat-input-row { display: flex; align-items: flex-end; gap: 8px; }
-.chat-input-row textarea {
-  flex: 1; resize: none; border: 1px solid #dcdfe6; border-radius: 8px;
-  padding: 9px 12px; font-size: 14px; line-height: 1.6; font-family: inherit;
-  max-height: 140px; outline: none;
+.chat-input-row {
+  display: flex; align-items: flex-end; gap: 8px;
+  background: #fff; border: 1px solid #e5e6eb; border-radius: 16px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.08);
+  padding: 8px 10px; transition: border-color .18s, box-shadow .18s;
 }
-.chat-input-row textarea:focus { border-color: #165dff; }
-.chat-input-row textarea:disabled { background: #f7f8fa; color: #8f959e; }
+.chat-input-row:focus-within { border-color: #165dff; box-shadow: 0 2px 14px rgba(22,93,255,.12); }
+.chat-input-row .input-pill {
+  flex: 1; display: flex; align-items: flex-end;
+  background: #f2f3f5; border-radius: 12px; padding: 3px;
+}
+.chat-input-row .input-pill textarea {
+  width: 100%; resize: none; border: none; outline: none; background: transparent;
+  padding: 8px 10px; font-size: 14px; line-height: 1.6; font-family: inherit;
+  min-height: 56px; max-height: 220px; overflow-y: auto;
+  box-sizing: border-box;
+}
+.chat-input-row .input-pill textarea:disabled { color: #8f959e; }
 .icon-btn {
-  flex: none; width: 38px; height: 38px; border: 1px solid #dcdfe6; border-radius: 8px;
-  background: #fff; cursor: pointer; font-size: 15px;
+  flex: none; width: 38px; height: 38px; border: none; border-radius: 10px;
+  background: transparent; cursor: pointer; font-size: 18px; color: #414141;
+  display: grid; place-items: center; transition: background .18s, color .18s;
 }
-.icon-btn:hover { border-color: #165dff; }
-.icon-btn:disabled { opacity: 0.5; cursor: default; }
+.icon-btn:hover { background: #f0f6ff; color: #165dff; }
+.icon-btn:disabled { opacity: .5; cursor: default; }
+/* 深度思考开关：默认开（蓝底高亮），关闭为灰底 */
+.think-toggle {
+  flex: none; height: 38px; padding: 0 12px; border-radius: 10px;
+  border: 1px solid #e5e6eb; background: #fff; color: #646a73;
+  font-size: 12.5px; font-family: inherit; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+  transition: background .18s, color .18s, border-color .18s;
+}
+.think-toggle:hover { border-color: #bedaff; color: #165dff; }
+.think-toggle.active { border-color: #bedaff; background: #f0f7ff; color: #165dff; font-weight: 500; }
+.think-toggle:disabled { opacity: .5; cursor: default; }
 .send-btn {
-  flex: none; border: none; border-radius: 8px; background: #165dff; color: #fff;
-  font-size: 14px; padding: 0 20px; height: 38px; cursor: pointer;
+  flex: none; border: none; border-radius: 10px; background: #165dff; color: #fff;
+  font-size: 14px; padding: 0 18px; height: 38px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px; transition: background .18s;
 }
-.send-btn:disabled { background: #94bfff; cursor: default; }
+.send-btn:hover { background: #3c7eff; }
+.send-btn:disabled { background: #5b8ff9; cursor: default; }
 .send-btn.streaming { background: #d83931; }
 .file-chip {
   display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 12.5px;
-  background: #f0f7ff; border: 1px solid #bedaff; border-radius: 8px; padding: 6px 10px;
+  background: #f0f7ff; border: 1px solid #bedaff; border-radius: 12px; padding: 6px 10px;
   color: #165dff; width: fit-content;
 }
 .file-chip .fc-size { color: #8f959e; }
 .file-chip button { border: none; background: none; color: #d83931; cursor: pointer; font-size: 12px; }
+
+/* 窄屏：开关收成纯图标，避免挤占输入框 */
+@media (max-width: 720px) {
+  .think-toggle { padding: 0 9px; }
+  .think-toggle .tt-text { display: none; }
+}
 
 /* 响应式：窄屏折叠侧栏 */
 @media (max-width: 1080px) {
@@ -294,13 +439,13 @@ body {
 .drawer-mask {
   position: fixed; inset: 0; background: rgba(15,23,42,.45);
   backdrop-filter: blur(3px); z-index: 100;
-  display: grid; place-items: center; padding: 3vh 3vw;
+  display: grid; place-items: center; padding: 1.5vh 1.5vw;
   opacity: 0; pointer-events: none; transition: opacity .25s;
 }
 .drawer-mask.show { opacity: 1; pointer-events: auto; }
 .task-drawer {
-  background: #fff; width: 100%; max-width: 94vw;
-  height: 82vh; max-height: 94vh; box-sizing: border-box;
+  background: #fff; width: 100%; max-width: 96vw;
+  height: 90vh; max-height: 96vh; box-sizing: border-box;
   display: flex; flex-direction: column; overflow: hidden;
   border-radius: 16px; box-shadow: 0 24px 64px rgba(0,0,0,.25);
   transform: scale(.96); opacity: 0;
@@ -389,8 +534,9 @@ body {
   border: 1px solid #e5e7eb; border-radius: 11px;
   background: #fafbfc; overflow: hidden;
 }
-/* 强制 root 节点文本换行+限宽：避免长任务名撑爆画布导致子节点溢出可视区 */
-.mindmap-wrap .map-container me-root > me-tpc {
+/* 强制 root 节点文本换行+限宽：避免长任务名撑爆画布导致子节点溢出可视区
+   （6.x 节点是 div.me-root/div.me-tpc，须用 class 选择器；旧 tag 选择器 me-root/me-tpc 已失效） */
+.mindmap-wrap .map-container .me-root > .me-tpc {
   max-width: 320px !important;
   white-space: normal !important;
   word-break: break-all !important;
@@ -398,6 +544,32 @@ body {
   padding: 8px 14px !important;
   text-align: center !important;
 }
+/* M5-fix2：所有导图节点限宽换行——用例子节点（前置/步骤/预期）文本可能很长，
+   不限宽会横向撑爆画布，scaleFit 后整图缩成一条线 */
+.mindmap-wrap .map-container .me-tpc {
+  max-width: 420px !important;
+  white-space: normal !important;
+  word-break: break-all !important;
+  line-height: 1.45 !important;
+}
+/* M5-fix3：导图工具栏「导出 XMind」按钮（注入到 mind-elixir 内置工具栏 .mind-elixir-toolbar.rb） */
+.mind-elixir-toolbar .map-dl {
+  cursor: pointer;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  opacity: 0.88;
+  user-select: none;
+}
+.mind-elixir-toolbar .map-dl:hover { opacity: 1; background: rgba(255, 255, 255, 0.14); }
+/* M5-fix4：放开左上「方向切换」工具栏（RIGHT/SIDE/LEFT 可切换；切换后自动重跑初始定位）
+   原 M5-fix3 的 display:none 已移除——B（SIDE 布局）需要入口 */
+.mind-elixir-toolbar.lt { z-index: 3; }
+.mind-elixir-toolbar.lt span { cursor: pointer; border-radius: 4px; }
+.mind-elixir-toolbar.lt span:hover { background: rgba(0, 0, 0, 0.06); }
 
 /* ---- 导出 / 迭代 Tab ---- */
 .export-tab { flex: 1; overflow-y: auto; padding: 14px 20px 20px; }

@@ -26,6 +26,16 @@ _BAILIAN_COMPAT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _TIMEOUT = 180           # 生成用例的常规超时（免费模型慢，放宽到 3 分钟）
 _VISION_TIMEOUT = 180    # 视觉模型看图慢一些
 
+# 录得不认 enable_thinking 参数的端点（base_url|model）。命中后不再注入，
+# 避免每次都先吃一个 400 再重试。
+_NO_THINKING_PARAM: set[str] = set()
+
+# 思考内容的字段名：主流厂商各不同，按优先级取第一个非空字符串
+_THINK_FIELDS = ("reasoning_content", "reasoning", "thinking")
+
+# 思考标签（真实模型把思考混进正文时的形态）与 mock 的中文分隔符
+_THINK_TAG_RE = re.compile(r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>")
+
 
 class LLMError(Exception):
     """LLM 调用失败（网络 / 鉴权 / 响应异常）。"""
@@ -80,23 +90,29 @@ class OpenAICompatClient:
                 )
             else:
                 content = str(content)
-        # 防御：部分厂商会把思考过程以 <think>...</think> 混入 content，去除避免污染生成结果
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+        # 防御：部分厂商会把思考过程以 <think>/<thinking> 混入 content，去除避免污染生成结果
+        content = _THINK_TAG_RE.sub("", content).strip()
         return content
 
     def generate(self, prompt: str) -> str:
         """与旧 BailianClient.generate 同签名：prompt 进、文本出。"""
         return self.chat([{"role": "user", "content": prompt}])
 
-    def chat_stream(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192, timeout: float = _TIMEOUT):
+    def chat_stream(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192,
+                    timeout: float = _TIMEOUT, enable_thinking: bool | None = None):
         """流式 chat_completions：yield (event, payload)。
 
-        event in {"delta", "done", "error"}：
-        - delta：payload=str，本次增量内容（前端用 <think> 标签自行切分思考/回复）
-        - done： payload={"full": str}，本次完整内容
+        event in {"think", "delta", "done", "error"}：
+        - think： payload=str，本次增量「思考内容」（来自 reasoning_content 等字段）
+        - delta： payload=str，本次增量正文（老模型可能把 <think> 混在正文里，前端会切分）
+        - done： payload={"full": str, "clean": str, "thinking": str}
         - error：payload=str，错误描述
 
-        实现：httpx.stream() 逐行解析 SSE，按 data: {...} 取 choices[0].delta.content。
+        实现：httpx.stream() 逐行解析 SSE，取 choices[0].delta。思考与正文分开取：
+        部分厂商把推理放在独立字段（reasoning_content / reasoning / thinking），
+        只读 content 会把整段思考丢掉（思考面板恒空）。
+        enable_thinking=None 表示不注入（走模型默认）；True/False 显式开关。
+        个别端点不认该参数会返回 400，此时自动去掉参数重试一次并记入 _NO_THINKING_PARAM。
         """
         url = self.base_url.rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
@@ -104,39 +120,60 @@ class OpenAICompatClient:
             "model": self.model, "messages": messages,
             "temperature": temperature, "max_tokens": max_tokens, "stream": True,
         }
-        buf = ""
+        ep_key = f"{self.base_url}|{self.model}"
+        if enable_thinking is not None and ep_key not in _NO_THINKING_PARAM:
+            payload["enable_thinking"] = bool(enable_thinking)
+
         full = ""
-        try:
-            with httpx.Client(timeout=timeout) as hc:
-                with hc.stream("POST", url, headers=headers, json=payload) as r:
-                    if r.status_code != 200:
-                        body = r.read().decode("utf-8", errors="ignore")[:300]
-                        yield ("error", f"HTTP {r.status_code}：{body}")
-                        return
-                    for line in r.iter_lines():
-                        if not line:
-                            continue
-                        if line.startswith("data:"):
+        think_full = ""
+        for attempt in (0, 1):
+            full, think_full = "", ""
+            try:
+                with httpx.Client(timeout=timeout) as hc:
+                    with hc.stream("POST", url, headers=headers, json=payload) as r:
+                        if r.status_code != 200:
+                            body = r.read().decode("utf-8", errors="ignore")[:300]
+                            # 端点不认 enable_thinking（400）→ 去掉参数重试一次，并记住该端点
+                            if attempt == 0 and r.status_code == 400 and "enable_thinking" in payload:
+                                _NO_THINKING_PARAM.add(ep_key)
+                                payload.pop("enable_thinking", None)
+                                continue
+                            yield ("error", f"HTTP {r.status_code}：{body}")
+                            return
+                        for line in r.iter_lines():
+                            if not line or not line.startswith("data:"):
+                                continue
                             data = line[5:].strip()
                             if data == "[DONE]":
                                 break
                             try:
                                 obj = json.loads(data)
-                                delta = obj["choices"][0].get("delta", {}).get("content") or ""
+                                d = obj["choices"][0].get("delta") or {}
                             except (KeyError, IndexError, ValueError):
                                 continue
+                            reason = ""
+                            for f in _THINK_FIELDS:
+                                v = d.get(f)
+                                if isinstance(v, str) and v:
+                                    reason = v
+                                    break
+                            if reason:
+                                think_full += reason
+                                yield ("think", reason)
+                            delta = d.get("content") or ""
                             if delta:
                                 full += delta
                                 yield ("delta", delta)
-        except httpx.HTTPError as e:
-            yield ("error", f"网络错误：{e.__class__.__name__}")
-            return
-        except Exception as e:  # noqa: BLE001
-            yield ("error", f"流式中断：{e.__class__.__name__}: {str(e)[:80]}")
-            return
-        # 防御：去除混入的 <think> 思考过程（虽然前端会切分，但完整存档里也清掉避免污染）
-        clean = re.sub(r"<think>.*?</think>", "", full, flags=re.S).strip()
-        yield ("done", {"full": full, "clean": clean})
+            except httpx.HTTPError as e:
+                yield ("error", f"网络错误：{e.__class__.__name__}")
+                return
+            except Exception as e:  # noqa: BLE001
+                yield ("error", f"流式中断：{e.__class__.__name__}: {str(e)[:80]}")
+                return
+            break   # 正常跑完 → 不重试
+        # 防御：正文里混入的 <think>/<thinking> 思考块清掉（前端也会切分，这里保完整存档干净）
+        clean = _THINK_TAG_RE.sub("", full).strip()
+        yield ("done", {"full": full, "clean": clean, "thinking": think_full})
 
     def describe_image(self, image_url: str, hint: str = "") -> str:
         """视觉理解：图片 + 指令 → 中文文字描述（两段式第一步）。"""
@@ -286,35 +323,73 @@ _SYSTEM_PROMPT = """你是 Buddy，资深软件测试工程师，专精测试用
 2. 正式回复要可直接生成测试用例，澄清问题要具体（如"主要覆盖正面/反面/边界？"）
 3. 简洁专业，避免客套；用 markdown 列表"""
 
+# 关闭「深度思考」时使用：不要求模型输出思考过程，直接给正式回复
+_SYSTEM_PROMPT_NO_THINK = """你是 Buddy，资深软件测试工程师，专精测试用例设计。
 
-def _build_messages(user_text: str, history: list | None, attached_text: str) -> list:
-    """组装 messages：system + history + 当前用户消息（附文档摘要在消息里）。"""
-    msgs = [{"role": "system", "content": _SYSTEM_PROMPT}]
+【输出格式要求】直接给出正式回复，先复述需求理解，再列出覆盖维度，每条简短解释，最后给 1-3 个澄清问题。
+
+要求：
+1. 不要输出 <think>...</think>、<thinking>...</thinking> 或任何思考过程标记，也不要写「让我想想」这类元话语
+2. 正式回复要可直接生成测试用例，澄清问题要具体（如"主要覆盖正面/反面/边界？"）
+3. 简洁专业，避免客套；用 markdown 列表"""
+
+
+def _build_messages(user_text: str, history: list | None, attached_text: str,
+                    want_thinking: bool = True) -> list:
+    """组装 messages：system + history + 当前用户消息（附加上下文拼在消息里）。
+
+    attached_text 承载两类内容：迭代任务摘要、用户上传文档的正文。
+    上限 6000 字与解析链路（_ai_parse_business）保持一致，避免长文档把上下文打爆。
+    want_thinking=False 时换用不含思考要求的系统提示词（光靠参数关不掉标签输出）。
+    """
+    msgs = [{"role": "system", "content": _SYSTEM_PROMPT if want_thinking else _SYSTEM_PROMPT_NO_THINK}]
     if history:
         msgs.extend(history[-10:])  # 截断最多 10 轮避免超 token
-    user_content = user_text or "（用户仅发送了附件）"
+    user_content = user_text or "（用户仅发送了附件，请结合下方的文档内容作答）"
     if attached_text:
-        user_content += f"\n\n【附件摘要】\n{attached_text[:3000]}"
+        user_content += f"\n\n【附加上下文（任务摘要 / 用户上传文档）】\n{attached_text[:6000]}"
     msgs.append({"role": "user", "content": user_content})
     return msgs
 
 
-def _mock_thinking_for(user_text: str) -> str:
-    """mock 模式：根据用户输入动态拼一段思考过程。"""
+def _mock_thinking_for(user_text: str, attach_name: str = "") -> str:
+    """mock 模式：思考过程。attach_name 非空表示本轮带了附件。"""
     u = (user_text or "").strip()
     if not u:
         u = "（无文字描述，仅附件）"
     short = u[:60] + ("…" if len(u) > 60 else "")
-    return (
-        "- 需求理解：用户描述「" + short + "」\n"
-        "- 覆盖维度：输入边界 / 错误处理 / 权限控制 / 数据一致性 / 异常兼容\n"
-        "- 风险点：未明确业务类型（功能 / 接口 / App），未明确测试范围与通过标准\n"
-    )
+    lines = []
+    if attach_name:
+        lines.append(f"- 已读取附件：《{attach_name}》")
+    lines += [
+        "- 需求理解：用户描述「" + short + "」",
+        "- 覆盖维度：输入边界 / 错误处理 / 权限控制 / 数据一致性 / 异常兼容",
+        "- 风险点：未明确业务类型（功能 / 接口 / App），未明确测试范围与通过标准",
+    ]
+    return "\n".join(lines) + "\n"
 
 
-def _mock_reply_for(user_text: str, history: list | None = None) -> str:
-    """mock 模式：正式回复模板。"""
+def _mock_reply_for(user_text: str, history: list | None = None, attach_name: str = "") -> str:
+    """mock 模式：正式回复模板。
+
+    attach_name 非空 = 本轮带了附件（服务端已读到文档内容），走「已读文档」模板，
+    不再反问业务规则，避免出现「上传了文档还被追问要需求」的错位体验。
+    """
     u = (user_text or "").strip() or "你描述的场景"
+    if attach_name:
+        head = f"已读取附件《{attach_name}》"
+        if (user_text or "").strip():
+            head += f"，结合你说的「{u[:30]}{'…' if len(u) > 30 else ''}」"
+        return (
+            head + "，我先理一下：\n\n"
+            "**可能覆盖的测试维度：**\n"
+            "1. **输入边界**：空值、最大长度、特殊字符、emoji、SQL 注入\n"
+            "2. **错误处理**：异常返回、错误码覆盖、错误提示文案\n"
+            "3. **权限控制**：未登录、不同角色、跨用户访问\n"
+            "4. **数据一致性**：并发修改、删除后引用、外键约束\n"
+            "5. **异常兼容**：网络中断、超时、重试机制\n\n"
+            "要生成用例的话，点下面的「生成测试用例」我就按这份文档开工。"
+        )
     # 检查是否有历史上下文
     has_history = history and len(history) > 0
     last_user_msg = ""
@@ -349,11 +424,15 @@ def _mock_reply_for(user_text: str, history: list | None = None) -> str:
     )
 
 
-async def _mock_stream_chunks(user_text: str):
-    """mock 模式流式切片：think 段 + reply 段，逐段 yield。"""
-    thinking = _mock_thinking_for(user_text)
-    reply = _mock_reply_for(user_text)
-    full = f" 思考\n{thinking}\n思考\n{reply}"
+async def _mock_stream_chunks(user_text: str, attach_name: str = "", want_thinking: bool = True):
+    """mock 模式流式切片：think 段 + reply 段，逐段 yield。
+
+    want_thinking=False（用户关了「深度思考」）时只吐正式回复，不出思考段，
+    与真实模型关闭思考后的表现保持一致。
+    """
+    thinking = _mock_thinking_for(user_text, attach_name)
+    reply = _mock_reply_for(user_text, attach_name=attach_name)
+    full = f" 思考\n{thinking}\n思考\n{reply}" if want_thinking else reply
     chunk_size = 12
     i = 0
     while i < len(full):
@@ -363,34 +442,76 @@ async def _mock_stream_chunks(user_text: str):
         i += chunk_size
     yield ("done", {"full": full, "clean": reply})
 
-async def chat_stream(db: Session, user: User | None, user_text: str, history: list | None, attached_text: str = ""):
+async def chat_stream(
+    db: Session,
+    user: User | None,
+    user_text: str,
+    history: list | None,
+    attached_text: str = "",
+    attach_name: str = "",
+    enable_thinking: bool = True,
+):
     """对话流式生成器（async）。
 
-    设计：对话场景以 demo 体验优先。平台默认/环境变量兜底是免费或公共模型，
-    可能很慢或不稳定，因此**聊天默认走 mock 流式**，只有用户明确自配真实模型时才走真实调用。
+    走向：用户自配(user) 或 平台默认(platform) 有可用文本配置时走真实模型，
+    否则走 mock 流式。真实调用失败时降级：未产出内容则追加 mock 兜底，
+    已产出半截内容则仅提示中断（避免真假内容混排）。
+
+    attached_text  ：附加上下文（任务用例摘要 / 上传文档正文），拼进用户消息注入模型。
+    attach_name    ：附件文件名，仅用于 mock 模式体现「已读到文档」。
+    enable_thinking：前端「深度思考」开关。True→注入 enable_thinking 并让 think 事件透传；
+                     False→换用无思考要求的系统提示词、不注入参数，且丢弃 think 事件
+                     （个别模型不认参数仍会吐推理，丢掉才符合"关了就不显示面板"的预期）。
     """
     eff = resolve_effective(db, user)
-    use_real = (eff.get("source") == "user" and eff.get("text") is not None)
-    messages = _build_messages(user_text or "", history, attached_text)
+    # 平台默认模型（source=platform，免费厂商由服务端 Key 兜底）同样算"已配好模型"。
+    # 旧逻辑只认 user，导致平台默认配置被判为未配置、聊天恒走 mock 模板。
+    use_real = eff.get("source") in ("user", "platform") and eff.get("text") is not None
+    messages = _build_messages(user_text or "", history, attached_text, enable_thinking)
     if not use_real:
-        async for ev in _mock_stream_chunks(user_text or ""):
+        async for ev in _mock_stream_chunks(user_text or "", attach_name, enable_thinking):
             yield ev
         return
     cfg = eff["text"]
     client = OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
+    produced = False  # 是否已吐出过真实内容（决定出错时能否安全降级到 mock）
+    err = ""
     try:
         # 真实模型是同步 generator（httpx 同步流式），在线程池里跑
         loop = asyncio.get_running_loop()
-        sync_gen = client.chat_stream(messages, timeout=8.0)
+        # 30s：真模型首字节常见 2-5s，原来 8s 会被误判成 ReadTimeout
+        sync_gen = client.chat_stream(messages, timeout=30.0, enable_thinking=enable_thinking)
         while True:
             ev = await loop.run_in_executor(None, lambda: next(sync_gen, None))
             if ev is None:
                 break
+            # 客户端把网络/HTTP 异常也表达成 ("error", msg) 后 return（不抛异常），
+            # 这里拦下来统一走降级，避免裸错误直接丢给用户、兜底内容被跳过
+            if isinstance(ev, tuple) and len(ev) == 2 and ev[0] == "error":
+                err = str(ev[1])
+                break
+            if isinstance(ev, tuple) and len(ev) == 2 and ev[0] == "think":
+                if not enable_thinking:
+                    continue   # 用户关了思考：丢弃推理内容，不展示思考面板
+                yield ev
+                continue
+            if isinstance(ev, tuple) and len(ev) == 2 and ev[0] == "delta" and ev[1]:
+                produced = True
             yield ev
-    except LLMError as e:
-        yield ("error", str(e))
-        async for ev in _mock_stream_chunks(user_text or ""):
-            yield ev
+    except Exception as e:  # noqa: BLE001  LLMError / httpx 异常一律降级
+        err = f"{e.__class__.__name__}: {str(e)[:120]}"
+
+    if not err:
+        return
+    if produced:
+        # 已有半截真实内容：不追加模板（真假内容混排更难读），提示后正常收尾
+        yield ("notice", f"生成中断：{err[:120]}")
+        yield ("done", {"full": "", "degraded": True})
+        return
+    # 一个字都没产出：提示已降级，再继续输出演示内容，用户至少能看到兜底回复
+    yield ("notice", f"真实模型调用失败，已切换演示模式：{err[:120]}")
+    async for ev in _mock_stream_chunks(user_text or "", attach_name, enable_thinking):
+        yield ev
 
 
 # ============ 视觉增强（两段式第一步） ============

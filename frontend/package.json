@@ -9,10 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "mind-elixir": "^4.0.0",
+    "dompurify": "^3.4.15",
+    "marked": "^18.0.13",
+    "mind-elixir": "^6.0.0-next.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.28.0"
+    "react-router-dom": "^6.28.0",
+    "zustand": "^4.5.5"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",
