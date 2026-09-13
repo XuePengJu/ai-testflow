@@ -1,8 +1,10 @@
 /**
  * 管理页（M4，仅 admin）：统计卡 + 用户管理 + 平台默认模型 + 访客清理。
  * 平台配置数据本地拉取（GET /llm/platform-config，admin-only）。
+ * V4：统计卡加图标 + 左对齐；访客治理按钮规范化（secondary / outline-danger）。
  */
 import { useCallback, useEffect, useState } from "react";
+import { Users, UserX, Clock, ClipboardList, Broom, Trash2 } from "lucide-react";
 import { apiJson, API, toast } from "../api/client";
 import { useAuth } from "../hooks/useAuth";
 import { useSettingsStore } from "../store/settingsStore";
@@ -64,20 +66,32 @@ export default function AdminPage() {
     <div className="page-wrap admin-page" data-testid="admin-page">
       <section className="stats-row" data-testid="stats-cards">
         <div className="stat-card">
-          <div className="s-num">{stats?.registered_users ?? "—"}</div>
-          <div className="s-label">注册用户</div>
+          <div className="stat-icon blue"><Users size={22} /></div>
+          <div className="stat-body">
+            <div className="s-num">{stats?.registered_users ?? "—"}</div>
+            <div className="s-label">注册用户</div>
+          </div>
         </div>
         <div className="stat-card">
-          <div className="s-num">{stats?.active_guests ?? "—"}</div>
-          <div className="s-label">活跃访客</div>
+          <div className="stat-icon orange"><UserX size={22} /></div>
+          <div className="stat-body">
+            <div className="s-num">{stats?.active_guests ?? "—"}</div>
+            <div className="s-label">活跃访客</div>
+          </div>
         </div>
         <div className="stat-card">
-          <div className="s-num">{stats?.cleaned_24h ?? "—"}</div>
-          <div className="s-label">24h 内清理</div>
+          <div className="stat-icon purple"><Clock size={22} /></div>
+          <div className="stat-body">
+            <div className="s-num">{stats?.cleaned_24h ?? "—"}</div>
+            <div className="s-label">24h 内清理</div>
+          </div>
         </div>
         <div className="stat-card">
-          <div className="s-num">{stats?.total_tasks ?? "—"}</div>
-          <div className="s-label">总任务数</div>
+          <div className="stat-icon green"><ClipboardList size={22} /></div>
+          <div className="stat-body">
+            <div className="s-num">{stats?.total_tasks ?? "—"}</div>
+            <div className="s-label">总任务数</div>
+          </div>
         </div>
       </section>
 
@@ -85,19 +99,21 @@ export default function AdminPage() {
         <h3>访客治理</h3>
         <div className="llm-btnrow">
           <button
-            className="btn ghost"
+            className="btn-secondary btn-md"
             disabled={!!cleaning}
             onClick={() => void cleanGuests("expired")}
             data-testid="clean-expired"
           >
+            <Broom size={14} />
             {cleaning === "expired" ? "清理中…" : "清理已到期访客"}
           </button>
           <button
-            className="btn danger-ghost"
+            className="btn-outline-danger btn-md"
             disabled={!!cleaning}
             onClick={() => void cleanGuests("all")}
             data-testid="clean-all"
           >
+            <Trash2 size={14} />
             {cleaning === "all" ? "清理中…" : "强制清理全部访客"}
           </button>
         </div>

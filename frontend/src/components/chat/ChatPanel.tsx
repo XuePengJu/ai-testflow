@@ -5,8 +5,10 @@
  * - 流式中发送按钮变「⏹ 停止生成」
  * - 文件附加 chip + 移除
  * - 新消息/流式增量自动滚底（用户上滚时暂停跟随）
+ * V4：图标改用 lucide-react（纸飞机/灯泡/附件/停止）。
  */
 import { useEffect, useRef, useState } from "react";
+import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
 import { toast } from "../../api/client";
 import type { ChatDraft } from "../../types";
@@ -21,8 +23,13 @@ const ACCEPT = ".docx,.pdf,.md,.markdown,.txt";
 const ACCEPT_HINT = "docx / pdf / md / txt";
 const ACCEPT_RE = /\.(docx|pdf|md|markdown|txt)$/i;
 
-const SAMPLE =
-  "采购管理 - 采购订单创建。\n功能点：新增采购单、编辑未提交单据、提交审批、审批通过/驳回、删除草稿、按供应商/日期查询。\n业务规则：提交后不可编辑；金额超 5 万需二级审批；供应商需为有效状态。";
+/** 空态示例 chips 的示例需求（点选直接填入输入框） */
+const SAMPLE_ECOM =
+  "电商订单流程。\n功能点：下单、支付、取消订单、申请退款、订单状态流转、按订单号/状态查询。\n业务规则：超时未支付自动取消；已发货订单不可取消；退款需审核。";
+const SAMPLE_LOGIN =
+  "用户登录注册。\n功能点：注册、登录、找回密码、验证码、记住登录态、退出登录。\n业务规则：密码强度校验；连续 5 次错误锁定 10 分钟；验证码 5 分钟有效。";
+const SAMPLE_DBERP =
+  "DBERP 采购入库。\n功能点：创建采购入库单、关联采购订单、质检、上架、库存更新、单据查询。\n业务规则：入库数量不可超采购数量；质检不合格可退货；库存实时扣减。";
 
 /** 「深度思考」开关的本地记忆键（默认开） */
 const THINK_KEY = "aitf_deep_think";
@@ -83,7 +90,7 @@ export default function ChatPanel() {
 
   function autoGrow(el: HTMLTextAreaElement): void {
     el.style.height = "auto";
-    el.style.height = Math.min(220, el.scrollHeight) + "px";
+    el.style.height = Math.min(320, el.scrollHeight) + "px";
   }
 
   function doSend(): void {
@@ -126,11 +133,36 @@ export default function ChatPanel() {
       <div className="chat-stream" ref={streamRef} onScroll={onScroll}>
         {messages.length === 0 ? (
           <div className="welcome">
-            <h2>👋 我是 Buddy</h2>
+            <h2>
+              <Bot size={24} style={{ verticalAlign: "-4px", marginRight: 6 }} />
+              我是 Buddy
+            </h2>
             <p>把你的测试需求告诉我，我来拆解需求、生成用例、质量校验、导出文件。</p>
-            <button className="qtag" type="button" onClick={() => setText(SAMPLE)}>
-              填入示例业务需求
-            </button>
+
+            <div className="quick-cards">
+              <button className="quick-card" type="button" onClick={() => fileRef.current?.click()}>
+                <FileUp size={18} />
+                <span className="qc-title">上传文档</span>
+                <span className="qc-desc">上传需求文档，AI 自动读取</span>
+              </button>
+              <button className="quick-card" type="button" onClick={() => inputRef.current?.focus()}>
+                <ClipboardList size={18} />
+                <span className="qc-title">输入场景</span>
+                <span className="qc-desc">直接描述你的业务场景</span>
+              </button>
+              <button className="quick-card" type="button" onClick={() => setText(SAMPLE_ECOM)}>
+                <Sparkles size={18} />
+                <span className="qc-title">查看示例</span>
+                <span className="qc-desc">点下方示例一键填入</span>
+              </button>
+            </div>
+
+            <div className="sample-chips">
+              <span className="sc-label">试试这些示例：</span>
+              <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_ECOM)}>电商订单流程</button>
+              <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_LOGIN)}>用户登录注册</button>
+              <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_DBERP)}>DBERP 采购入库</button>
+            </div>
           </div>
         ) : (
           messages.map((m) => <MessageView key={m.id} msg={m} />)
@@ -140,45 +172,47 @@ export default function ChatPanel() {
       <div className={`chat-input-wrap ${streaming ? "streaming" : ""}`}>
         {file && (
           <div className="file-chip">
-            📎 {file.name} <span className="fc-size">({fmtSize(file.size)})</span>
+            <Paperclip size={14} /> {file.name} <span className="fc-size">({fmtSize(file.size)})</span>
             <button type="button" onClick={() => { setFile(null); if (fileRef.current) fileRef.current.value = ""; }}>
               移除
             </button>
           </div>
         )}
         <div className="chat-input-row">
-          <input
-            ref={fileRef}
-            type="file"
-            hidden
-            accept={ACCEPT}
-            onChange={(e) => onPickFile(e.target.files?.[0] || null)}
-          />
-          <button
-            className="icon-btn"
-            type="button"
-            title={`附加文档（${ACCEPT_HINT}），AI 会读取文档内容`}
-            disabled={streaming}
-            onClick={() => fileRef.current?.click()}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-          </button>
-          <button
-            className={`think-toggle ${deepThink ? "active" : ""}`}
-            type="button"
-            aria-pressed={deepThink}
-            title={
-              deepThink
-                ? "深度思考：已开启 —— 模型会先推理再作答（点击关闭）"
-                : "深度思考：已关闭 —— 直接作答，不展示思考过程（点击开启）"
-            }
-            disabled={streaming}
-            onClick={toggleThink}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"/><path d="M9.5 21h5"/></svg>
-            <span className="tt-text">深度思考</span>
-          </button>
-          <div className="input-pill">
+          <div className="input-toolbar">
+            <input
+              ref={fileRef}
+              type="file"
+              hidden
+              accept={ACCEPT}
+              onChange={(e) => onPickFile(e.target.files?.[0] || null)}
+            />
+            <button
+              className="icon-btn"
+              type="button"
+              title={`附加文档（${ACCEPT_HINT}），AI 会读取文档内容`}
+              disabled={streaming}
+              onClick={() => fileRef.current?.click()}
+            >
+              <Paperclip size={20} />
+            </button>
+            <button
+              className={`think-toggle ${deepThink ? "active" : ""}`}
+              type="button"
+              aria-pressed={deepThink}
+              title={
+                deepThink
+                  ? "深度思考：已开启 —— 模型会先推理再作答（点击关闭）"
+                  : "深度思考：已关闭 —— 直接作答，不展示思考过程（点击开启）"
+              }
+              disabled={streaming}
+              onClick={toggleThink}
+            >
+              <Lightbulb size={16} />
+              <span className="tt-text">深度思考</span>
+            </button>
+          </div>
+          <div className="input-body">
             <textarea
               ref={inputRef}
               value={text}
@@ -195,18 +229,16 @@ export default function ChatPanel() {
                 }
               }}
             />
+            {streaming ? (
+              <button className="send-btn streaming" type="button" onClick={stop} title="停止生成">
+                <Square size={16} fill="currentColor" />
+              </button>
+            ) : (
+              <button className="send-btn" type="button" onClick={doSend} disabled={!text.trim() && !file} title="发送">
+                <Send size={18} />
+              </button>
+            )}
           </div>
-          {streaming ? (
-            <button className="send-btn streaming" type="button" onClick={stop}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-              停止生成
-            </button>
-          ) : (
-            <button className="send-btn" type="button" onClick={doSend} disabled={!text.trim() && !file}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-              发送
-            </button>
-          )}
         </div>
       </div>
     </div>

@@ -2,9 +2,11 @@
  * 任务列表侧栏：5s 轮询刷新，状态徽章。
  * - 点击任务项 → 打开详情抽屉（M3）
  * - 「⌖」定位按钮 → 滚动到聊天内任务卡（M2 行为保留）
- * - M4：顶部分类树（新建/重命名/删除 + 过滤）+ 每任务「归类」下拉
+ * - M4：分类入口改为「☰ 分类」弹层（两级树 + 过滤），顶部筛选 chip 可清除
+ * - V4：图标改用 lucide-react。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ListFilter, X, Tag, Crosshair, Trash2 } from "lucide-react";
 import { startListPolling, useTaskStore } from "../../store/taskStore";
 import { useChatStore } from "../../store/chatStore";
 import { useCategoryStore } from "../../store/categoryStore";
@@ -32,11 +34,16 @@ export default function TaskList() {
 
   const categories = useCategoryStore((s) => s.categories);
   const filter = useCategoryStore((s) => s.filter);
+  const setFilter = useCategoryStore((s) => s.setFilter);
   const refreshCats = useCategoryStore((s) => s.refresh);
   const moveTask = useCategoryStore((s) => s.moveTask);
 
   /** 当前展开「归类」菜单的任务 id */
   const [menuTaskId, setMenuTaskId] = useState<string | null>(null);
+  /** 分类弹层开关 + 定位 ref（fixed 浮层，避开 side-panel overflow:hidden 裁切） */
+  const [catOpen, setCatOpen] = useState(false);
+  const catBtnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
 
   // 登录期间 5s 轮询；登出/未登录时停
   useEffect(() => {
@@ -50,6 +57,34 @@ export default function TaskList() {
   useEffect(() => {
     if (token) void refreshCats();
   }, [token, taskCount, refreshCats]);
+
+  // 分类弹层：打开时基于触发按钮坐标定位（fixed），并监听外部点击关闭
+  useEffect(() => {
+    if (!catOpen) return;
+    const btn = catBtnRef.current;
+    const pop = popRef.current;
+    if (btn && pop) {
+      const r = btn.getBoundingClientRect();
+      const W = 264;
+      let left = r.right - W;
+      if (left < 8) left = 8;
+      let top = r.bottom + 6;
+      const h = pop.offsetHeight;
+      if (top + h > window.innerHeight - 8) {
+        top = Math.max(8, r.top - h - 6); // 底部空间不足则上翻到按钮上方
+      }
+      pop.style.left = left + "px";
+      pop.style.top = top + "px";
+      pop.style.width = W + "px";
+    }
+    function onDown(e: MouseEvent) {
+      const t = e.target as Node;
+      if (pop?.contains(t) || btn?.contains(t)) return;
+      setCatOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [catOpen]);
 
   if (!token) {
     return (
@@ -77,16 +112,36 @@ export default function TaskList() {
     }
   };
 
-  const filterLabel =
-    filter === "all" ? "" : ` · ${filter === "none" ? "未分类" : catName(filter)}`;
-
   return (
     <aside className="side-panel task-panel">
       <div className="side-head">
-        <span>我的任务{filterLabel ? `（${visible.length}/${tasks.length}${filterLabel}）` : tasks.length ? `（${tasks.length}）` : ""}</span>
+        <span>我的任务{tasks.length ? `（${tasks.length}）` : ""}</span>
+        <button
+          ref={catBtnRef}
+          className="cat-toggle-btn"
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={catOpen}
+          onClick={() => setCatOpen((o) => !o)}
+        >
+          <ListFilter size={14} /> 分类
+        </button>
       </div>
 
-      <CategoryTree />
+      {filter !== "all" && (
+        <div className="cat-chip-row">
+          <span className="cat-chip">
+            {filter === "none" ? "未分类" : catName(filter)}
+            <button type="button" onClick={() => setFilter("all")} aria-label="清除分类筛选"><X size={12} /></button>
+          </span>
+        </div>
+      )}
+
+      {catOpen && (
+        <div className="cat-popover" ref={popRef} role="dialog" aria-label="任务分类">
+          <CategoryTree />
+        </div>
+      )}
 
       <div className="hist-list">
         {!listLoaded && tasks.length === 0 ? (
@@ -126,7 +181,7 @@ export default function TaskList() {
                       setMenuTaskId(menuTaskId === t.id ? null : t.id);
                     }}
                   >
-                    🏷
+                    <Tag size={14} />
                   </button>
                   <button
                     className="h-del t-locate"
@@ -137,7 +192,7 @@ export default function TaskList() {
                       focusTask(t.id);
                     }}
                   >
-                    ⌖
+                    <Crosshair size={14} />
                   </button>
                   <button
                     className="h-del"
@@ -148,7 +203,7 @@ export default function TaskList() {
                       if (window.confirm(`确定删除任务「${t.name}」（${t.cases_count} 个用例）？`)) void deleteTask(t.id);
                     }}
                   >
-                    🗑
+                    <Trash2 size={14} />
                   </button>
                 </div>
                 {menuTaskId === t.id && (

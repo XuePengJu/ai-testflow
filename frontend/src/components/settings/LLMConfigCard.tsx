@@ -6,8 +6,10 @@
  * - 厂商预设选中 → base_url 自动带出（可改），model 用 datalist 建议 + 自由输入
  * - 免费厂商（modelscope/zhipu*）不填 Key → 服务端环境变量兜底
  * - 「测试」走 POST /llm/test（表单值，不落库；Key 留空复用已保存）
+ * V4：按钮规范化（保存 primary / 测试 secondary / 删除 outline-danger）；select 加自定义箭头。
  */
 import { useEffect, useMemo, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { toast } from "../../api/client";
 import { useSettingsStore } from "../../store/settingsStore";
 import type { LLMConfigRow } from "../../types";
@@ -141,11 +143,14 @@ export default function LLMConfigCard({ slot, mode, saved, onSaved }: Props) {
       <div className="sub">{meta.sub}{mode === "platform" ? "（平台默认，未配置个人模型的所有用户生效）" : ""}</div>
 
       <label className="f-label">厂商预设</label>
-      <select value={provider} onChange={(e) => onProviderChange(e.target.value)} data-testid={`provider-${mode}-${slot}`}>
-        {Object.entries(providers).map(([id, p]) => (
-          <option key={id} value={id}>{p.label}</option>
-        ))}
-      </select>
+      <div className="select-wrap">
+        <select value={provider} onChange={(e) => onProviderChange(e.target.value)} data-testid={`provider-${mode}-${slot}`}>
+          {Object.entries(providers).map(([id, p]) => (
+            <option key={id} value={id}>{p.label}</option>
+          ))}
+        </select>
+        <ChevronDown className="chevron" size={16} />
+      </div>
 
       <label className="f-label">Base URL</label>
       <input
@@ -183,11 +188,11 @@ export default function LLMConfigCard({ slot, mode, saved, onSaved }: Props) {
       {preset?.note && <div className="hint-line">{preset.note}</div>}
 
       <div className="llm-btnrow">
-        <button className="btn" disabled={busy} onClick={save} data-testid={`save-${mode}-${slot}`}>
+        <button className="btn-primary btn-md" disabled={busy} onClick={save} data-testid={`save-${mode}-${slot}`}>
           {busy ? "处理中…" : "保存配置"}
         </button>
-        <button className="btn ghost" onClick={test} data-testid={`test-${mode}-${slot}`}>测试连通</button>
-        {saved && <button className="btn danger-ghost" disabled={busy} onClick={del}>删除</button>}
+        <button className="btn-secondary btn-md" onClick={test} data-testid={`test-${mode}-${slot}`}>测试连通</button>
+        {saved && <button className="btn-outline-danger btn-md" disabled={busy} onClick={del}>删除</button>}
       </div>
       {testMsg && <div className={"test-msg " + (testMsg.ok ? "test-ok" : "test-err")}>{testMsg.text}</div>}
     </section>

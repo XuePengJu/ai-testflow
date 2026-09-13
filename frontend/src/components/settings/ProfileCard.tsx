@@ -1,13 +1,21 @@
 /**
  * 个人中心卡：账号信息 + 修改密码（M4）。
  * - 旧密码错误 → 后端 401 detail「旧密码错误」，keep401 原样返回不强制登出
+ * - V4：角色 badge 改用主色/灰/警告（管理员不再用红色）+ 图标。
  */
 import { useState } from "react";
+import { Shield, User, UserX } from "lucide-react";
 import { api, API, toast } from "../../api/client";
 import { useAuth } from "../../hooks/useAuth";
 import type { Role } from "../../types";
 
 const ROLE_LABEL: Record<Role, string> = { guest: "访客", user: "用户", admin: "管理员" };
+
+function RoleIcon({ role }: { role: Role }) {
+  if (role === "admin") return <Shield size={12} />;
+  if (role === "guest") return <UserX size={12} />;
+  return <User size={12} />;
+}
 
 export default function ProfileCard() {
   const { me, role } = useAuth();
@@ -68,7 +76,8 @@ export default function ProfileCard() {
         <div className="p-row"><span className="p-label">用户名</span><span>{me.username}</span></div>
         <div className="p-row">
           <span className="p-label">角色</span>
-          <span className={"uc" + (role === "admin" ? " admin" : role === "guest" ? " guest" : "")}>
+          <span className={"role-badge " + (role || "user")}>
+            <RoleIcon role={me.role} />
             {ROLE_LABEL[me.role]}
           </span>
         </div>
@@ -106,7 +115,7 @@ export default function ProfileCard() {
             onKeyDown={(e) => e.key === "Enter" && submit()}
           />
           {err && <div className="form-err" data-testid="pwd-err">{err}</div>}
-          <button className="btn" disabled={busy} onClick={submit} data-testid="pwd-submit">
+          <button className="btn-primary btn-md" disabled={busy} onClick={submit} data-testid="pwd-submit">
             {busy ? "提交中…" : "修改密码"}
           </button>
         </div>

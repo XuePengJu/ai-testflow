@@ -2,8 +2,10 @@
  * 用户管理表（M4 admin）：启停 / 删除 / 访客清理。
  * - guest 禁用 = 立即清理其数据（后端语义，前端 confirm 提示）
  * - admin 不能操作自己（后端 400，前端按钮禁用）
+ * V4：角色 badge 去红 + 图标；状态圆点 + 文字；操作列图标按钮。
  */
 import { useState } from "react";
+import { Shield, User, UserX, Ban, Check, Broom, Trash2 } from "lucide-react";
 import { api, API, toast } from "../../api/client";
 import type { AdminUserRow } from "../../types";
 
@@ -21,6 +23,17 @@ function fmtDate(s?: string | null): string {
   if (isNaN(d.getTime())) return "—";
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function RoleBadge({ role }: { role: string }) {
+  const cls = role === "admin" ? "admin" : role === "guest" ? "guest" : "user";
+  const icon = role === "admin" ? <Shield size={12} /> : role === "guest" ? <UserX size={12} /> : <User size={12} />;
+  return (
+    <span className={"role-badge " + cls}>
+      {icon}
+      {ROLE_LABEL[role] || role}
+    </span>
+  );
 }
 
 export default function UserTable({ users, myId, onChanged }: Props) {
@@ -93,8 +106,14 @@ export default function UserTable({ users, myId, onChanged }: Props) {
                   {u.username}
                   {u.id === myId && <span className="me-tag">（我）</span>}
                 </td>
-                <td><span className={"uc " + (u.role === "admin" ? "admin" : u.role === "guest" ? "guest" : "")}>{ROLE_LABEL[u.role]}</span></td>
-                <td>{u.is_active ? <span className="pill pill-ok">活跃</span> : <span className="pill pill-wait">已禁用</span>}</td>
+                <td><RoleBadge role={u.role} /></td>
+                <td>
+                  {u.is_active ? (
+                    <span><span className="status-dot ok" />活跃</span>
+                  ) : (
+                    <span><span className="status-dot warn" />已禁用</span>
+                  )}
+                </td>
                 <td>{u.tasks}</td>
                 <td className="t-date">
                   {u.role === "guest" ? `到期 ${fmtDate(u.expires_at)}` : fmtDate(u.created_at)}
@@ -103,18 +122,22 @@ export default function UserTable({ users, myId, onChanged }: Props) {
                   {u.id !== myId && (
                     <>
                       <button
-                        className="btn ghost sm"
+                        className="icon-btn"
                         disabled={busyId === u.id}
+                        title={u.role === "guest" ? "清理访客" : u.is_active ? "禁用" : "启用"}
+                        aria-label={u.role === "guest" ? "清理访客" : u.is_active ? "禁用" : "启用"}
                         onClick={() => void patchUser(u, !u.is_active)}
                       >
-                        {u.role === "guest" ? "清理" : u.is_active ? "禁用" : "启用"}
+                        {u.role === "guest" ? <Broom size={15} /> : u.is_active ? <Ban size={15} /> : <Check size={15} />}
                       </button>
                       <button
-                        className="btn danger-ghost sm"
+                        className="icon-btn danger"
                         disabled={busyId === u.id}
+                        title="删除"
+                        aria-label="删除"
                         onClick={() => void deleteUser(u)}
                       >
-                        删除
+                        <Trash2 size={15} />
                       </button>
                     </>
                   )}

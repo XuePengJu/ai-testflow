@@ -1,6 +1,7 @@
 /**
  * 生效模型条（M4）：当前实际使用的模型（我的配置 > 平台默认 > 环境变量 > mock）
  * + 一键测通（POST /llm/test-default/{slot}，服务端解析配置，无需暴露 Key）。
+ * V4：来源改 badge；测连通按钮 secondary。
  */
 import { useState } from "react";
 import { useSettingsStore } from "../../store/settingsStore";
@@ -40,7 +41,7 @@ export default function EffectiveBar() {
     <section className="set-card effective-bar" data-testid="effective-bar">
       <h3>当前生效模型</h3>
       <div className="eff-source">
-        来源：<b>{SOURCE_LABEL[effective.source] || effective.source}</b>
+        <span className="role-badge user">来源：{SOURCE_LABEL[effective.source] || effective.source}</span>
       </div>
       <div className="eff-row">
         <div>
@@ -50,7 +51,7 @@ export default function EffectiveBar() {
           </div>
         </div>
         <button
-          className="btn ghost sm"
+          className="btn-secondary btn-sm"
           disabled={!!testing}
           onClick={() => void runTest("text")}
           data-testid="test-effective-text"
@@ -69,7 +70,7 @@ export default function EffectiveBar() {
           </div>
         </div>
         <button
-          className="btn ghost sm"
+          className="btn-secondary btn-sm"
           disabled={!!testing}
           onClick={() => void runTest("vision")}
           data-testid="test-effective-vision"

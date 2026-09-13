@@ -1,11 +1,12 @@
 /**
- * V2.8 应用壳（M4 更新）：
+ * V2.8 应用壳（M4 更新）+ V4 导航重设计：
  * - main：对话驱动三栏布局（左历史会话 | 中对话流 | 右任务列表+分类树）
  * - settings：设置页（个人中心 + LLM 配置）——登录用户可用
  * - admin：管理页（统计 + 用户 + 平台默认模型）——仅 admin
- * 视图切换为顶层 state（不引入路由库，刷新回主界面）；header 保留 M1 认证区 + 加密自检。
+ * V4：顶部导航改用 lucide 图标；自检改为状态 pill；用户区改为头像 + 退出图标按钮。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { LayoutDashboard, Settings, Shield, ShieldCheck, Loader2, LogOut } from "lucide-react";
 import { useAuth } from "./hooks/useAuth";
 import { useChatStore } from "./store/chatStore";
 import { useTaskStore } from "./store/taskStore";
@@ -71,50 +72,74 @@ export default function App() {
     return <div className="m1-loading">加载中…</div>;
   }
 
-  const navBtn = (v: View, label: string, show: boolean, extra = "") =>
+  const navBtn = (v: View, icon: ReactNode, label: string, show: boolean, extra = "") =>
     show ? (
       <button
         key={v}
         className={"btn nav-btn " + (view === v ? "on " : "ghost ") + extra}
         onClick={() => setView(v)}
       >
-        {label}
+        {icon}
+        <span>{label}</span>
       </button>
     ) : null;
 
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div className="app-logo" onClick={() => setView("main")} title="回到工作台">
+        <div
+          className="app-logo"
+          onClick={() => setView("main")}
+          title="回到工作台"
+          style={{ display: "flex", alignItems: "center", gap: 8 }}
+        >
+          <Shield size={20} color="#165dff" />
           AI 测试工作流平台
         </div>
         <nav className="app-nav">
-          {navBtn("main", "工作台", true)}
-          {navBtn("settings", "⚙ 设置", !!me)}
-          {navBtn("admin", "🛡 管理", role === "admin", "admin-nav")}
+          {navBtn("main", <LayoutDashboard size={16} />, "工作台", true)}
+          {navBtn("settings", <Settings size={16} />, "设置", !!me)}
+          {navBtn("admin", <Shield size={16} />, "管理", role === "admin", "admin-nav")}
         </nav>
         <div className="app-identity">
-          <button className="btn ghost" onClick={runSelfCheck} disabled={checking} title="验证加密链路透明解密">
-            🔐 自检
+          <button
+            className="status-pill ok"
+            style={{ border: "none", cursor: "pointer", fontFamily: "inherit" }}
+            onClick={runSelfCheck}
+            disabled={checking}
+            title="验证加密链路透明解密"
+          >
+            {checking ? <Loader2 size={14} className="spin" /> : <ShieldCheck size={14} />}
+            <span>{checking ? "检测中…" : "系统自检正常"}</span>
           </button>
           {!me || !role ? (
-            <button className="btn" onClick={() => showLogin("login")}>
+            <button className="btn-primary btn-sm" onClick={() => showLogin("login")}>
               登录 / 注册
             </button>
           ) : (
             <>
-              <span
-                className={"uc" + (role === "admin" ? " admin" : role === "guest" ? " guest" : "")}
-                title="个人中心（设置页）"
+              <button
+                className="status-pill"
+                style={{
+                  background: "var(--gray-100)",
+                  color: "var(--gray-700)",
+                  border: "none",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  gap: 8,
+                }}
                 onClick={() => setView("settings")}
-                style={{ cursor: "pointer" }}
+                title="个人中心（设置页）"
               >
-                {role === "guest"
-                  ? `访客 · 剩 ${Math.max(0, Math.round(me.remaining_hours || 0))} 小时`
-                  : `${role === "admin" ? "管理员" : "用户"} · ${me.username}`}
-              </span>
-              <button className="btn out" onClick={logout}>
-                退出
+                <span className="avatar">{me.username.slice(0, 1).toUpperCase()}</span>
+                <span>
+                  {role === "guest"
+                    ? `访客 · 剩 ${Math.max(0, Math.round(me.remaining_hours || 0))} 小时`
+                    : `${role === "admin" ? "管理员" : "用户"} · ${me.username}`}
+                </span>
+              </button>
+              <button className="icon-btn" onClick={logout} title="退出登录" aria-label="退出登录">
+                <LogOut size={16} />
               </button>
             </>
           )}
