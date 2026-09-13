@@ -15,22 +15,39 @@ from app.models.conversation import Message
 from app.models.task import Task, StepLog
 from app.models.user import User
 from app.schemas.task import TaskOut, StepLogOut
+from app.services.doc_extract import SUPPORTED_EXTS
 from app.workflow.engine import run_task
 from app.workflow.iterate import run_iterate
+from src.models.testcase import ensure_compound_titles
 
 router = APIRouter()
+
+# 接口文档（swagger）额外接受的文本格式：仅读文件、不走 doc_extract
+_API_EXTRA_EXTS: tuple[str, ...] = (".json", ".yaml", ".yml")
+
+
+def _allowed_exts(kind: str) -> tuple[str, ...]:
+    """按任务类型返回允许上传的扩展名（与前端 accept 保持一致）。"""
+    return SUPPORTED_EXTS + _API_EXTRA_EXTS if kind == "api" else SUPPORTED_EXTS
+
+
+def _fmt_exts(exts: tuple[str, ...]) -> str:
+    return " / ".join(e.lstrip(".") for e in exts)
 
 
 def _parse_cases(cases_json: str | None) -> list[dict]:
     """cases_json 字段是 Task 模型里的 Text 列，存储原始 JSON 字符串。
 
     返回结构化用例列表。解析失败时兜底返回 []，不让单条脏数据把整个详情接口炸掉。
+
+    读取侧统一把标题补齐为 `动作 -> 预期`：历史任务的 title 是纯动作形式，
+    不补齐的话前端（用例列表 / 思维导图 / 会话回填）会看不到预期信息。
     """
     if not cases_json:
         return []
     try:
         obj = json.loads(cases_json)
-        return obj if isinstance(obj, list) else []
+        return ensure_compound_titles(obj) if isinstance(obj, list) else []
     except (ValueError, TypeError):
         return []
 
@@ -95,7 +112,14 @@ async def create_task(
     user_dir = UPLOAD_DIR / user.data_dir
     user_dir.mkdir(parents=True, exist_ok=True)
     if file:
-        ext = os.path.splitext(file.filename or "")[1] or ".json"
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        allowed = _allowed_exts(kind)
+        # 提前拦住解析不了的格式：否则会一路走到解析步骤才崩，用户拿不到有效提示
+        if ext not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"暂不支持 {ext or '该'} 格式，请上传 {_fmt_exts(allowed)} 文件",
+            )
         fname = f"{task_id}{ext}"
         (user_dir / fname).write_bytes(await file.read())
         input_ref = fname

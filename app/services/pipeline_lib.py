@@ -26,11 +26,18 @@ import src.exporter.xmind_exporter as xmind_exporter                # noqa: E402
 from src.models.testcase import TestCase, RequirementUnit          # noqa: E402
 
 
-def lib_parse(kind: str, input_path: str) -> list[RequirementUnit]:
-    """解析输入文件为测试单元。kind=api 走 swagger，business 走 markdown。"""
+def lib_parse(
+    kind: str, input_path: str, text: str | None = None
+) -> list[RequirementUnit]:
+    """解析输入文件为测试单元。kind=api 走 swagger，business 走 markdown。
+
+    text：调用方（parser_agent）已抽取好的纯文本。docx/pdf 这类二进制文件
+    直接交给 parse_markdown 读会抛 UnicodeDecodeError，所以由上层用
+    doc_extract 统一抽取后传进来；为 None 时退回读文件（纯文本场景）。
+    """
     if kind == "api":
         return parse_swagger(input_path)
-    return parse_markdown(input_path)
+    return parse_markdown(input_path, text=text)
 
 
 def lib_generate(units: list[RequirementUnit], client=None) -> list[TestCase]:
