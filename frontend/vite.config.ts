@@ -10,7 +10,7 @@ export default defineConfig({
     // 与生产同源架构保持一致（config 不再需要 API_BASE 分支）
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8001",
+        target: "http://127.0.0.1:8000",
         changeOrigin: false,
       },
     },
