@@ -1,5 +1,7 @@
 """SQLite 连接与 ORM 基类。"""
-from sqlalchemy import create_engine
+import os
+
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.core.config import DB_PATH
@@ -9,6 +11,17 @@ engine = create_engine(
     # timeout=30：后台任务/调度器/请求并发写时给足锁等待，避免 "database is locked"
     connect_args={"check_same_thread": False, "timeout": 30},
 )
+
+# 沙箱环境（如 WorkBuddy 沙箱）会拦截 SQLite 的 journal 文件写，
+# 任何一次 DB 写都会让连接报废、进程退出。设置内存 journal 可规避该限制。
+# 仅当 AITF_DB_MEMORY_JOURNAL=1 时启用；生产环境默认关闭以保证事务持久性。
+if os.environ.get("AITF_DB_MEMORY_JOURNAL") == "1":
+    @event.listens_for(engine, "connect")
+    def _set_memory_journal(dbapi_conn, conn_record):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=MEMORY")
+        cur.execute("PRAGMA synchronous=OFF")
+        cur.close()
 Base = declarative_base()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
