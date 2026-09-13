@@ -1,8 +1,9 @@
 /**
  * M3 浏览器端到端验证（Playwright）：
  *   ① 静默进访客 + 任务列表出现已完成任务
- *   ② 点击任务 → 详情抽屉滑出 → 用例列表 Tab（统计 + 用例卡片 + 折叠展开）
- *   ③ 思维导图 Tab：mind-elixir 渲染 + 节点点击 → 跳回用例 Tab 高亮定位
+ *   ② 点击任务 → 详情弹窗（M5-fix2：默认打开思维导图 Tab + 弹窗放大 96vw×90vh）
+ *   ②b 思维导图完整节点树（M5-fix2：用例 → 前置/数据/步骤→预期 子节点恢复 + 布局 fit）
+ *   ③ 用例列表 Tab（统计 + 表格 + 步骤/预期内联）
  *   ④ 用例搜索过滤
  *   ⑤ 导出 Tab：下载按钮（fetch 200 验证 xlsx/json/xmind）
  *   ⑥ 迭代补充：instruction 提交 → 新子任务 → 轮询完成
@@ -47,23 +48,23 @@ try {
   const taskCount = await page.$$eval(".task-panel .task-item", (els) => els.length);
   ok(`① 访客进入 + 任务列表 ${taskCount} 条`);
 
-  // ② 点击任务 → 弹窗 + 用例表格（M5-fix：抽屉改居中弹窗，卡片改表格）
+  // ② 点击任务 → 弹窗默认打开思维导图 Tab（M5-fix2）+ 弹窗尺寸放大验证
   await page.click(".task-panel .task-item.completed >> nth=0");
   await page.waitForSelector(".task-drawer.show", { timeout: 8000 });
-  await page.waitForSelector(".case-table tbody tr", { timeout: 15000 });
-  const caseCount = await page.$$eval(".case-table tbody tr", (els) => els.length);
-  const statsText = await page.textContent(".case-stats");
-  if (caseCount >= 1 && statsText && statsText.includes("共")) {
-    ok(`② 弹窗弹出，用例表格 ${caseCount} 行（${statsText.trim().replace(/\s+/g, " ").slice(0, 60)}）`);
-  } else fail("② 用例列表异常", `caseCount=${caseCount} stats=${statsText}`);
-  // 步骤+预期列内联可见（表格无折叠，直接断言单元格内容）
-  const stepCell = await page.$(".case-table .ct-step");
-  if (stepCell) ok("② 用例表格步骤/预期列内联展示正常");
-  else ok("② 用例表格渲染正常（该任务无步骤列内容）");
-  await page.screenshot({ path: `${SHOT_DIR}/1-modal-cases-table.png`, fullPage: true });
+  const defTab = await page.textContent(".dtab.active");
+  if (/思维导图/.test(defTab || "")) ok("② 弹窗弹出，默认打开思维导图 Tab（M5-fix2）");
+  else fail("② 默认 Tab 不是思维导图", `tab=${defTab}`);
+  const drawerSize = await page.evaluate(() => {
+    const d = document.querySelector(".task-drawer.show");
+    if (!d) return { w: 0, h: 0, vw: 0, vh: 0 };
+    const r = d.getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height), vw: window.innerWidth, vh: window.innerHeight };
+  });
+  if (drawerSize.w >= drawerSize.vw * 0.94 && drawerSize.h >= drawerSize.vh * 0.87)
+    ok(`② 弹窗尺寸放大（${drawerSize.w}×${drawerSize.h}，视口 ${drawerSize.vw}×${drawerSize.vh}）`);
+  else fail("② 弹窗尺寸未放大", JSON.stringify(drawerSize));
 
-  // ③ 思维导图 Tab
-  await page.click(".dtab >> text=思维导图");
+  // ②b 思维导图（默认 Tab）：完整节点树渲染 + fit 布局（M5-fix2 恢复 V2.7 子节点）
   await page.waitForSelector(".map-container me-tpc", { timeout: 15000 });
   // fit 异步（requestAnimationFrame + ResizeObserver），等画布 transform 稳定
   await page.waitForFunction(
@@ -76,8 +77,15 @@ try {
   ).catch(() => {});
   await page.waitForTimeout(800); // 再多等 ResizeObserver 回调收敛
   const nodeCount = await page.$$eval(".map-container me-tpc", (els) => els.length);
-  if (nodeCount >= 3) ok(`③ 思维导图渲染 ${nodeCount} 节点（root + 模块 + 用例）`);
-  else fail("③ 导图节点不足", String(nodeCount));
+  if (nodeCount >= 3) ok(`②b 思维导图渲染 ${nodeCount} 节点`);
+  else fail("②b 导图节点不足", String(nodeCount));
+  // M5-fix2 核心：用例子节点（操作步骤/预期结果等标签胶囊）必须存在
+  const tagTexts = await page.$$eval(".map-container .tags span", (els) => els.map((e) => (e.textContent || "").trim()));
+  const hasStep = tagTexts.includes("操作步骤");
+  const hasExp = tagTexts.includes("预期结果");
+  if (hasStep || hasExp)
+    ok(`②b 用例子节点恢复（标签：${[...new Set(tagTexts)].join("/") || "无"}）`);
+  else fail("②b 导图仍只有用例标题（子节点丢失）", `tags=[${tagTexts.join(",")}] nodeCount=${nodeCount}`);
   // 节点应在容器可视范围内（M5-fix 渲染修复验证：不再堆角落）
   const mapLayout = await page.evaluate(() => {
     const cont = document.querySelector(".map-container");
@@ -91,9 +99,9 @@ try {
     }
     return { ok: inView >= Math.ceil(nodes.length / 2), inView, total: nodes.length, w: cr.width, h: cr.height };
   });
-  if (mapLayout.ok) ok(`③ 导图布局正常（${mapLayout.inView}/${mapLayout.total} 节点在可视区，容器 ${Math.round(mapLayout.w)}×${Math.round(mapLayout.h)}）`);
-  else fail("③ 导图节点堆角落（布局异常）", JSON.stringify(mapLayout));
-  await page.screenshot({ path: `${SHOT_DIR}/2-mindmap.png`, fullPage: true });
+  if (mapLayout.ok) ok(`②b 导图布局正常（${mapLayout.inView}/${mapLayout.total} 节点在可视区，容器 ${Math.round(mapLayout.w)}×${Math.round(mapLayout.h)}）`);
+  else fail("②b 导图节点堆角落（布局异常）", JSON.stringify(mapLayout));
+  await page.screenshot({ path: `${SHOT_DIR}/1-mindmap-full.png`, fullPage: true });
   // M5-fix：节点点击不再跳转（保持思维导图 Tab）
   const clicked = await page.evaluate(() => {
     const tpcs = [...document.querySelectorAll(".map-container me-tpc")];
@@ -111,15 +119,28 @@ try {
     fail("③ 未找到用例节点", "无文本以 TC- 开头的 me-tpc");
   }
 
-  // ④ 搜索过滤
-  await page.click(".dtab >> text=用例列表").catch(() => {});
+  // ④ 用例列表 Tab（M5-fix：表格）
+  await page.click(".dtab >> text=用例列表");
+  await page.waitForSelector(".case-table tbody tr", { timeout: 15000 });
+  const caseCount = await page.$$eval(".case-table tbody tr", (els) => els.length);
+  const statsText = await page.textContent(".case-stats");
+  if (caseCount >= 1 && statsText && statsText.includes("共")) {
+    ok(`④ 用例列表表格 ${caseCount} 行（${statsText.trim().replace(/\s+/g, " ").slice(0, 60)}）`);
+  } else fail("④ 用例列表异常", `caseCount=${caseCount} stats=${statsText}`);
+  // 步骤+预期列内联可见（表格无折叠，直接断言单元格内容）
+  const stepCell = await page.$(".case-table .ct-step");
+  if (stepCell) ok("④ 用例表格步骤/预期列内联展示正常");
+  else ok("④ 用例表格渲染正常（该任务无步骤列内容）");
+  await page.screenshot({ path: `${SHOT_DIR}/2-cases-table.png`, fullPage: true });
+
+  // ④b 搜索过滤
   await page.waitForSelector(".case-table tbody tr td.ct-id", { timeout: 10000 });
   const firstId = await page.textContent(".case-table tbody tr td.ct-id");
   await page.fill(".case-search input", firstId.trim());
   await page.waitForTimeout(400);
   const filtered = await page.$$eval(".case-table tbody tr", (els) => els.length);
-  if (filtered >= 1) ok(`④ 搜索「${firstId.trim()}」过滤后 ${filtered} 条`);
-  else fail("④ 搜索过滤异常", String(filtered));
+  if (filtered >= 1) ok(`④b 搜索「${firstId.trim()}」过滤后 ${filtered} 条`);
+  else fail("④b 搜索过滤异常", String(filtered));
   await page.fill(".case-search input", "");
   await page.waitForTimeout(300);
 

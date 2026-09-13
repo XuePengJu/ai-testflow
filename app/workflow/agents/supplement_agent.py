@@ -12,7 +12,13 @@ import json
 import re
 from collections import Counter
 
-from src.models.testcase import TestCase, CaseType, Priority, align_step_expectations
+from src.models.testcase import (
+    TestCase,
+    CaseType,
+    Priority,
+    align_step_expectations,
+    strip_title_expected,
+)
 
 
 _SUPPLEMENT_PROMPT = """你是资深测试工程师。请根据补充要求，为已有测试用例集**增量补充**用例。
@@ -29,19 +35,20 @@ _SUPPLEMENT_PROMPT = """你是资深测试工程师。请根据补充要求，�
 3. 输出 JSON 数组，每个元素结构：
 [
   {{
-    "title": "用例标题",
+    "title": "用例标题：只写「动作+对象」的动作概括，不要写预期",
     "module": "模块",
     "case_type": "正向|异常|边界值|场景组合",
     "priority": "P0|P1|P2|P3",
     "pre_condition": "前置条件",
     "steps": ["步骤1", "步骤2"],
     "step_expectations": ["步骤1的预期结果", "步骤2的预期结果"],
-    "expected": "整体预期结果（各步骤预期的总结）",
+    "expected": "整体预期结果：只写可验证的实质结果断言，不要写「XX流程正常完成」这类套话；多个结果用「，」分隔",
     "test_data": "测试数据"
   }}
 ]
 4. step_expectations 必须与 steps 一一对应、数量严格一致，每个步骤都要有明确的预期结果
-5. 只输出 JSON，不要解释、不要 markdown 代码块包裹"""
+5. expected 必须是可验证的实质结果断言（写清结果状态/数据变化）
+6. 只输出 JSON，不要解释、不要 markdown 代码块包裹"""
 
 
 def build_existing_summary(cases: list[TestCase], max_per_module: int = 15) -> str:
@@ -190,9 +197,14 @@ def run_supplement(
         new_cases = _mock_supplement(instruction, existing_cases)
         model_note = "mock 兜底"
 
-    # 过滤掉与已有用例标题完全重复的
-    existing_titles = {(c.title, c.module, c.case_type.value) for c in existing_cases}
-    deduped = [c for c in new_cases if (c.title, c.module, c.case_type.value) not in existing_titles]
+    # 过滤掉与已有用例标题完全重复的（已有用例标题已是 `动作 -> 预期` 复合形式，比较时剥掉预期片段）
+    existing_titles = {
+        (strip_title_expected(c.title), c.module, c.case_type.value) for c in existing_cases
+    }
+    deduped = [
+        c for c in new_cases
+        if (strip_title_expected(c.title), c.module, c.case_type.value) not in existing_titles
+    ]
 
     by_module = Counter(c.module or "未分类" for c in deduped)
     summary = f"增量生成 {len(deduped)} 条用例（模型：{model_note}）"

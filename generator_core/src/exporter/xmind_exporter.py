@@ -4,7 +4,7 @@
 
 结构说明（对齐老板模板 测试用例模板.xmind）：
 - 每个模块作为一个 topic
-- 每个用例作为一个 topic：标题 `序号. 操作概括->预期概括`，labels 标注 类型+优先级（如 正向用例/P0）
+- 每个用例作为一个 topic：标题 `序号. 动作概括 -> 预期概括`，labels 标注 类型+优先级（如 正向用例/P0）
 - 子节点用 labels 标注字段：前置条件 / 测试数据 / 操作步骤（每个步骤下挂对应的预期结果）
 - 无"步骤"聚合节点，操作步骤直接平铺；预期结果作为每个步骤的子节点（V2.7：逐步预期，不再只挂最后一步）
 """
@@ -14,7 +14,7 @@ import uuid
 import zipfile
 from xml.sax.saxutils import escape
 
-from src.models.testcase import TestCase
+from src.models.testcase import TestCase, compose_title
 
 
 def _tid() -> str:
@@ -96,11 +96,10 @@ def _case_topic(c: TestCase, idx: int) -> str:
         # 无步骤时预期结果兜底放同级，不丢数据
         children.append(_topic(exp, labels=["预期结果"]))
 
-    # 标题：序号. 操作概括->预期概括（预期取第一分句，完整预期在每个步骤子节点）
-    exp_short = exp.split("，")[0].split(",")[0].strip() if exp else ""
-    title = f"{idx}. {_case_title(c)}"
-    if exp_short:
-        title += f"->{exp_short}"
+    # 标题：序号. 动作概括 -> 预期概括（完整预期挂在每个步骤子节点下）
+    # V2.8-fix4：数据层的 title 已是复合形式，这里走 compose_title 保证幂等
+    # （已含 `->` 时原样返回，不会拼成 A->B->B）；旧数据（纯动作标题）则按 expected 兜底拼接。
+    title = f"{idx}. {compose_title(_case_title(c), exp)}"
 
     return _topic(
         title,

@@ -10,11 +10,12 @@ from app.core.utils import utcnow
 
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR
 from app.core.db import SessionLocal
+from app.models.conversation import Conversation
 from app.models.task import Task, StepLog
 from app.models.user import User
 from app.services import llm_service
 from app.services.pipeline_lib import cases_to_json
-from src.models.testcase import ensure_case_ids
+from src.models.testcase import ensure_case_ids, ensure_compound_titles
 from app.workflow.agents import (
     parser_agent, generator_agent, reviewer_agent, exporter_agent,
 )
@@ -37,6 +38,47 @@ def _prepare_input(task: Task, data_dir: str) -> str:
         p.write_text(task.input_ref, encoding="utf-8")
         return str(p)
     return str(base / task.input_ref)
+
+
+def _apply_requirement_naming(db, task: Task, details: str) -> None:
+    """解析步骤产出「需求摘要 + 任务名」→ 回写任务名 / 需求摘要 / 会话名。
+
+    - 任务名：前端提交的只是用户原话截断，这里用模型总结的名字覆盖
+    - 需求摘要：落到 task.input_summary（供详情页展示）
+    - 会话名：仅当该会话下还没有其它任务时改名，避免多任务会话互相覆盖
+
+    全流程防御式：任何异常都吞掉，绝不因为命名失败把任务打成 failed。
+    """
+    try:
+        meta = json.loads(details or "{}")
+        if not isinstance(meta, dict):
+            return
+        title = str(meta.get("title") or "").strip()
+        req_summary = str(meta.get("req_summary") or "").strip()
+        if not title and not req_summary:
+            return
+
+        if req_summary:
+            task.input_summary = req_summary
+        if title:
+            task.name = title
+        db.commit()
+
+        conv_id = task.conversation_id
+        if title and conv_id:
+            siblings = (db.query(Task)
+                        .filter(Task.conversation_id == conv_id, Task.id != task.id)
+                        .count())
+            if siblings == 0:
+                conv = db.get(Conversation, conv_id)
+                if conv and conv.title != title:
+                    conv.title = title
+                    db.commit()
+    except Exception:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def run_task(task_id: str) -> None:
@@ -121,6 +163,9 @@ def run_task(task_id: str) -> None:
                 step.finished_at = utcnow()
                 step.duration_ms = round((time.time() - s0) * 1000, 1)
                 db.commit()
+                # 解析步骤顺带回写任务名 / 需求摘要 / 会话名（失败不影响主流程）
+                if name == "parser":
+                    _apply_requirement_naming(db, task, details)
             except Exception as e:  # noqa: BLE001
                 try:
                     db.rollback()
@@ -140,6 +185,7 @@ def run_task(task_id: str) -> None:
 
         cases = data["cases"]
         cases = ensure_case_ids(cases)  # 补全缺失的用例ID（TC-xxx 序号）
+        cases = ensure_compound_titles(cases)  # 标题补齐为 `动作 -> 预期` 复合形式
         task.status = "completed"
         task.cases_count = len(cases)
         task.cases_json = cases_to_json(cases)

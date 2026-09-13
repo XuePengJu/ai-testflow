@@ -103,6 +103,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       set({ activeIds: cur });
       // 终态后刷一次列表
       void get().refresh();
+      // 任务名/会话名在解析步骤由后端回写，同步刷新侧栏会话列表
+      void import("./chatStore").then(({ useChatStore }) =>
+        useChatStore.getState().refreshConversations(),
+      );
     });
   },
 

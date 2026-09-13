@@ -1,6 +1,6 @@
 /**
  * M3 / M5-fix：任务详情居中弹窗（遮罩 + scale 弹出，恢复 V2.7 modal 形态）。
- * - 3 Tab：用例列表（表格）/ 思维导图 / 导出&迭代
+ * - 3 Tab：思维导图（默认）/ 用例列表（表格）/ 导出&迭代
  * - running 状态：显示步骤进度卡（复用 TaskStepsCard）+ 2s 详情轮询（taskStore.pollDrawer）
  */
 import { useEffect, useState } from "react";
@@ -11,7 +11,7 @@ import CaseListTab from "./CaseListTab";
 import MindMapTab from "./MindMapTab";
 import ExportTab from "./ExportTab";
 
-type TabKey = "cases" | "mindmap" | "export";
+type TabKey = "mindmap" | "cases" | "export";
 
 export default function TaskDetailDrawer() {
   const drawerTaskId = useTaskStore((s) => s.drawerTaskId);
@@ -20,7 +20,7 @@ export default function TaskDetailDrawer() {
   const closeDetail = useTaskStore((s) => s.closeDetail);
   const focusCaseId = useTaskStore((s) => s.focusCaseId);
   const focusCaseSeq = useTaskStore((s) => s.focusCaseSeq);
-  const [tab, setTab] = useState<TabKey>("cases");
+  const [tab, setTab] = useState<TabKey>("mindmap");
 
   // Esc 关闭
   useEffect(() => {
@@ -71,17 +71,17 @@ export default function TaskDetailDrawer() {
             <div className="drawer-tabs">
               <button
                 type="button"
-                className={`dtab ${tab === "cases" ? "active" : ""}`}
-                onClick={() => setTab("cases")}
-              >
-                用例列表{t.cases?.length ? `（${t.cases.length}）` : ""}
-              </button>
-              <button
-                type="button"
                 className={`dtab ${tab === "mindmap" ? "active" : ""}`}
                 onClick={() => setTab("mindmap")}
               >
                 思维导图
+              </button>
+              <button
+                type="button"
+                className={`dtab ${tab === "cases" ? "active" : ""}`}
+                onClick={() => setTab("cases")}
+              >
+                用例列表{t.cases?.length ? `（${t.cases.length}）` : ""}
               </button>
               <button
                 type="button"
@@ -93,8 +93,8 @@ export default function TaskDetailDrawer() {
             </div>
 
             <div className="drawer-body">
-              {tab === "cases" && <CaseListTab task={t} focusCaseId={focusCaseId} focusSeq={focusCaseSeq} />}
               {tab === "mindmap" && <MindMapTab task={t} />}
+              {tab === "cases" && <CaseListTab task={t} focusCaseId={focusCaseId} focusSeq={focusCaseSeq} />}
               {tab === "export" && <ExportTab task={t} />}
             </div>
           </>

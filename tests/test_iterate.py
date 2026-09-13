@@ -35,7 +35,8 @@ class TestImportJson:
         p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         cases, summary = import_cases(str(p), "json")
         assert len(cases) == 2
-        assert cases[0].title == "登录成功"
+        # V2.8-fix4：导入后标题统一补齐为 `动作 -> 预期` 复合形式
+        assert cases[0].title == "登录成功 -> 进入首页"
         assert cases[0].case_type == CaseType.POSITIVE
         assert summary["total"] == 2
         assert summary["modules"]["登录"] == 2
@@ -119,7 +120,8 @@ class TestImportXlsx:
         wb.save(str(p))
         cases, summary = import_cases(str(p), "xlsx")
         assert len(cases) == 1
-        assert cases[0].title == "创建采购单"
+        # V2.8-fix4：导入后标题统一补齐为 `动作 -> 预期` 复合形式
+        assert cases[0].title == "创建采购单 -> 创建成功"
         assert cases[0].module == "采购"
         assert cases[0].steps == ["填写表单", "提交"]
         assert cases[0].test_data == "金额=100"

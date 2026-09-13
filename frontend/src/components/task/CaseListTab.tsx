@@ -4,6 +4,8 @@
  * - 搜索：按 case_id / 标题 / 模块过滤
  * - M5-fix：折叠卡片 → 恢复 V2.7 表格（一行一条、表头 sticky、步骤+预期内联）
  * - focusCaseId（外部定位）：滚动定位 + 行高亮
+ * - V2.8-fix4：删除「预期结果」独立列——整体预期已并入标题（`动作 -> 预期`），
+ *   腾出的宽度加给「标题」与「测试数据」列；导图/导出同步用复合标题。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task } from "../../types";
@@ -93,14 +95,13 @@ export default function CaseListTab({ task, focusCaseId, focusSeq }: Props) {
           <div className="case-table-wrap">
             <table className="case-table">
               <colgroup>
-                <col style={{ width: "9%" }} />
-                <col style={{ width: "18%" }} />
+                <col style={{ width: "8%" }} />
+                <col style={{ width: "24%" }} />
                 <col style={{ width: "7%" }} />
                 <col style={{ width: "6%" }} />
                 <col style={{ width: "14%" }} />
-                <col style={{ width: "26%" }} />
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "10%" }} />
+                <col style={{ width: "25%" }} />
+                <col style={{ width: "16%" }} />
               </colgroup>
               <thead>
                 <tr>
@@ -110,7 +111,6 @@ export default function CaseListTab({ task, focusCaseId, focusSeq }: Props) {
                   <th>优先级</th>
                   <th>前置条件</th>
                   <th>操作步骤 → 预期</th>
-                  <th>预期结果</th>
                   <th>测试数据</th>
                 </tr>
               </thead>
@@ -143,7 +143,6 @@ export default function CaseListTab({ task, focusCaseId, focusSeq }: Props) {
                             ))
                           : dash}
                       </td>
-                      <td className="ct-text">{c.expected || dash}</td>
                       <td className="ct-text">{c.test_data || dash}</td>
                     </tr>
                   );

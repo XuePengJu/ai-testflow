@@ -53,6 +53,89 @@ def align_step_expectations(
     return [exp] * len(steps)
 
 
+# ============ 复合标题：`动作概括 -> 预期结果`（V2.8-fix4）============
+
+TITLE_SEP = " -> "
+_TITLE_SPLIT_RE = re.compile(r"\s*(?:->|→)\s*")
+
+# 「无信息量套话」子句（作为标题里的预期片段时应剥掉）
+_BOILERPLATE_RES = (
+    re.compile(r"^.*(?:流程|功能|操作|页面|界面|系统|整体)(?:均|都)?(?:正常|顺利|成功)(?:完成|运行|可用|显示)?$"),
+    re.compile(r"^无(?:异常|报错|错误)$"),
+    re.compile(r"^符合预期$"),
+)
+
+
+def split_title(title: str) -> tuple[str, str]:
+    """拆分复合标题 → (动作概括, 预期片段)。非复合标题返回 (title, "")。"""
+    parts = _TITLE_SPLIT_RE.split((title or "").strip(), maxsplit=1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return (title or "").strip(), ""
+
+
+def strip_title_expected(title: str) -> str:
+    """取标题的动作部分（做去重键/身份匹配时用，避免预期改一个字就被当成新用例）。"""
+    return split_title(title)[0]
+
+
+def condense_expected(expected: str) -> str:
+    """把整体预期压缩成适合放进标题的「实质结果断言」。
+
+    规则：按中英文逗号/分号切子句，剥掉**开头连续**的无信息量套话子句
+    （如「上架状态下商品退款流程正常完成」「操作成功」「无异常」），但至少保留
+    最后一个子句，避免标题片段变空。
+    """
+    exp = (expected or "").strip()
+    if not exp:
+        return ""
+    parts = [p.strip().rstrip("。.!！") for p in re.split(r"[，,；;]", exp)]
+    parts = [p for p in parts if p]
+    if len(parts) <= 1:
+        return exp.rstrip("。.!！")
+    i = 0
+    while i < len(parts) - 1 and any(r.match(parts[i]) for r in _BOILERPLATE_RES):
+        i += 1
+    return "，".join(parts[i:])
+
+
+def compose_title(title: str, expected: str, sep: str = TITLE_SEP) -> str:
+    """合成复合标题：`动作概括 -> 预期结果`。
+
+    幂等：标题里已含 `->` / `→` 时原样返回，避免二次拼成 `A->B->B`。
+    无预期时只返回动作部分（保证不为空）。
+    """
+    t = (title or "").strip() or "未命名用例"
+    if "->" in t or "→" in t:
+        return t
+    exp = condense_expected(expected)
+    return f"{t}{sep}{exp}" if exp else t
+
+
+def ensure_compound_titles(cases: list) -> list:
+    """批量把用例标题补齐为复合形式（幂等，兼容 TestCase 对象与 dict）。
+
+    只改写非空标题；已含 `->` 的标题原样保留，不会重复追加。
+    """
+    def _get(c, key: str):
+        return (c.get(key) if isinstance(c, dict) else getattr(c, key, None)) or ""
+
+    def _set(c, key: str, val: str) -> None:
+        if isinstance(c, dict):
+            c[key] = val
+        else:
+            setattr(c, key, val)
+
+    for c in cases:
+        title = _get(c, "title")
+        if not title:
+            continue
+        new_title = compose_title(title, _get(c, "expected"))
+        if new_title != title:
+            _set(c, "title", new_title)
+    return cases
+
+
 def ensure_case_ids(cases: list) -> list:
     """补全缺失的用例ID，保证每条用例都有 TC 编号（兼容 TestCase 对象与 dict）。
 

@@ -13,7 +13,14 @@ import zipfile
 from collections import Counter
 from xml.etree import ElementTree as ET
 
-from src.models.testcase import TestCase, CaseType, Priority, align_step_expectations
+from src.models.testcase import (
+    TestCase,
+    CaseType,
+    Priority,
+    align_step_expectations,
+    ensure_compound_titles,
+    split_title,
+)
 
 
 class ImportError(Exception):
@@ -188,10 +195,11 @@ def _parse_case_topic_xml(topic: ET.Element, ns: str) -> TestCase:
     """从 XML topic 元素还原一个 TestCase。"""
     title_el = topic.find(f"{ns}title")
     raw_title = (title_el.text or "").strip() if title_el is not None else ""
-    # 标题格式：`序号. 操作概括->预期概括`，去掉序号和 -> 后缀
+    # 标题格式：`序号. 动作概括 -> 预期概括`，去掉序号；`-> 预期` 片段留作 expected 兜底
     import re
-    clean_title = re.sub(r"^\d+\.\s*", "", raw_title)
-    clean_title = re.sub(r"->.*$", "", clean_title).strip()
+    no_num = re.sub(r"^\d+\.\s*", "", raw_title)
+    clean_title, title_exp = split_title(no_num)
+    clean_title = clean_title or no_num.strip()
 
     # labels：[类型用例, 优先级]
     case_type = "正向"
@@ -244,7 +252,10 @@ def _parse_case_topic_xml(topic: ET.Element, ns: str) -> TestCase:
             elif label_text == "预期结果":
                 expected = ctitle
 
-    # 整体预期兜底：xmind 无独立整体节点时，取最后一步预期作为 expected（保证非空）
+    # 整体预期兜底①：优先用标题里带的 `-> 预期` 片段（平台导出的标题即复合形式）
+    if not expected and title_exp:
+        expected = title_exp
+    # 整体预期兜底②：xmind 无独立整体节点时，取最后一步预期作为 expected（保证非空）
     if not expected and step_exps:
         expected = step_exps[-1]
 
@@ -342,8 +353,10 @@ def _parse_case_topic_json(topic: dict) -> TestCase:
     """从 JSON topic 还原一个 TestCase。"""
     import re
     raw_title = topic.get("title", "")
-    clean_title = re.sub(r"^\d+\.\s*", "", raw_title)
-    clean_title = re.sub(r"->.*$", "", clean_title).strip()
+    # 标题格式：`序号. 动作概括 -> 预期概括`，去掉序号；`-> 预期` 片段留作 expected 兜底
+    no_num = re.sub(r"^\d+\.\s*", "", raw_title)
+    clean_title, title_exp = split_title(no_num)
+    clean_title = clean_title or no_num.strip()
 
     labels = topic.get("labels") or []
     case_type = "正向"
@@ -382,7 +395,10 @@ def _parse_case_topic_json(topic: dict) -> TestCase:
         elif label_text == "预期结果":
             expected = ctitle
 
-    # 整体预期兜底：xmind 无独立整体节点时，取最后一步预期作为 expected（保证非空）
+    # 整体预期兜底①：优先用标题里带的 `-> 预期` 片段（平台导出的标题即复合形式）
+    if not expected and title_exp:
+        expected = title_exp
+    # 整体预期兜底②：xmind 无独立整体节点时，取最后一步预期作为 expected（保证非空）
     if not expected and step_exps:
         expected = step_exps[-1]
 
@@ -415,6 +431,8 @@ def import_cases(path: str, ext: str) -> tuple[list[TestCase], dict]:
     # 重编号
     for i, c in enumerate(cases, 1):
         c.case_id = f"TC-{i:03d}"
+    # 标题补齐为 `动作 -> 预期`（源文件标题可能只写了动作部分）
+    cases = ensure_compound_titles(cases)
     summary = {
         "total": len(cases),
         "modules": dict(Counter(c.module or "未分类" for c in cases)),

@@ -112,8 +112,9 @@ class TestXmindPerStepExpected:
         got = cases[0]
         assert got.steps == ["输入超长文本", "点击提交"]
         assert got.resolved_expectations() == ["提示超出限制或被截断", "正常提交"]
-        # xmind 无独立整体预期节点 → 导入时兜底为最后一步预期（保证非空）
-        assert got.expected == "正常提交"
+        # V2.8-fix4：标题已承载整体预期（`动作 -> 预期`），导入时优先从标题还原，
+        # 比旧行为（兜底取最后一步预期）更忠实于原用例（不再是「正常提交」）
+        assert got.expected == "提示超出限制或被截断，提交成功"
 
 
 # ============ mock 生成器逐步预期 ============

@@ -30,7 +30,13 @@ from app.workflow.agents.import_agent import import_cases, ImportError
 from app.workflow.agents.reviewer_agent import run_reviewer
 from app.workflow.agents.supplement_agent import run_supplement
 from app.workflow.agents.exporter_agent import run_exporter
-from src.models.testcase import TestCase, align_step_expectations, ensure_case_ids
+from src.models.testcase import (
+    TestCase,
+    align_step_expectations,
+    ensure_case_ids,
+    ensure_compound_titles,
+    strip_title_expected,
+)
 
 
 def _parse_cases_json(cases_json: str | None) -> list[TestCase]:
@@ -72,11 +78,20 @@ def _parse_cases_json(cases_json: str | None) -> list[TestCase]:
 
 
 def _merge_dedup(base: list[TestCase], extra: list[TestCase]) -> list[TestCase]:
-    """合并两组用例并去重，去重键 = (标题, 模块, 类型, 预期前20字)。"""
+    """合并两组用例并去重，去重键 = (动作标题, 模块, 类型, 预期前20字)。
+
+    标题已复合为 `动作 -> 预期`，去重时剥掉 `-> 预期` 片段，避免预期改一个字
+    就被当成全新用例（旧用例来自库、新增用例来自模型，两侧形式可能不一致）。
+    """
     seen: set[tuple] = set()
     merged: list[TestCase] = []
     for c in base + extra:
-        key = (c.title.strip(), c.module.strip(), c.case_type.value, (c.expected or "")[:20])
+        key = (
+            strip_title_expected(c.title).strip(),
+            c.module.strip(),
+            c.case_type.value,
+            (c.expected or "")[:20],
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -202,6 +217,7 @@ def run_iterate(
         step3 = _add_step(db, new_task_id, "merge", "合并去重")
         s0 = time.time()
         merged = _merge_dedup(base_cases, new_cases)
+        merged = ensure_compound_titles(merged)  # 标题补齐为 `动作 -> 预期`（供评审/导出/落库统一使用）
         added = len(merged) - len(base_cases)
         _finish_step(db, step3, "completed",
                      summary=f"合并后共 {len(merged)} 条（新增 {added} 条）",

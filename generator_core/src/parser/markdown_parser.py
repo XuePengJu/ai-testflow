@@ -4,11 +4,19 @@ from pathlib import Path
 from src.models.testcase import RequirementUnit
 
 
-def parse_markdown(path: str | Path) -> list[RequirementUnit]:
-    text = Path(path).read_text(encoding="utf-8")
+def parse_markdown(path: str | Path, text: str | None = None) -> list[RequirementUnit]:
+    """把需求文本按 Markdown 二级及以上标题切分成测试单元。
+
+    text：已抽取好的纯文本（docx/pdf 由上层 doc_extract 抽取后传入）。
+    为 None 时按路径读文件；此时要求文件是 UTF-8 纯文本。
+    """
+    if text is None:
+        text = Path(path).read_text(encoding="utf-8")
     units = []
     # 按 Markdown 二级及以上标题切分（覆盖 ## 与 ### 章节）
-    parts = re.split(r"\n#{2,}\s+", text)
+    # \A 用于覆盖「文件第一个字符就是 ##」的情况：旧写法只匹配 \n 开头的标题，
+    # 会把第一小节连同标题并进 parts[0] 被丢弃（表现：首个测试点凭空消失）。
+    parts = re.split(r"(?:\A|\n)#{2,}\s+", text)
     for part in parts[1:]:
         lines = part.strip().split("\n")
         title = lines[0].strip().split("（")[0].strip()
