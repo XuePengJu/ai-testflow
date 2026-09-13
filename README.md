@@ -1,6 +1,6 @@
 # AI 测试工作流平台
 
-> 作品集「门面担当」全栈产品，当前版本 **V2.8**。
+> 作品集「门面担当」全栈产品，当前版本 **V2.9**。
 > 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端。支持多厂商大模型、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
 
 在线演示：[https://f1572f5.r1.cpolar.top](https://f1572f5.r1.cpolar.top)
@@ -67,6 +67,26 @@
 - 步骤级预期结果：用例步骤支持独立「预期结果」字段
 
 - 用例导入：迭代时上传本地 xmind / xlsx / json 用例文件，与原任务用例合并去重作为基础用例集（解析失败明确报错不静默）
+
+### 对话附件文档解析（V2.9）
+
+- 对话输入框支持上传文档附件（docx / pdf / md / markdown / txt），后端 `app/api/files.py` 接收并 `app/services/doc_extract.py` 抽取纯文本
+- 抽取结果（附文件名）作为上下文注入对话请求（`ChatIn.file_id`），Buddy 助手基于文档内容作答——可直接把 PRD / 需求文档丢进对话让它生成用例
+- 解析分层容错：`.docx` 用 python-docx 抽正文段落 + 表格行；`.pdf` 用 pdfplumber 逐页抽取并跳过空白页；`.md/.markdown/.txt` 直接 utf-8 读取（非法字节 `errors="replace"` 容错）；超大文件截断到上限
+- 依赖缺失不崩：缺 python-docx / pdfplumber 时抛出明确错误提示，而非静默失败
+
+### 深度思考管道与 Markdown 渲染（V2.9）
+
+- **深度思考开关**：对话请求 `ChatIn.thinking`（默认 true），关闭则不请求模型思考、也不展示思考面板
+- **思考流式呈现**：模型返回的 `reasoning_content` 映射为 `think` 事件，前端以可折叠「思考过程」面板逐字渲染（沿用 V2.6 的 thinking 折叠交互）
+- **Markdown 渲染**：助手回复经 `marked` 解析 + `DOMPurify` 净化后渲染（XSS 安全），支持代码块 / 列表 / 表格等富文本；非流式兜底同样走该管线
+
+### 用例标题复合化与导图布局优化（V2.9）
+
+- **标题动作→预期**（FR-M 增强）：用例标题统一补齐为「动作 → 预期」复合形式，详情 / 思维导图 / 会话回填读取侧统一补全（`ensure_compound_titles`），旧任务历史标题也自动对齐
+- **任务命名需求摘要**：对话触发任务时自动从需求总结命名，任务名更可读
+- **思维导图初始布局**：`MindMapTab` 改为初始展开根节点 + 居中自适应（fitView），首屏即见全貌
+- **用例 ID 回归修复**：修复 React 重构时丢失的用例编号兜底（存量任务 ID 列空白复现），后端读取侧 + 前端显示 + 存量 DB 三处兜底，编号列永不为空（详见《项目1-功能增强执行方案-V2.9》）
 
 ### 多格式导出
 
@@ -150,8 +170,10 @@
 | AI 模型 | OpenAI 兼容协议 HTTP 直连，支持 7+ 厂商；无 Key 自动 mock 兜底    |
 | 前端    | **React 18 + TypeScript + Vite**（zustand 状态管理），构建产物纯静态、FastAPI 同源托管 |
 | 思维导图  | **MindElixir**（120KB，可编辑，原生标签支持）                 |
+| 前端渲染  | **marked**（Markdown 解析）+ **DOMPurify**（XSS 净化）          |
+| 文档解析  | **python-docx**（docx 抽取）+ **pdfplumber**（pdf 抽取）         |
 | 任务调度  | APScheduler（访客清理定时任务）                            |
-| 测试    | pytest（136 条后端自动化用例）+ Playwright（M1~M5 浏览器端到端验证脚本）          |
+| 测试    | pytest（220 条后端自动化用例）+ Playwright（M1~M5 浏览器端到端验证脚本）          |
 
 ***
 
@@ -243,8 +265,14 @@ npm run build   # 构建 → frontend/dist（产物入库，服务器 git pull �
 
 | 方法   | 路径                | 说明                          |
 | ---- | ----------------- | --------------------------- |
-| POST | `/api/chat/stream` | Buddy 流式对话（SSE），支持注入任务摘要上下文 |
-| POST | `/api/chat`        | 非流式对话（兜底）                   |
+| POST | `/api/chat/stream` | Buddy 流式对话（SSE），支持注入任务摘要上下文 + 深度思考 + 文档附件（file_id） |
+| POST | `/api/chat`        | 非流式对话（兜底，同渲染管线）              |
+
+### 文件（V2.9 附件）
+
+| 方法   | 路径           | 说明                                  |
+| ---- | ------------ | ----------------------------------- |
+| POST | `/api/files` | 上传对话附件（docx/pdf/md/markdown/txt），返回 file_id 供 ChatIn 引用 |
 
 ### 分类
 
@@ -329,7 +357,7 @@ ai-testflow/
 ├── frontend-legacy/             # 旧原生单文件前端（回退保留：AITF_FRONTEND=legacy）
 ├── scripts/
 │   └── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
-├── tests/                       # 136 条自动化用例（认证 + 分级加密 + 权限 + 对话 + 迭代导入，pytest）
+├── tests/                       # 220 条自动化用例（认证 + 分级加密 + 权限 + 对话 + 迭代导入 + 附件解析 + 思考 + 标题复合化等，pytest）
 ├── app/
 │   ├── core/
 │   │   ├── config.py            # 配置加载
@@ -348,7 +376,8 @@ ai-testflow/
 │   │   └── category.py
 │   ├── services/
 │   │   ├── pipeline_lib.py      # 调用内置 generator_core
-│   │   └── llm_service.py       # OpenAI 兼容 LLM 客户端
+│   │   ├── llm_service.py       # OpenAI 兼容 LLM 客户端
+│   │   └── doc_extract.py       # 对话附件文档解析（docx/pdf/md → 纯文本，V2.9）
 │   ├── workflow/
 │   │   ├── engine.py            # 状态机 + 步骤调度
 │   │   ├── iterate.py           # 迭代流水线（加载基础用例→增量生成→合并去重→校验→导出）
@@ -366,10 +395,12 @@ ai-testflow/
 │   └── jobs/
 │       └── guest_cleaner.py     # 访客清理（定时 + 懒清理 + 审计）
 ├── uploads/  outputs/           # 上传 / 导出目录（按用户分目录，已 gitignore）
-└── docs/                        # 项目文档
-    ├── PRD.md                   # 产品需求文档
-    ├── DEPLOY.md                # 部署指南（同源单服务 + cpolar）
-    └── 项目1-工作流平台-MVP执行方案.md  # 技术实现方案
+    └── docs/                        # 项目文档
+        ├── PRD.md                   # 产品需求文档
+        ├── DEPLOY.md                # 部署指南（同源单服务 + cpolar）
+        ├── 项目1-工作流平台-MVP执行方案.md  # 技术实现方案（架构底座，版本无关）
+        ├── 项目1-前端React重构执行方案-V2.8.md  # 前端重构执行方案
+        └── 项目1-功能增强执行方案-V2.9.md  # V2.9 功能增强执行方案
 ```
 
 ***
@@ -396,6 +427,7 @@ ai-testflow/
 | V2.6（已发布） | 对话驱动 Buddy 助手 + 会话持久化           | ✅ 已上线 |
 | V2.7（已发布） | 用例迭代与导入 + 步骤级预期结果               | ✅ 已上线 |
 | V2.8（已完成） | React + TS 前端重构：组件化拆分、zustand 状态、Playwright e2e 全覆盖、dist 同源托管 | ✅ 已完成（本地） |
-| V2.9（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
-| V3.0（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
+| V2.9（已完成） | 对话附件文档解析 + 深度思考管道与 Markdown 渲染 + 用例标题复合化与导图布局 + 用例 ID 回归修复 | ✅ 已完成（本地） |
+| V3.0（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
+| V3.1（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
 

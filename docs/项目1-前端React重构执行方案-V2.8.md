@@ -175,3 +175,19 @@ ai-testflow/
 - 生产链路：`config.py` `AITF_FRONTEND=react(默认)/legacy` 决定 STATIC_DIR；`main.py` `/assets`、`/vendor` 条件挂载，同一份代码兼容新旧前端
 - 回归口径：M2/M3/M4 三套 e2e 脚本均支持 `M*_URL` 环境变量，本轮全部跑在 `:8000`（生产同源 + 加密链路端到端）
 - 遗留：线上部署（git push + 服务器 pull + restart）待老板发话，按协作铁律不擅自执行
+
+---
+
+## 12. 实际落地差异（与初稿方案偏差）
+
+> 作为收尾记录，列出与 §3 技术选型、§4 目录骨架的偏差——这些偏差已在 M1~M5 验收中确认可接受。
+
+| 初稿方案 | 实际落地 | 偏差说明 |
+| --- | --- | --- |
+| 路由：React Router 6 | 3 个顶层视图用 state 切换（main\|settings\|admin），未引入 React Router | 视图少、state 切更轻，避免额外依赖 |
+| 拖拽：@dnd-kit/core | 分类树用 🏷 归类菜单（任务「🏷」一键归入/移出），未做节点拖拽 | 交互更清晰、可测性更好、规避 dnd 在 React 严格模式下的重渲染坑 |
+| 状态：组件 state + Context | 引入 zustand 管理 chat/task/settings/category 多 store | 多模块共享状态，zustand 比 Context 更可控 |
+| 思维导图：npm 包 mind-elixir | 保留 vendor ESM 引入（未改 npm 包） | 功能等价，零迁移风险 |
+| 部署：待发话 | 仍待老板发话（git push + 服务器 pull + restart） | 按协作铁律，本地完成不擅自部署 |
+
+说明：上述偏差不影响 V2.8 验收结论（M1~M5 全绿）；文档指针已通过《项目1-功能增强执行方案-V2.9.md》同步至 V2.9。
