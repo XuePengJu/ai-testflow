@@ -478,6 +478,36 @@ body {
   background: #d83931;
   display: inline-flex; align-items: center; gap: 5px;
 }
+/* 迭代引用 chip（V2.10 统一入口）：输入框上方常驻，明示本次发送是「迭代旧任务」而非新建 */
+.iter-ref-chip {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 12.5px;
+  background: #eef3ff; border: 1px solid #94bfff; border-radius: 12px;
+  padding: 6px 6px 6px 10px; color: #165dff; width: fit-content; max-width: 100%;
+}
+.iter-ref-chip .irc-icon { font-size: 13px; line-height: 1; }
+.iter-ref-chip .irc-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iter-ref-chip .irc-hint {
+  flex: none; color: #6b7a99; font-size: 12px; padding-left: 2px;
+}
+.iter-ref-chip .irc-gen {
+  flex: none; margin-left: 4px; padding: 4px 10px; border: none; border-radius: 12px;
+  background: #165dff; color: #fff; font-size: 12.5px; cursor: pointer; line-height: 1.4;
+  transition: background .18s, opacity .18s;
+}
+.iter-ref-chip .irc-gen:hover:not(:disabled) { background: #0e42d2; }
+.iter-ref-chip .irc-gen:disabled { background: #94bfff; cursor: not-allowed; }
+.iter-ref-chip .irc-close {
+  flex: none; width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
+  background: rgba(22, 93, 255, .08); color: #165dff; cursor: pointer; font-size: 12px;
+  line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+  transition: background .18s, color .18s;
+}
+.iter-ref-chip .irc-close:hover { background: #165dff; color: #fff; }
+/* 迭代模式下输入框整体描蓝，防止用户忘记挂着迭代引用而误发 */
+.chat-input-wrap.iter-mode .chat-input-row {
+  border-color: #94bfff; box-shadow: 0 2px 14px rgba(22, 93, 255, .10);
+}
+
 .file-chip {
   display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 12.5px;
   background: #f0f7ff; border: 1px solid #bedaff; border-radius: 12px; padding: 6px 10px;
@@ -518,9 +548,11 @@ body {
 .drawer-head { flex: none; padding: 16px 20px 10px; border-bottom: 1px solid #e5e6eb; }
 .drawer-title-row { display: flex; align-items: center; gap: 10px; }
 .drawer-title {
-  font-size: 16px; font-weight: 600; color: #1f2329; flex: 1; min-width: 0;
+  font-size: 16px; font-weight: 600; color: #1f2329; flex: 0 1 auto; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* 版本切换器靠左排布后，用它把关闭按钮顶到右侧 */
+.dh-spacer { flex: 1; min-width: 0; }
 .drawer-close {
   flex: none; border: none; background: none; font-size: 22px; color: #8f959e;
   cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 6px;
@@ -538,6 +570,15 @@ body {
 .dtab:hover { color: #165dff; }
 .dtab.active { color: #165dff; border-bottom-color: #165dff; font-weight: 600; }
 .drawer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* V2.10：抽屉底部固定操作栏 —— 三个 Tab 都可见，切 Tab 不消失（迭代的唯一入口） */
+.drawer-footer {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px 12px; flex-wrap: wrap;
+  padding: 10px 20px; border-top: 1px solid #e5e6eb; background: #fff;
+}
+.drawer-footer .df-hint { font-size: 12.5px; color: #8f959e; flex: none; margin-left: auto; }
+.drawer-footer .btn-primary { flex: none; }
 .drawer-empty { color: #8f959e; font-size: 13px; text-align: center; padding: 40px 16px; }
 
 /* 任务定位小图标 */
@@ -615,19 +656,34 @@ body {
   word-break: break-all !important;
   line-height: 1.45 !important;
 }
-/* M5-fix3：导图工具栏「导出 XMind」按钮（注入到 mind-elixir 内置工具栏 .mind-elixir-toolbar.rb） */
-.mind-elixir-toolbar .map-dl {
-  cursor: pointer;
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  padding: 1px 8px;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: nowrap;
-  opacity: 0.88;
-  user-select: none;
+/* M5-fix3（V2.12 改）：右下角浮动工具栏已移除，控件迁到抽屉底栏（见 .mm-ctrl-bar）
+   —— 保留左上「方向切换」.lt（toolBar:false 会把它一起关掉，故只能 CSS 隐藏 .rb） */
+.mind-elixir-toolbar.rb { display: none !important; }
+/* V2.12：抽屉底栏 —— 左侧画布控件组（与右侧「继续优化」同一行） */
+.mm-ctrl-slot { display: flex; align-items: center; min-width: 0; flex: 1; }
+.mm-ctrl-bar { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.mm-ctrl-dl {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px;
+  border: 1px solid var(--gray-200); border-radius: 6px; background: #fff; color: #4e5969;
+  font-size: 12.5px; cursor: pointer; white-space: nowrap;
+  transition: border-color .18s, color .18s, background .18s;
 }
-.mind-elixir-toolbar .map-dl:hover { opacity: 1; background: rgba(255, 255, 255, 0.14); }
+.mm-ctrl-dl:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-50); }
+.mm-ctrl-sep { width: 1px; height: 18px; background: var(--gray-200); margin: 0 6px; flex: none; }
+.mm-ctrl-icon {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none;
+  border: 1px solid transparent; border-radius: 6px; background: none; color: #4e5969; cursor: pointer;
+  transition: background .18s, color .18s, border-color .18s;
+}
+.mm-ctrl-icon:hover { background: var(--gray-100, #f2f3f5); color: var(--primary); }
+.mm-ctrl-icon:active { transform: scale(.94); }
+.mm-ctrl-pct {
+  min-width: 46px; height: 28px; padding: 0 6px; flex: none;
+  border: 1px solid transparent; border-radius: 6px; background: none; color: #4e5969;
+  font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .18s, color .18s;
+}
+.mm-ctrl-pct:hover { background: var(--gray-100, #f2f3f5); color: var(--primary); }
 /* M5-fix4：放开左上「方向切换」工具栏（RIGHT/SIDE/LEFT 可切换；切换后自动重跑初始定位）
    原 M5-fix3 的 display:none 已移除——B（SIDE 布局）需要入口 */
 .mind-elixir-toolbar.lt { z-index: 3; }
@@ -649,15 +705,13 @@ body {
 .ex-label { font-size: 12px; color: #8f959e; }
 .ex-dl { flex: none; font-size: 12.5px; color: #165dff; border: 1px solid #bedaff; background: #f0f7ff; border-radius: 12px; padding: 3px 12px; }
 .export-item:hover .ex-dl { background: #165dff; color: #fff; border-color: #165dff; }
-.iter-desc { font-size: 12.5px; color: #8f959e; line-height: 1.7; margin-bottom: 10px; }
-.iter-form textarea {
-  width: 100%; box-sizing: border-box; resize: vertical; border: 1px solid #dcdfe6; border-radius: 8px;
-  padding: 9px 12px; font-size: 13px; line-height: 1.6; font-family: inherit; outline: none;
+/* V2.10：迭代表单已从导出 Tab 移除，改为引导提示 —— 输入统一在会话输入框 */
+.export-tip {
+  display: flex; align-items: flex-start; gap: 8px; margin-top: 4px;
+  background: #f7f9fc; border: 1px solid #e5e6eb; border-radius: 10px;
+  padding: 10px 12px; font-size: 12.5px; line-height: 1.7; color: #8f959e;
 }
-.iter-form textarea:focus { border-color: #165dff; }
-.iter-file-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 12.5px; }
-.iter-file-name { color: #165dff; }
-.iter-btns { display: flex; gap: 8px; justify-content: flex-end; }
+.export-tip .et-icon { flex: none; font-size: 14px; line-height: 1.5; }
 
 /* ===== V2.8 M4：导航 / 设置页 / 管理页 / 分类树 ===== */
 
@@ -953,3 +1007,68 @@ body {
 /* 加载中图标旋转 */
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 迭代版本链：抽屉版本切换器 ── */
+.ver-switch { position: relative; flex: none; margin-left: 2px; }
+.ver-btn {
+  height: 22px; padding: 0 8px; border-radius: 11px; cursor: pointer; font-size: 12px;
+  border: 1px solid var(--gray-200); background: #fff; color: #4e5969; line-height: 1;
+  transition: border-color .18s, color .18s;
+}
+.ver-btn:hover { border-color: var(--primary); color: var(--primary); }
+.ver-menu {
+  position: absolute; z-index: 30; top: 26px; left: 0; min-width: 240px; max-width: 420px;
+  max-height: 320px; overflow-y: auto;
+  background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card); padding: 4px; display: flex; flex-direction: column; gap: 2px;
+}
+.ver-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; cursor: pointer;
+  border: none; background: none; border-radius: 6px; font-size: 12.5px; color: #1d2129; text-align: left;
+}
+.ver-item:hover { background: var(--primary-50); }
+.ver-item.active { background: #eef3ff; color: var(--primary); font-weight: 500; }
+.ver-item .vi-ver { flex: none; font-size: 12px; color: var(--primary); min-width: 26px; }
+.ver-item .vi-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ver-item .vi-meta { flex: none; color: #8f959e; font-size: 12px; }
+
+/* 会话流中已被新版取代的旧版本任务卡：折叠成一行细条 */
+.task-card-stale {
+  display: flex; align-items: center; gap: 8px; margin: 10px 0 2px;
+  padding: 7px 10px; border: 1px dashed var(--gray-200); border-radius: var(--radius-md);
+  background: var(--gray-50); font-size: 12.5px; color: #8f959e;
+}
+.task-card-stale .tcs-icon { flex: none; }
+.task-card-stale .tcs-name { color: #4e5969; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-card-stale .tcs-meta { flex: 1; font-size: 12px; }
+.task-card-stale .tcs-open {
+  flex: none; border: none; background: none; color: var(--primary); cursor: pointer; font-size: 12.5px;
+}
+.task-card-stale .tcs-open:hover { text-decoration: underline; }
+
+/* 任务列表：同链聚合，历史版本折叠
+   —— 版本开关作为卡片内的页脚行（带虚线分隔），历史子行用左侧竖线挂在卡片下，
+      避免开关悬在两组之间被误读成「下一组是它的历史版本」。 */
+.task-group { display: flex; flex-direction: column; gap: 4px; }
+.tg-hist-toggle {
+  display: flex; align-items: center; gap: 4px; align-self: stretch;
+  margin-top: 6px; padding: 5px 0 0; border: none; border-top: 1px dashed var(--gray-200);
+  background: none; cursor: pointer; font-size: 12px; color: #8f959e; text-align: left;
+}
+.tg-hist-toggle:hover { color: var(--primary); }
+.tg-hist-toggle .tht-arrow { font-size: 10px; line-height: 1; }
+.hist-wrap {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-left: 12px; padding-left: 6px; border-left: 2px solid #e5e6eb;
+}
+.task-item.hist-sub {
+  padding: 7px 10px; background: var(--gray-50);
+  border: 1px dashed var(--gray-200); cursor: pointer;
+}
+.hist-sub .t-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.hv-badge {
+  flex: none; font-size: 11px; font-weight: 600; color: var(--primary);
+  background: var(--primary-50); border-radius: 8px; padding: 1px 6px; line-height: 1.4;
+}
+.hv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-item.hist-sub .t-name { font-size: 12.5px; color: #4e5969; }

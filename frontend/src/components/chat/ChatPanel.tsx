@@ -6,6 +6,8 @@
  * - 文件附加 chip + 移除
  * - 新消息/流式增量自动滚底（用户上滚时暂停跟随）
  * V4：图标改用 lucide-react（纸飞机/灯泡/附件/停止）。
+ * V2.10：输入框为唯一入口 —— 挂载「迭代引用 chip」时本次发送走 iterate（基于旧任务合并用例），
+ *        无 chip 时为新建任务；chip 由详情页「继续优化」或会话内任务卡挂载。
  */
 import { useEffect, useRef, useState } from "react";
 import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles } from "lucide-react";
@@ -41,11 +43,19 @@ export default function ChatPanel() {
   const stop = useChatStore((s) => s.stop);
   const focusSeq = useChatStore((s) => s.focusSeq);
   const focusTaskId = useChatStore((s) => s.focusTaskId);
+  /** 迭代引用：非空 → 迭代沟通模式（先沟通，点「生成用例」才生成） */
+  const iterTaskId = useChatStore((s) => s.iterTaskId);
+  const iterTaskName = useChatStore((s) => s.iterTaskName);
+  const iterNotes = useChatStore((s) => s.iterNotes);
+  const iterGenerating = useChatStore((s) => s.iterGenerating);
+  const requestIterate = useChatStore((s) => s.requestIterate);
+  const clearIterRef = useChatStore((s) => s.clearIterRef);
+  const inputFocusSeq = useChatStore((s) => s.inputFocusSeq);
 
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [kind] = useState("business");
-  const [formats] = useState<string[]>(["xlsx"]);
+  const [formats] = useState<string[]>(["xlsx", "json", "xmind"]);
   /** 深度思考开关：默认开，本地记忆（关掉则不请求模型思考，也不显示思考面板） */
   const [deepThink, setDeepThink] = useState<boolean>(() => {
     try {
@@ -81,6 +91,12 @@ export default function ChatPanel() {
       toast("该任务不在当前会话，可切换到对应会话查看");
     }
   }, [focusSeq, focusTaskId]);
+
+  // 迭代入口聚焦：详情页「继续优化」跳回会话后自动聚焦输入框（inputFocusSeq 递增触发）
+  useEffect(() => {
+    if (!inputFocusSeq) return;
+    inputRef.current?.focus();
+  }, [inputFocusSeq]);
 
   function onScroll(): void {
     const el = streamRef.current;
@@ -169,7 +185,35 @@ export default function ChatPanel() {
         )}
       </div>
 
-      <div className={`chat-input-wrap ${streaming ? "streaming" : ""}`}>
+      <div className={`chat-input-wrap ${streaming ? "streaming" : ""} ${iterTaskId ? "iter-mode" : ""}`}>
+        {/* 迭代引用 chip：常驻可见，明确告知本次发送是「迭代旧任务」而非新建；✕ 一键回到新建模式 */}
+        {iterTaskId && (
+          <div className="iter-ref-chip">
+            <span className="irc-icon" aria-hidden="true">🔁</span>
+            <span className="irc-text">基于《{iterTaskName}》迭代</span>
+            <span className="irc-hint">
+              {iterNotes.length ? `已记录 ${iterNotes.length} 条补充要求` : "先沟通补充方向"}
+            </span>
+            <button
+              type="button"
+              className="irc-gen"
+              disabled={iterGenerating || streaming}
+              title="按沟通确认的补充要求生成用例（合并原有用例，版本号 +1）"
+              onClick={() => void requestIterate()}
+            >
+              {iterGenerating ? "生成中…" : "⚡ 生成用例"}
+            </button>
+            <button
+              type="button"
+              className="irc-close"
+              title="取消迭代，恢复为新建任务模式"
+              aria-label="取消迭代引用"
+              onClick={clearIterRef}
+            >
+              ✕
+            </button>
+          </div>
+        )}
         {file && (
           <div className="file-chip">
             <Paperclip size={14} /> {file.name} <span className="fc-size">({fmtSize(file.size)})</span>
@@ -216,7 +260,13 @@ export default function ChatPanel() {
             <textarea
               ref={inputRef}
               value={text}
-              placeholder={streaming ? "生成中…" : "把你的测试需求告诉 Buddy…"}
+              placeholder={
+                streaming
+                  ? "生成中…"
+                  : iterTaskId
+                    ? `和 Buddy 沟通《${iterTaskName}》要补充什么…（确认后点「⚡ 生成用例」）`
+                    : "把你的测试需求告诉 Buddy…"
+              }
               disabled={streaming}
               onChange={(e) => {
                 setText(e.target.value);

@@ -148,7 +148,7 @@ export default function MessageView({ msg }: { msg: ChatMsg }) {
         )}
 
         {/* 任务卡（消息升级后） */}
-        {msg.task && <TaskStepsCard task={msg.task} />}
+        {msg.task && <TaskStepsCard task={msg.task} showIterate />}
 
         {/* 回复完成且未消费草稿 → 生成用例确认按钮 */}
         {msg.state === "done" && !msg.task && msg.draft && (

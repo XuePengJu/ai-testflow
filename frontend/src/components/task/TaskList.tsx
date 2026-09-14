@@ -6,6 +6,7 @@
  * - V4：图标改用 lucide-react。
  */
 import { useEffect, useRef, useState } from "react";
+import { groupByChain } from "../../utils/taskChain";
 import { ListFilter, X, Tag, Crosshair, Trash2 } from "lucide-react";
 import { startListPolling, useTaskStore } from "../../store/taskStore";
 import { useChatStore } from "../../store/chatStore";
@@ -40,6 +41,8 @@ export default function TaskList() {
 
   /** 当前展开「归类」菜单的任务 id */
   const [menuTaskId, setMenuTaskId] = useState<string | null>(null);
+  /** 展开历史版本的任务（最新版本行的 id） */
+  const [openHist, setOpenHist] = useState<string | null>(null);
   /** 分类弹层开关 + 定位 ref（fixed 浮层，避开 side-panel overflow:hidden 裁切） */
   const [catOpen, setCatOpen] = useState(false);
   const catBtnRef = useRef<HTMLButtonElement>(null);
@@ -102,6 +105,9 @@ export default function TaskList() {
     return t.category_id === filter;
   });
 
+  // 同一条迭代链只占一行（最新版本），历史版本折叠在「含 N 个版本」里展开
+  const groups = groupByChain(visible);
+
   const catName = (id: number | null | undefined): string =>
     id == null ? "未分类" : categories.find((c) => c.id === id)?.name || "未分类";
 
@@ -151,11 +157,12 @@ export default function TaskList() {
             {tasks.length > 0 ? "该分类下暂无任务" : <>还没有任务<br />在对话中点「✨ 生成测试用例」</>}
           </div>
         ) : (
-          visible.map((t) => {
+          groups.map((g) => {
+            const t = g.latest;
             const b = statusBadge(t.status);
             return (
+              <div className="task-group" key={t.id}>
               <div
-                key={t.id}
                 className={`task-item ${t.status}`}
                 data-task-id={t.id}
                 onClick={() => void openDetail(t.id)}
@@ -218,6 +225,51 @@ export default function TaskList() {
                     {categories.length === 0 && <div className="cmm-empty">暂无分类，请先在上方新建</div>}
                   </div>
                 )}
+                {g.versions > 1 && (
+                  <button
+                    type="button"
+                    className="tg-hist-toggle"
+                    title="展开/收起该任务的历史迭代版本"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenHist(openHist === t.id ? null : t.id);
+                    }}
+                  >
+                    <span className="tht-arrow">{openHist === t.id ? "▴" : "▾"}</span>
+                    共 {g.versions} 个版本
+                  </button>
+                )}
+              </div>
+              {openHist === t.id && (
+                <div className="hist-wrap">
+                  {g.history
+                    .slice()
+                    .reverse()
+                    .map((h, i) => {
+                      const hb = statusBadge(h.status);
+                      const v = g.history.length - i; // 最新的历史版本 = versions-1
+                      return (
+                        <div
+                          key={h.id}
+                          className="task-item hist-sub"
+                          data-task-id={h.id}
+                          onClick={() => void openDetail(h.id)}
+                          title={`查看历史版本 v${v}（详情内可切换版本）`}
+                        >
+                          <div className="t-name">
+                            <span className="hv-badge">v{v}</span>
+                            <span className="hv-name">{h.name}</span>
+                          </div>
+                          <div className="t-meta">
+                            <span className={`pill pill-${hb.cls}`}>{hb.text}</span>
+                            <span>{h.cases_count || 0} 用例</span>
+                            <span>{fmtTime(h.created_at)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
               </div>
             );
           })

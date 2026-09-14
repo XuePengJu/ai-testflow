@@ -95,6 +95,8 @@ export interface Task {
   formats: string;
   category_id?: number | null;
   parent_task_id?: string | null;
+  /** 所属会话 id：详情页「继续优化」据此跳回会话挂载迭代引用（后端对历史任务做反查兜底） */
+  conversation_id?: string | null;
   created_at?: string | null;
   finished_at?: string | null;
   steps: StepLog[];

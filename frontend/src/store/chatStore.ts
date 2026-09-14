@@ -93,10 +93,27 @@ interface ChatState {
   focusSeq: number;
   focusTaskId: string | null;
 
+  /** 迭代引用：非空 = 迭代沟通模式（AI 带旧任务上下文对话）；点「生成用例」才真正跑 iterate */
+  iterTaskId: string | null;
+  iterTaskName: string;
+  /** 迭代沟通期累积的用户输入，点「生成用例」时拼成 instruction */
+  iterNotes: string[];
+  /** 迭代沟通期最后附加的文档，随 instruction 一起提交 */
+  iterFile: File | null;
+  /** 迭代任务生成中：防重复点击「生成用例」 */
+  iterGenerating: boolean;
+  /** 输入框聚焦定位：递增序号触发 ChatPanel 自动聚焦 textarea */
+  inputFocusSeq: number;
+
   refreshConversations: () => Promise<void>;
   loadConversation: (id: string) => Promise<void>;
   newConversation: () => void;
   deleteConversation: (id: string) => Promise<void>;
+  /** 打开任务所属会话并挂载迭代引用（详情页「继续优化」入口） */
+  openIterate: (task: Task) => Promise<void>;
+  clearIterRef: () => void;
+  /** 迭代沟通模式下手动触发：把累积的补充要求作为 instruction 真正跑 iterate */
+  requestIterate: () => Promise<void>;
 
   send: (text: string, draft: ChatDraft) => Promise<void>;
   stop: () => void;
@@ -113,6 +130,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streaming: false,
   focusSeq: 0,
   focusTaskId: null,
+  iterTaskId: null,
+  iterTaskName: "",
+  iterNotes: [],
+  iterFile: null,
+  iterGenerating: false,
+  inputFocusSeq: 0,
 
   async refreshConversations() {
     const snap = getAuthSnapshot();
@@ -131,7 +154,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async loadConversation(id) {
-    set({ conversationId: id });
+    // 切换会话自动清除迭代引用，避免跨会话误迭代（chip 只在当前会话有效）
+    set({ conversationId: id, iterTaskId: null, iterTaskName: "", iterNotes: [], iterFile: null });
     try {
       const r = await api(API + "/conversations/" + id);
       if (!r.ok) return;
@@ -163,7 +187,105 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   newConversation() {
-    set({ conversationId: null, messages: [], focusTaskId: null });
+    set({
+      conversationId: null, messages: [], focusTaskId: null,
+      iterTaskId: null, iterTaskName: "", iterNotes: [], iterFile: null,
+    });
+  },
+
+  // 迭代引用入口：详情页「继续优化」与会话内任务卡「继续优化」共用。
+  // - 带 conversation_id 且非当前会话 → 先加载该会话再挂 chip（loadConversation 会清 chip，故在其后挂载）
+  // - 无 conversation_id（会话内轻量任务对象）或已是当前会话 → 只挂 chip + 聚焦，不重复加载
+  async openIterate(task) {
+    const convId = task.conversation_id;
+    if (convId && convId !== get().conversationId) {
+      await get().loadConversation(convId);
+    }
+    set({
+      ...(convId ? { conversationId: convId } : {}),
+      iterTaskId: task.id,
+      iterTaskName: task.name,
+      iterNotes: [],
+      iterFile: null,
+      inputFocusSeq: get().inputFocusSeq + 1,
+    });
+    get().refreshConversations();
+  },
+
+  clearIterRef() {
+    set({ iterTaskId: null, iterTaskName: "", iterNotes: [], iterFile: null });
+  },
+
+  // 迭代沟通模式下的手动触发：把沟通期累积的用户补充要求拼成 instruction，真正跑 iterate。
+  // 沟通本身走聊天流（带 task_id 让 AI 知道讨论的是哪个任务），不生成任务 —— 生成只由本方法触发。
+  async requestIterate() {
+    const iterId = get().iterTaskId;
+    if (!iterId) return;
+    if (get().iterGenerating || get().streaming) {
+      toast("请等待当前生成结束");
+      return;
+    }
+    const iterName = get().iterTaskName;
+    const instruction = get().iterNotes.map((s) => s.trim()).filter(Boolean).join("\n");
+    if (!instruction && !get().iterFile) {
+      toast("请先描述要补充的内容，再点「生成用例」");
+      return;
+    }
+    set({ iterGenerating: true });
+    try {
+      const fd = new FormData();
+      const f = get().iterFile;
+      if (f) fd.append("file", f);
+      fd.append("instruction", instruction);
+      fd.append("conversation_id", get().conversationId || "");
+      const r = await api(`${API}/tasks/${iterId}/iterate`, { method: "POST", body: fd });
+      if (!r.ok) {
+        const e = await r.text();
+        toast("迭代失败：" + e.slice(0, 200));
+        set({ iterGenerating: false });
+        return;
+      }
+      const child = (await r.json()) as Task;
+      set({
+        messages: [
+          ...get().messages,
+          {
+            id: nextId(), role: "assistant", content: "", thinking: "",
+            state: "done", task: child,
+          },
+        ],
+        // chip 指向新子任务：连续补充时版本链 v2 → v3 继续递增；清空累积，重新沟通
+        iterTaskId: child.id,
+        iterTaskName: child.name || iterName,
+        iterNotes: [],
+        iterFile: null,
+        iterGenerating: false,
+      });
+      toast(`已开始生成：基于《${iterName}》补充用例`);
+
+      const { useTaskStore } = await import("./taskStore");
+      useTaskStore.getState().refresh();
+      get().refreshConversations();
+
+      void (async () => {
+        for (let i = 0; i < 300; i++) {
+          await new Promise((res) => setTimeout(res, 2000));
+          const rr = await api(API + "/tasks/" + child.id).catch(() => null);
+          if (!rr || !rr.ok) continue;
+          const t = (await rr.json()) as Task;
+          get().updateMsgTask(child.id, t);
+          if (t.status === "completed" || t.status === "failed") {
+            await get().loadConversation(get().conversationId || "");
+            const { useTaskStore: ts } = await import("./taskStore");
+            ts.getState().refresh();
+            return;
+          }
+        }
+      })();
+    } catch (e) {
+      toast("网络错误：" + (e instanceof Error ? e.message : String(e)));
+      set({ iterGenerating: false });
+    }
   },
 
   async deleteConversation(id) {
@@ -204,6 +326,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } catch {
         /* 会话创建失败不阻断发送（消息不落会话，仍可生成） */
       }
+    }
+
+    // ── 迭代沟通模式：chip 非空时只沟通，不生成任务 ──
+    // 本条作为补充要求累积起来，由用户点「生成用例」（requestIterate）时才真正跑 iterate。
+    if (get().iterTaskId) {
+      set({
+        iterNotes: text.trim() ? [...get().iterNotes, text.trim()] : get().iterNotes,
+        ...(draft.file ? { iterFile: draft.file } : {}),
+      });
     }
 
     const userMsg: ChatMsg = {
@@ -259,6 +390,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           message: text,
           history,
           conversation_id: get().conversationId,
+          // 迭代沟通模式：带上任务 id，后端把该任务用例摘要注入上下文，AI 才知道在讨论哪个任务
+          task_id: get().iterTaskId || undefined,
           file_id: fileId,
           thinking: draft.thinking !== false,
         },
@@ -345,7 +478,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (draft.file) fd.append("file", draft.file);
     fd.append("text", text);
     fd.append("kind", draft.kind || "business");
-    fd.append("formats", (draft.formats.length ? draft.formats : ["xlsx"]).join(","));
+    fd.append("formats", (draft.formats.length ? draft.formats : ["xlsx", "json", "xmind"]).join(","));
     fd.append("name", text.slice(0, 40) || "未命名任务");
     fd.append("conversation_id", get().conversationId || "");
 

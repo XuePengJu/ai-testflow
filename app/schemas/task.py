@@ -26,6 +26,9 @@ class TaskOut(BaseModel):
     formats: str = "xlsx,json,xmind"
     category_id: Optional[int] = None
     parent_task_id: Optional[str] = None
+    # 所属会话：详情页「继续优化」据此跳回会话并挂载迭代引用。
+    # 历史任务（conversation_id 为空）由 api/tasks.py 的 _resolve_conversation 反查兜底。
+    conversation_id: Optional[str] = None
     created_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     steps: list[StepLogOut] = []

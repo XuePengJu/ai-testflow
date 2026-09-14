@@ -15,15 +15,22 @@
  *   - handleWheel:true：普通滚轮 = 平移，Ctrl/⌘ + 滚轮 = 缩放（与 legacy 一致）
  *   - 定位公式 alignment:"root"：把根节点钉在容器水平正中（故左半屏天然空着 → 需要 A）
  *   - move(dx,dy) 自带钳制：不会把内容推出容器中线之外，可安全调用
- *   - init() 为 async：工具栏在 await document.fonts.ready 后才挂载，须在 init resolve 后注入导出按钮
+ *   - init() 为 async：工具栏在 await document.fonts.ready 后才挂载
  *   - npm 版不内联 CSS，需手动 import 'mind-elixir/style.css'
  *   - bus 接口为 addListener / fire / removeListener（没有 on / emit）
  * 因此此处删除 4.6.2 时期自建的 DOMMatrix 平移 hack（写 .map-container transform 既无效又错位）。
+ *
+ * V2.12：画布控件（导出 XMind / 全屏 / 缩放 / 百分比 / 居中）从 mind-elixir 右下角浮动工具栏
+ *   迁到详情页底部操作栏（与「💬 继续优化」同一行）——节点文字多时浮层会压住内容。
+ *   实现：保留 toolBar:true（false 会把左上「方向切换」.lt 一起关掉），仅用 CSS 隐藏右下角 .rb；
+ *   控件用公开 API 复刻（scaleVal / scaleSensitivity / scale() / toCenter() / el.requestFullscreen）。
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import MindElixir from "mind-elixir";
 import "mind-elixir/style.css";
 import type { MindElixirData, NodeObj } from "mind-elixir";
+import { Download, Maximize2, ZoomIn, ZoomOut, Crosshair } from "lucide-react";
 import type { CaseItem, Task } from "../../types";
 import { downloadTaskFile } from "../../api/client";
 
@@ -81,24 +88,6 @@ function buildMapData(task: Task, cases: CaseItem[]): MindElixirData {
   };
 }
 
-/** 在 mind-elixir 右下角内置工具栏（.mind-elixir-toolbar.rb）最左注入「导出 XMind」按钮。
- * npm 6.x 工具栏按钮无 id，故 prepend 到容器首部；init 异步返回、须在 resolve 后调用。
- * 点击复用共享 downloadTaskFile（GET /tasks/{id}/download?fmt=xmind），图标用 emoji 不依赖 iconfont。 */
-function injectXmindBtn(task: Task, root: HTMLElement | null) {
-  if (!root) return;
-  const tb = root.querySelector<HTMLElement>(".mind-elixir-toolbar.rb");
-  if (!tb || tb.querySelector(".map-dl")) return; // 容器不存在或已注入则跳过
-  const btn = document.createElement("span");
-  btn.className = "map-dl";
-  btn.textContent = "⬇ 导出 XMind";
-  btn.title = "下载 XMind 思维导图文件";
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    void downloadTaskFile(task.id, "xmind", task.name);
-  });
-  tb.insertBefore(btn, tb.firstElementChild);
-}
-
 /** 根节点贴左时的左内边距（px）。想更贴边可调小（如 24）。 */
 const MAP_ALIGN_LEFT_PX = 40;
 
@@ -139,15 +128,21 @@ export default function MindMapTab({ task }: Props) {
   const cases = task.cases || [];
   const canRender = cases.length > 0;
 
+  /** 底栏控件插槽（父组件 DOM 提交后才存在，故在 effect 里取） */
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  const [scale, setScale] = useState(1);
+  const [full, setFull] = useState(false);
+
   useEffect(() => {
     if (!canRender || !elRef.current) return;
     let destroyed = false;
+    const el = elRef.current;
     const mind = new MindElixir({
-      el: elRef.current,
+      el,
       direction: MindElixir.RIGHT,
       editable: false, // 只读导图：节点不可编辑
       contextMenu: false,
-      toolBar: true, // 内置工具栏（全屏/居中/缩小/放大 + 百分比）
+      toolBar: true, // 保留左上「方向切换」.lt；右下 .rb 由 CSS 隐藏（控件已迁到抽屉底栏）
       keypress: false,
       overflowHidden: false, // 关键：false 才启用原生拖拽平移画布（panHelper 注入）
       handleWheel: true, // 滚轮直接缩放（无需 Ctrl）
@@ -164,11 +159,27 @@ export default function MindMapTab({ task }: Props) {
     };
     mind.bus.addListener("changeDirection", onDirectionChange);
 
-    // 6.x init 为 async：工具栏/pan 在 await document.fonts.ready 后才就绪，须在 resolve 后注入导出按钮 + 定位。
+    // 滚轮缩放后同步百分比（库内部改 scaleVal 无事件，故监听 wheel 后取下一帧）
+    const syncScale = () =>
+      requestAnimationFrame(() => {
+        if (!destroyed) setScale(mind.scaleVal || 1);
+      });
+    el.addEventListener("wheel", syncScale, { passive: true });
+
+    // 全屏切换后补一次定位（内置 .rb 被隐藏，其自带的居中补偿不再生效）
+    const onFsChange = () => {
+      setFull(document.fullscreenElement === el);
+      requestAnimationFrame(() => {
+        if (!destroyed) fitInitialView(mind);
+      });
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+
+    // 6.x init 为 async：工具栏/pan 在 await document.fonts.ready 后才就绪。
     (async () => {
       await mind.init(buildMapData(task, cases));
-      if (destroyed || !elRef.current) return;
-      injectXmindBtn(task, elRef.current);
+      if (destroyed) return;
+      setScale(mind.scaleVal || 1);
       // 等一帧让弹窗动画结束、布局稳定后做初始定位（A+D）。
       // ⚠️ 不要调 scaleFit()：大任务（示例·DBERP 77 用例 ≈ 386 节点）会被缩到 scale≈0.04（蚂蚁大小），
       //    且 scaleFit 不受 scaleMin(0.2) 约束。与 legacy 行为一致：保持 scale=1，用户自行缩放。
@@ -180,6 +191,8 @@ export default function MindMapTab({ task }: Props) {
 
     return () => {
       destroyed = true;
+      el.removeEventListener("wheel", syncScale);
+      document.removeEventListener("fullscreenchange", onFsChange);
       try {
         mind.bus.removeListener("changeDirection", onDirectionChange);
       } catch {
@@ -196,6 +209,93 @@ export default function MindMapTab({ task }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id, cases.length]);
 
+  // 底栏插槽：DOM 提交后才能取到（父组件先渲染子组件，再插入自身 DOM）
+  useEffect(() => {
+    setSlot(document.getElementById("mm-ctrl-slot"));
+  }, [task.id]);
+
+  /** 缩放：步长与库内置工具栏一致（scaleSensitivity），边界由 scale() 内部钳制 */
+  const zoomBy = (dir: 1 | -1) => {
+    const m = mindRef.current;
+    if (!m) return;
+    m.scale((m.scaleVal || 1) + dir * (m.scaleSensitivity || 0.2));
+    setScale(m.scaleVal || 1);
+  };
+
+  const toggleFullscreen = () => {
+    const el = elRef.current;
+    if (!el) return;
+    if (document.fullscreenElement === el) void document.exitFullscreen();
+    else void el.requestFullscreen?.();
+  };
+
+  const center = () => {
+    const m = mindRef.current;
+    if (!m) return;
+    m.toCenter();
+    setScale(m.scaleVal || 1);
+  };
+
+  const resetScale = () => {
+    const m = mindRef.current;
+    if (!m) return;
+    m.scale(1);
+    setScale(m.scaleVal || 1);
+  };
+
+  const controls = (
+    <div className="mm-ctrl-bar">
+      <button
+        type="button"
+        className="mm-ctrl-dl"
+        title="下载 XMind 思维导图文件"
+        onClick={() => void downloadTaskFile(task.id, "xmind", task.name)}
+      >
+        <Download size={14} /> 导出 XMind
+      </button>
+      <span className="mm-ctrl-sep" />
+      <button
+        type="button"
+        className="mm-ctrl-icon"
+        title={full ? "退出全屏" : "全屏查看"}
+        aria-label={full ? "退出全屏" : "全屏查看"}
+        onClick={toggleFullscreen}
+      >
+        <Maximize2 size={15} />
+      </button>
+      <button
+        type="button"
+        className="mm-ctrl-icon"
+        title="缩小"
+        aria-label="缩小"
+        onClick={() => zoomBy(-1)}
+      >
+        <ZoomOut size={15} />
+      </button>
+      <button type="button" className="mm-ctrl-pct" title="点击回到 100%" onClick={resetScale}>
+        {Math.round(scale * 100)}%
+      </button>
+      <button
+        type="button"
+        className="mm-ctrl-icon"
+        title="放大"
+        aria-label="放大"
+        onClick={() => zoomBy(1)}
+      >
+        <ZoomIn size={15} />
+      </button>
+      <button
+        type="button"
+        className="mm-ctrl-icon"
+        title="回到中心"
+        aria-label="回到中心"
+        onClick={center}
+      >
+        <Crosshair size={15} />
+      </button>
+    </div>
+  );
+
   if (!canRender) {
     return <div className="drawer-empty">暂无用例，无法生成思维导图</div>;
   }
@@ -204,6 +304,7 @@ export default function MindMapTab({ task }: Props) {
     <div className="mindmap-wrap">
       <div className="mindmap-hint">拖拽画布平移 · Ctrl/⌘ + 滚轮缩放</div>
       <div ref={elRef} className="map-container" />
+      {slot && createPortal(controls, slot)}
     </div>
   );
 }

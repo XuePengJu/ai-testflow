@@ -5,6 +5,8 @@
  */
 import { useState } from "react";
 import type { Task } from "../../types";
+import { useTaskStore } from "../../store/taskStore";
+import { isLatestOfChain } from "../../utils/taskChain";
 
 const STEP_TITLES = ["解析规格", "AI 生成用例", "质量校验", "导出文件"];
 const STEP_ICONS: Record<string, string> = {
@@ -34,11 +36,17 @@ interface StepInfo {
   error?: string | null;
 }
 
-export default function TaskStepsCard({ task }: { task: Task }) {
+/** showIterate：会话内任务卡传 true（挂「继续优化」→ 挂 chip）；详情页 running 卡不传（避免重复入口） */
+export default function TaskStepsCard({ task, showIterate = false }: { task: Task; showIterate?: boolean }) {
   const badge = statusBadge(task.status);
+  const tasks = useTaskStore((s) => s.tasks);
+  const openDetail = useTaskStore((s) => s.openDetail);
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(STEP_TITLES.map((t) => [t, true]))
   );
+  // 会话流里同一条迭代链的旧版本卡折叠成一行细条：入口只留最新一张完整卡，避免翻页找入口。
+  // 抽屉内的卡（showIterate=false）不做折叠，那里由版本切换器导航。
+  const stale = showIterate && !isLatestOfChain(tasks, task.id);
   const stepMap: Record<string, StepInfo> = {};
   (task.steps || []).forEach((s) => {
     if (STEP_TITLES.includes(s.title))
@@ -51,6 +59,30 @@ export default function TaskStepsCard({ task }: { task: Task }) {
   });
 
   const toggle = (title: string) => setExpanded((prev) => ({ ...prev, [title]: !prev[title] }));
+
+  // 旧版本折叠态：一行细条，点击直接开抽屉看该版本（抽屉内可切回最新版）
+  if (stale) {
+    return (
+      <div className="task-card-stale" data-task-card={task.id}>
+        <span className="tcs-icon" aria-hidden="true">📜</span>
+        <span className="tcs-name">{task.name}</span>
+        <span className="tcs-meta">
+          {task.status === "completed" ? `${task.cases_count || 0} 条用例 · ` : ""}已被新版本取代
+        </span>
+        <button
+          type="button"
+          className="tcs-open"
+          title="在详情里查看该版本（可切换其他版本）"
+          onClick={(e) => {
+            e.stopPropagation();
+            void openDetail(task.id);
+          }}
+        >
+          查看 ▸
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="task-steps-card" data-task-card={task.id}>
@@ -120,6 +152,22 @@ export default function TaskStepsCard({ task }: { task: Task }) {
           >
             查看用例 / 思维导图 →
           </button>
+          {/* 会话内闭环：直接挂载迭代引用 chip，用户无需先开详情抽屉 */}
+          {showIterate && (
+            <button
+              type="button"
+              className="qtag"
+              title="基于该任务继续补充用例（在输入框中说明补充内容后发送）"
+              onClick={(e) => {
+                e.stopPropagation();
+                void import("../../store/chatStore").then((m) => {
+                  void m.useChatStore.getState().openIterate(task);
+                });
+              }}
+            >
+              💬 继续优化
+            </button>
+          )}
         </div>
       )}
     </div>

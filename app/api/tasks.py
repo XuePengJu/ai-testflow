@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR, GUEST_MAX_TASKS
 from app.core.db import get_db
-from app.models.conversation import Message
+from app.models.conversation import Conversation, Message
 from app.models.task import Task, StepLog
 from app.models.user import User
 from app.schemas.task import TaskOut, StepLogOut
@@ -56,6 +56,37 @@ def _parse_cases(cases_json: str | None) -> list[dict]:
         return []
 
 
+def _resolve_conversation(db: Session, task: Task) -> str | None:
+    """兜底解析任务所属会话 id（历史任务 conversation_id 为空时使用）。
+
+    解析顺序：
+    1. `task.conversation_id` 已有值 → 直接返回；
+    2. 按 `messages.task_id == task.id` 反查所属会话 → 回填任务（覆盖「由会话创建但未回写」的历史数据）；
+    3. 仍查不到 → 新建会话并绑定，保证详情页「继续优化」永远有处可跳（决策点 2 选项 A）。
+
+    会落库（回填 / 新建会话），仅详情接口调用，列表接口不触发以避免 N+1。
+    """
+    if task.conversation_id:
+        return task.conversation_id
+
+    hit = (db.query(Message.conversation_id)
+             .filter(Message.task_id == task.id)
+             .order_by(Message.id.asc())
+             .first())
+    if hit and hit[0]:
+        task.conversation_id = hit[0]
+        db.commit()
+        return hit[0]
+
+    conv = Conversation(id=uuid.uuid4().hex[:12], user_id=task.user_id,
+                        title=(task.name or "任务会话")[:255])
+    db.add(conv)
+    db.flush()  # 先落会话行再回填 task.conversation_id（MySQL 外键约束）
+    task.conversation_id = conv.id
+    db.commit()
+    return conv.id
+
+
 def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
     steps = (
         db.query(StepLog).filter_by(task_id=task.id).order_by(StepLog.id).all()
@@ -65,6 +96,7 @@ def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
         status=task.status, cases_count=task.cases_count, duration_ms=task.duration_ms,
         formats=task.formats, category_id=task.category_id,
         parent_task_id=task.parent_task_id,
+        conversation_id=task.conversation_id,
         created_at=task.created_at, finished_at=task.finished_at,
         steps=[
             StepLogOut(
@@ -179,8 +211,13 @@ def list_tasks(db: Session = Depends(get_db),
 @router.get("/tasks/{task_id}", response_model=TaskOut)
 def get_task(task_id: str, db: Session = Depends(get_db),
              user: User = Depends(get_current_user)):
-    """任务详情：默认带上结构化用例（用于网页思维导图 + 测试用例 tab）。"""
-    return _to_out(db, _own_task(db, task_id, user), include_cases=True)
+    """任务详情：默认带上结构化用例（用于网页思维导图 + 测试用例 tab）。
+
+    额外解析并回填 conversation_id（历史任务兜底），供详情页「继续优化」跳回会话。
+    """
+    task = _own_task(db, task_id, user)
+    _resolve_conversation(db, task)
+    return _to_out(db, task, include_cases=True)
 
 
 @router.delete("/tasks/{task_id}")
@@ -292,6 +329,22 @@ async def iterate_task(
     db.add(new_task)
     db.commit()
     db.refresh(new_task)
+
+    # 会话消息落库：让迭代过程在会话中可回放。
+    # user 消息记录迭代指令；assistant 占位消息（task_id=None）由 run_iterate 完成时回填新子任务 id，
+    # 前端据此在该位置渲染任务卡（iterate.py 结尾的既有回填逻辑）。
+    conv_obj = db.get(Conversation, eff_conv) if eff_conv else None
+    if conv_obj:
+        user_content = instruction.strip() or "（无文字补充要求，仅上传用例文件）"
+        if file and file.filename:
+            user_content = f"{user_content}\n📎 已附用例文件：{file.filename}"
+        db.add(Message(conversation_id=eff_conv, role="user",
+                       content=f"🔁 迭代《{parent.name}》：{user_content}"))
+        db.flush()  # 保证 user 消息先于 assistant 占位消息入库
+        db.add(Message(conversation_id=eff_conv, role="assistant",
+                       content=f"正在基于《{parent.name}》迭代补充用例…", task_id=None))
+        conv_obj.updated_at = datetime.utcnow()
+        db.commit()
 
     background_tasks.add_task(
         run_iterate, new_task_id, task_id, instruction.strip(), uploaded_path, uploaded_ext, eff_conv)
