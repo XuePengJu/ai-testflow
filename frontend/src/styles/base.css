@@ -392,6 +392,31 @@ body {
   padding: 8px 12px; background: #ffece8; color: #d83931; font-size: 12px;
   border-top: 1px solid #ffbdb8; word-break: break-all;
 }
+/* 步骤折叠头 + 思考详情（方案 B） */
+.tsc-step { flex-direction: column; align-items: stretch; gap: 0; }
+.tsc-step-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: transparent; border: 0; padding: 4px 0; cursor: pointer;
+  font: inherit; color: #646a73; text-align: left;
+}
+.tsc-step-head:hover { background: #f7f8fa; }
+.tsc-step .tsc-title { font-size: 12.5px; }
+.tsc-step .tsc-hint { flex: 1; color: #8f959e; font-size: 11px; }
+.tsc-toggle { color: #8f959e; font-size: 11px; transition: transform 0.15s; flex: none; }
+.tsc-toggle.open { transform: rotate(0deg); }
+.tsc-step-detail {
+  margin: 2px 0 8px 28px; padding: 8px 10px; border-left: 2px solid #e5e6eb;
+  background: #fafbfc; border-radius: 0 6px 6px 0; display: flex; flex-direction: column; gap: 6px;
+}
+.tsc-io { display: flex; flex-direction: column; gap: 2px; }
+.tsc-io-label { font-size: 11px; font-weight: 600; color: #4e5969; }
+.tsc-io-text {
+  font-size: 12px; color: #4e5969; line-height: 1.5; white-space: pre-wrap;
+  word-break: break-all; margin: 0;
+}
+.tsc-io-text.tsc-muted { color: #8f959e; }
+.tsc-io-err .tsc-io-label, .tsc-io-err .tsc-io-text { color: #d83931; }
+.tsc-io-err { background: #fff5f3; border-radius: 4px; padding: 4px 6px; }
 
 /* ---- 输入区（方案B：浮动输入岛） ---- */
 .chat-input-wrap {

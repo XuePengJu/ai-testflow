@@ -60,6 +60,24 @@ if _FRONTEND_MODE not in ("react", "legacy"):
     _FRONTEND_MODE = "react"
 STATIC_DIR = BASE_DIR / ("frontend-legacy" if _FRONTEND_MODE == "legacy" else "frontend/dist")
 
+# ============ 数据库方言（方案 A：SQLite / MySQL 双方言）============
+# DB_TYPE=sqlite：本地文件零配置（默认，本机/测试/演示零改动）
+# DB_TYPE=mysql ：走下面的连接字段；DB_* 整组仅在 mysql 下生效，sqlite 下忽略
+DB_TYPE = os.getenv("DB_TYPE", "sqlite").strip().lower()
+DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
+DB_PORT = int(os.getenv("DB_PORT", "3306"))
+DB_USER = os.getenv("DB_USER", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_NAME = os.getenv("DB_NAME", "ai-testflow")
+DB_CHARSET = os.getenv("DB_CHARSET", "utf8mb4")          # 中文/emoji 必须，否则乱码或写入报错
+# —— MySQL 连接池（规避 "MySQL server has gone away"）——
+DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))      # 常驻连接数
+DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))  # 高峰溢出上限
+DB_POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"  # 取连接前探活→断线重连
+DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))  # 1h 回收，避开 MySQL wait_timeout 静默断连
+DB_ECHO = os.getenv("DB_ECHO", "false").lower() == "true"    # 调试时置 true 打印 SQL
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()     # 可选：直填完整 URL 优先于上面 DB_* 字段
+
 
 def is_mock() -> bool:
     """无百炼 Key 时走 mock 兜底，保证开箱即跑。"""

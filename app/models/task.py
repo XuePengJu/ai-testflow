@@ -11,18 +11,18 @@ class Task(Base):
     """一次测试用例生成任务。"""
     __tablename__ = "tasks"
 
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False, default="未命名任务")
-    kind = Column(String, nullable=False, default="api")       # api / business
-    source_type = Column(String, nullable=False, default="file")  # file / text
+    id = Column(String(64), primary_key=True)
+    name = Column(String(255), nullable=False, default="未命名任务")
+    kind = Column(String(32), nullable=False, default="api")       # api / business
+    source_type = Column(String(32), nullable=False, default="file")  # file / text
     input_ref = Column(Text, default="")       # 上传文件名 或 直接粘贴的规格文本
-    formats = Column(String, default="xlsx,json")  # 导出格式，逗号分隔
-    status = Column(String, nullable=False, default="pending")  # pending/running/completed/failed
+    formats = Column(String(64), default="xlsx,json")  # 导出格式，逗号分隔
+    status = Column(String(32), nullable=False, default="pending")  # pending/running/completed/failed
     user_id = Column(Integer, nullable=True, index=True)        # 归属用户（存量迁移归 admin）
     is_sample = Column(Boolean, nullable=False, default=False)  # 平台预置示例任务（不占访客配额）
     category_id = Column(Integer, nullable=True, index=True)    # 归属分类（NULL=未分类）
-    conversation_id = Column(String, nullable=True, index=True) # 归属会话（对话驱动首页）
-    parent_task_id = Column(String, nullable=True, index=True)   # 迭代来源（补充生成时指向上一版本任务）
+    conversation_id = Column(String(64), nullable=True, index=True)  # 归属会话（对话驱动首页）
+    parent_task_id = Column(String(64), nullable=True, index=True)   # 迭代来源（补充生成时指向上一版本任务）
     input_summary = Column(Text, default="")
     cases_count = Column(Integer, default=0)
     duration_ms = Column(Float, default=0.0)
@@ -46,10 +46,10 @@ class StepLog(Base):
     __tablename__ = "step_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String, ForeignKey("tasks.id"), nullable=False, index=True)
-    name = Column(String, nullable=False)     # parser/generator/reviewer/exporter
-    title = Column(String, default="")
-    status = Column(String, nullable=False, default="pending")  # pending/running/completed/failed/skipped
+    task_id = Column(String(64), ForeignKey("tasks.id"), nullable=False, index=True)
+    name = Column(String(64), nullable=False)     # parser/generator/reviewer/exporter
+    title = Column(String(255), default="")
+    status = Column(String(32), nullable=False, default="pending")  # pending/running/completed/failed/skipped
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
     duration_ms = Column(Float)

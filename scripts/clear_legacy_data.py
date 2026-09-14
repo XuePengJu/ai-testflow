@@ -5,30 +5,29 @@
 
 老板明确：旧任务不做保留，直接删除（都是测试数据）。本地库与服务器库各自独立，需分别执行。
 用法：cd 项目根目录 && python scripts/clear_legacy_data.py
+
+注：已改为 SQLAlchemy 执行，不再依赖 sqlite3，SQLite / MySQL 双方言通用。
 """
 import shutil
-import sqlite3
 import sys
 from pathlib import Path
 
 # 让脚本在任意 cwd 下都能 import app 包（项目根目录加入 sys.path）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.config import DB_PATH, OUTPUT_DIR, UPLOAD_DIR
+from sqlalchemy import text
+from app.core.config import OUTPUT_DIR, UPLOAD_DIR
+from app.core.db import engine
 
 
 def clear() -> None:
-    # 1. 清空表数据
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM tasks")
-    n_tasks = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM step_logs")
-    n_steps = cur.fetchone()[0]
-    cur.execute("DELETE FROM step_logs")
-    cur.execute("DELETE FROM tasks")
-    conn.commit()
-    conn.close()
+    # 1. 清空表数据（跨方言，走 SQLAlchemy engine）
+    with engine.connect() as conn:
+        n_tasks = conn.execute(text("SELECT COUNT(*) FROM tasks")).scalar()
+        n_steps = conn.execute(text("SELECT COUNT(*) FROM step_logs")).scalar()
+        conn.execute(text("DELETE FROM step_logs"))
+        conn.execute(text("DELETE FROM tasks"))
+        conn.commit()
     print(f"已清空 tasks（{n_tasks} 条）/ step_logs（{n_steps} 条）")
 
     # 2. 清空导出与上传文件（保留 .DS_Store 与目录结构）

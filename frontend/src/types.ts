@@ -41,7 +41,10 @@ export interface TaskSummary {
   name: string;
   status: string;
   cases_count?: number;
+  duration_ms?: number | null;
   created_at?: string | null;
+  /** 节点步骤（含 input_summary / output_summary），与后端 _task_brief 对齐 */
+  steps?: StepLog[];
   report?: { summary?: string };
 }
 

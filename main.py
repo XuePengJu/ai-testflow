@@ -30,7 +30,7 @@ class NoCacheStaticFiles(StaticFiles):
 
 from app.api import auth, categories, chat, conversations, files, guest, llm_config, tasks, users
 from app.core.config import STATIC_DIR, jwt_secret_is_placeholder, ENV
-from app.core.db import init_db
+from app.core.db import init_db, engine
 
 logger = logging.getLogger("main")
 
@@ -82,7 +82,7 @@ app.include_router(conversations.router, prefix="/api")
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "db_dialect": engine.dialect.name}
 
 
 @app.get("/", response_class=HTMLResponse)

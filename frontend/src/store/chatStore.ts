@@ -151,7 +151,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               cases_count: m.task.cases_count || 0,
               duration_ms: 0,
               formats: "",
-              steps: [],
+              steps: m.task.steps || [],
             } as Task)
           : null,
         state: "done",

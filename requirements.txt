@@ -14,3 +14,4 @@ pyjwt>=2.8
 apscheduler>=3.10
 email-validator>=2.0
 cryptography>=42.0
+pymysql>=1.1.0

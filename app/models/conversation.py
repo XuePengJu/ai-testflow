@@ -16,9 +16,9 @@ class Conversation(Base):
     """一次对话会话（所有对话都落库，跨刷新可回放）。"""
     __tablename__ = "conversations"
 
-    id = Column(String, primary_key=True)                # uuid hex 12
+    id = Column(String(64), primary_key=True)                # uuid hex
     user_id = Column(Integer, nullable=False, index=True)
-    title = Column(String, default="新会话")              # 首条用户消息截断
+    title = Column(String(255), default="新会话")              # 首条用户消息截断
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -28,9 +28,9 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=False, index=True)
-    role = Column(String, nullable=False)                # user / assistant
+    conversation_id = Column(String(64), ForeignKey("conversations.id"), nullable=False, index=True)
+    role = Column(String(32), nullable=False)                # user / assistant
     content = Column(Text, default="")
-    thinking = Column(Text, default="")                  # assistant 思考过程
-    task_id = Column(String, nullable=True, index=True)  # 关联生成任务（点"生成测试用例"后回填）
+    thinking = Column(Text, default="")                      # assistant 思考过程
+    task_id = Column(String(64), nullable=True, index=True)  # 关联生成任务（点"生成测试用例"后回填）
     created_at = Column(DateTime, default=utcnow)
