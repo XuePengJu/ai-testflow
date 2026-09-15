@@ -1,5 +1,13 @@
 # 项目1 · AI 测试工作流平台（MVP 执行方案）
 
+> ⚠️ **修订记录（2026-09-15 V2.12，已部署上线）**：按 V2.10 ~ V2.12 实际落地同步本文：
+>
+> 1. **V2.10 统一入口与会话内迭代（FR-Q）**：详情抽屉移除全部输入表单，底部「💬 继续优化（回到会话）」为唯一迭代入口；会话输入框迭代引用 chip 机制（先沟通、点「⚡ 生成用例」才跑 `POST /tasks/{id}/iterate`）；`TaskOut` 补 `conversation_id`（`messages.task_id` 反查兜底）；修复示例数据播种（MySQL 下 StepLog 外键 1452）。详见「8.1.8」。
+> 2. **V2.11 版本链聚合（FR-R）**：新增 `frontend/src/utils/taskChain.ts` 纯前端解析 `parent_task_id` 链（后端零改动），三处消费：抽屉标题行版本切换器、会话流旧版本卡折叠、任务列表同链聚合 + 版本徽章。详见「8.1.9」。
+> 3. **V2.12 导图控件迁出画布（FR-S）**：MindElixir 右下角工具栏（导出 XMind/全屏/缩放/百分比/居中）经 React portal 迁入详情抽屉底栏，与「继续优化」同排；保留左上方向切换栏。详见「8.1.10」。
+> 4. **数据层与部署事实更新**：生产库为 **MySQL**（阿里云 39.106.200.147:3356），本地保留 SQLite 降级（`app/core/db.py` 双方言）；公网入口改为 **cloudflared 命名隧道**（`ai.clickscope.in` → `127.0.0.1:8000`），cpolar 方案已废弃。
+> 5. 本文仍为架构底座文档（版本无关），功能演进以 PRD / README / 各版本执行方案为准。
+
 > ⚠️ **修订记录（2026-09-14 V2.9）**：按 V2.9 功能增强同步文档指针：
 >
 > 1. 新增对话附件文档解析（FR-N）、深度思考管道与 Markdown 渲染（FR-O）、用例标题复合化与导图布局（FR-P），详见《项目1-功能增强执行方案-V2.9.md》与更新后的 PRD/README。
@@ -69,11 +77,11 @@
 | ----- | ----------------------------------------------- | ----------------------------------------------------------------------- |
 | 后端框架  | **FastAPI**                                     | 异步、自带 Swagger、Python AI 生态友好                                            |
 | AI 模型 | **多厂商 OpenAI 兼容协议**                             | 7+ 预设（阿里百炼/智谱/腾讯混元/DeepSeek/Kimi/豆包/自定义），用户级 API Key 自管；无 Key 时 mock 兜底 |
-| 数据库   | **SQLite**                                      | 轻量，存任务/步骤日志/用例/用户/会话/分类/模型配置；后续可换 MySQL                                 |
+| 数据库   | **MySQL（生产）／ SQLite（本地降级）**           | 存任务/步骤日志/用例/用户/会话/分类/模型配置；`app/core/db.py` 双方言适配，生产为阿里云远程库 3356 端口 |
 | 任务编排  | 自研状态机 + 步骤调度                                    | 四 Agent 串联，每步可观测、可重试                                                    |
 | 对话驱动  | **SSE 流式输出 + 会话持久化**                            | Buddy 助手自然语言交互，多轮上下文，对话与消息落库可回放                                         |
-| 前端    | **原生 HTML+JS 单文件（无构建）**                         | 对话驱动首页 + 左侧边栏 + 详情抽屉 + MindElixir 思维导图；完整 React 版后补                     |
-| 部署    | **FastAPI 同源伺服（*单端口 8000*）+ 阿里云 + cpolar 内网穿透** | 前端静态文件由 FastAPI 挂载，前后端同域同机房，避免跨域和跨太平洋延迟                                 |
+| 前端    | **React 18 + TypeScript + Vite（zustand）**       | V2.8 起已由原生单文件前端重构为 React 工程，构建产物 `frontend/dist` 同源托管；旧版保留在 `frontend-legacy/`（`AITF_FRONTEND=legacy` 可回退） |
+| 部署    | **FastAPI 同源伺服（单端口 8000）+ 阿里云 + cloudflared 命名隧道** | 前端静态文件由 FastAPI 挂载，前后端同域；systemd 单元 `ai-testflow.service` 托管 uvicorn（`Restart=on-failure`） |
 
 ---
 
@@ -327,6 +335,35 @@ T7 方案 → T6 骨架 → T8 工作流引擎 → T9 接入模块 → T10 四 A
   - **兼容层**：`iterate._parse_cases_json` 读旧库数据自动补齐字段，老任务迭代不丢内容。
   - **前端**：思维导图每步挂对应预期子节点；用例表格步骤列内联 `↳ 预期: xxx`，不增加列不挤布局。
   - **测试**：新增 `tests/test_step_expected.py` 16 条（对齐兜底 7、xmind 导出/导入闭环 3、mock 2、导入兼容 4），全量 130 条通过。
+
+### 8.1.8 V2.10 · 统一入口与会话内迭代（FR-Q）
+
+- **动机**：迭代入口分散（详情页一套表单 + 会话另一套），用户困惑"该在哪补充需求"；且 `ChatIn.task_id` 自 V2.7 起预留却从未接完，迭代链路在会话中不可见。
+- **产品原则**：**主页会话输入框是"发起工作"的唯一入口** —— 新任务 / 旧任务迭代 / 用例迭代全部在此发起；详情抽屉零输入表单，只做结果查看 + 导出 + 引导回会话。
+- **方案**：
+  - **前端分流**：`chatStore` 维护 `iterTaskId / iterTaskName / iterNotes`；无 chip 走 `/chat/stream`，有 chip 时**发消息只沟通**（携带 `task_id`，后端注入旧任务用例摘要），点 chip 上的「⚡ 生成用例」才调 `POST /tasks/{id}/iterate`，instruction = 累积的补充要求。
+  - **后端补链**：`iterate_task` 端点落 user 指令 + assistant 占位两条消息；`run_iterate` 结尾原有逻辑回填最后一条 assistant 消息的 `task_id`，会话里原位渲染任务卡（V2.7 预留的能力至此接完）。
+  - **会话绑定**：`TaskOut` 新增 `conversation_id`；`app/api/tasks.py#_resolve_conversation()` 三级兜底（①已有值 ②`messages.task_id` 反查回填 ③新建会话并绑定），列表接口不触发以避免 N+1。
+  - **示例数据修复**：`sample_seeder` 在 MySQL 下每个 Task 插入后显式 `db.flush()` 再写 StepLog（否则 FK 1452 且异常被静默吞），并同步建会话 + 消息回填 `conversation_id`。
+  - **导出格式对齐**：示例任务与真实任务的 `formats` 统一为 `xlsx / json / xmind`（此前 ChatPanel 硬编码仅 `xlsx`）。
+
+### 8.1.9 V2.11 · 版本链聚合（FR-R）
+
+- **动机**：同一任务迭代多次后，历史版本散落在任务列表与会话流里，翻页才能找到旧版本。
+- **方案（后端零改动）**：新增 `frontend/src/utils/taskChain.ts` 纯函数解析：
+  - `buildChain(tasks, id)` —— 沿 `parent_task_id` 回溯到链根，再收集全部后代，按创建顺序编号 v1…vN；
+  - `isLatestOfChain` / `groupByChain` —— 供列表与会话去重使用。
+  - **三处消费**：①`TaskDetailDrawer` 标题行版本切换器（`vN ▾`，切换即 `openDetail`；菜单 `max-height + overflow` 限高滚动，点击外部 / 切换任务自动收起）②会话流中旧版本任务卡折叠为一行细条（`task-card-stale`）③`TaskList` 同链聚合成一行，卡片内页脚「▾ 共 N 个版本」展开历史，历史行带左侧竖线缩进与 `[v1]` 版本徽章。
+  - **已验证真实数据**：`用户登录注册 v1→v2`、`采购入库管理 v1→v2→v3` 链路解析正确，无跨任务串链。
+
+### 8.1.10 V2.12 · 导图控件迁出画布（FR-S）
+
+- **动机**：MindElixir 右下角浮动工具栏（导出 XMind / 全屏 / 缩放）压住节点文字；而底栏本来就独占一行，宽度充足。
+- **关键坑（查 `node_modules/mind-elixir/dist` 源码得来）**：`toolBar: false` 会**同时**关掉右下角 `.rb` 与左上角方向切换 `.lt`（库内 `qt(){ container.append(Gt()); container.append(Kt()) }` 同一开关）。故必须保留 `toolBar: true` + CSS 隐藏 `.mind-elixir-toolbar.rb`，方向切换功能才不丢。
+- **方案**：
+  - `MindMapTab.tsx` 重写：删除往库 DOM 注入导出按钮的 hack；控件组经 `createPortal` 渲染进 `TaskDetailDrawer` 底栏的 `#mm-ctrl-slot`（effect 内 `getElementById`，父组件 DOM 提交后才存在）。
+  - 行为全部用公开 API 复刻库内置实现：`mind.scale(mind.scaleVal ± mind.scaleSensitivity)`、`mind.toCenter()`、`container.requestFullscreen()`（`scaleVal` / `scaleSensitivity` 为公开属性）；监听画布 `wheel` + rAF 同步百分比，点击百分比一键回 100%；`fullscreenchange` 后重跑 `fitInitialView` 补居中。
+  - `TaskDetailDrawer` 底栏左段为插槽，右段「需要补充用例？ + 💬 继续优化」保持不变 —— **迭代唯一入口不受影响**。
 
 ---
 

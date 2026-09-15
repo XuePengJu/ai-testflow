@@ -1,9 +1,9 @@
 # AI 测试工作流平台
 
-> 作品集「门面担当」全栈产品，当前版本 **V2.9**。
+> 作品集「门面担当」全栈产品，当前版本 **V2.12**（2026-09-15 已部署上线）。
 > 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端。支持多厂商大模型、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
 
-在线演示：[https://f1572f5.r1.cpolar.top](https://f1572f5.r1.cpolar.top)
+在线演示：[https://ai.clickscope.in](https://ai.clickscope.in)
 
 ***
 
@@ -41,6 +41,42 @@
 - 任务归类：每任务「🏷」菜单一键归入/移出分类，计数实时更新
 
 - 点击分类节点过滤任务列表，实时显示各节点任务数
+
+### 统一入口与会话内迭代（V2.10）
+
+> 产品原则：**主页会话输入框是"发起工作"的唯一入口** —— 新任务、旧任务迭代、用例迭代全部在此发起。
+
+- **详情页零输入表单**：任务详情抽屉只做结果查看（思维导图 / 用例表格 / 步骤时间线）与导出，底部固定「💬 继续优化（回到会话）」为唯一迭代入口
+
+- **迭代引用 chip**：输入框上方显示「🔁 基于《任务名 vN》迭代 ✕」，有 chip = 迭代、无 chip = 新任务；不靠 LLM 猜意图，由用户显式选择
+
+- **先沟通、再生成（V2.10.1）**：挂着 chip 时发消息**只沟通不生成**（走对话流并携带旧任务用例摘要作为上下文），点 chip 上的「⚡ 生成用例」才真正跑 `POST /tasks/{id}/iterate`，补充要求即为累积的沟通内容
+
+- **会话内闭环**：迭代产生的新任务卡以任务卡形式落在会话原位（后端回填 `messages.task_id`），支持「继续优化」，无需先打开详情
+
+- **会话绑定**：`TaskOut` 输出 `conversation_id`，历史任务按 `messages.task_id` 反查兜底，查不到则新建会话绑定
+
+详见 `docs/项目1-统一入口与会话内迭代执行方案-V2.10.md`
+
+### 版本链聚合（V2.11）
+
+- 迭代链（`parent_task_id`）在前端由 `frontend/src/utils/taskChain.ts` 纯函数解析（后端零改动）：回溯链根再收集后代 → v1…vN
+
+- **抽屉版本切换器**：标题行「任务名 → vN ▾」，下拉切换整链任一版本；菜单限高滚动，不再被弹窗裁切；点击外部 / 切换任务自动收起
+
+- **会话流折叠**：同一条链只保留最新一张完整任务卡，旧版本折叠为一行细条
+
+- **任务列表聚合**：同链只占一行，卡片内页脚「▾ 共 N 个版本」展开历史；历史行带左侧竖线缩进 + `[v1]` 版本徽章，视觉上不再与相邻任务混淆
+
+### 导图控件迁入底栏（V2.12）
+
+- 思维导图画布右下角浮动工具栏（导出 XMind / 全屏 / 缩放 / 百分比 / 居中）**迁出画布、与底栏融合成一行**，不再遮挡节点文字
+
+- 左上角「方向切换（左/右/两侧）」保留（`toolBar: false` 会一并关掉，故仅 CSS 隐藏右下角 `.rb`）
+
+- 控件经 React portal 渲染进底栏插槽，全部走 MindElixir 公开 API（`scale(scaleVal ± scaleSensitivity)` / `toCenter()` / `requestFullscreen()`）；滚轮缩放时百分比实时同步，点击百分比一键回 100%
+
+- 底栏右侧「💬 继续优化」保持不变 —— 迭代唯一入口不受影响
 
 ### 任务详情（3 Tab）
 
@@ -164,7 +200,7 @@
 | 层     | 选型                                               |
 | ----- | ------------------------------------------------ |
 | 后端    | **FastAPI**（自带 Swagger）                          |
-| 数据库   | **SQLite**（SQLAlchemy ORM，timeout=30 防并发写锁）      |
+| 数据库   | **MySQL**（生产，远程库，地址见 `.env`）+ 本地 SQLite；SQLAlchemy ORM 双方言适配 |
 | 认证    | **bcrypt + JWT**（passlib / pyjwt）+ 每请求回查用户状态     |
 | 加密    | **AES-256-GCM**（Python cryptography + 前端纯 JS 实现） |
 | AI 模型 | OpenAI 兼容协议 HTTP 直连，支持 7+ 厂商；无 Key 自动 mock 兜底    |
@@ -185,6 +221,8 @@ cp .env.example .env        # 可选：填 DASHSCOPE_API_KEY 接真模型；留�
 python scripts/migrate_v2.py  # 首次/升级时执行（幂等）：建用户表 + 预置 admin + 存量数据迁移
 python main.py              # 等价于 uvicorn main:app --port 8000
 ```
+
+数据库：`.env` 中配 `DATABASE_URL`；配 MySQL 则走 MySQL，留空默认本地 SQLite（`app/core/db.py` 双方言适配）。生产环境为 MySQL 远程库。
 
 前端（仅开发机需要 Node，服务器不装）：
 
@@ -210,10 +248,11 @@ npm run build   # 构建 → frontend/dist（产物入库，服务器 git pull �
 ## 演示流程（30 秒出成品）
 
 1. 首页三选一：登录 / 注册 / 游客体验（游客 24h 内数据保留，可随时转正）
-2. 选「接口规格(api)」或「业务需求(business)」，上传 DBERP 规格文件（`examples/` 下有现成样本）或粘贴文本
-3. 选导出格式（xlsx / json / xmind），点「提交任务」
-4. 任务列表实时刷新；点开任务看 **思维导图预览** / **测试用例表格** / **四步骤时间线**
-5. 一键下载导出的测试用例文件
+2. 在会话输入框描述需求，或上传 DBERP 规格文件（`examples/` 下有现成样本）；可先多轮沟通再点「生成测试用例」
+3. 选导出格式（xlsx / json / xmind），任务提交后在会话内实时看到四 Agent 进度
+4. 点开任务看 **思维导图预览** / **测试用例表格** / **四步骤时间线**
+5. 需要补充用例：点任务卡或抽屉底部的「💬 继续优化」→ 输入框挂上迭代 chip → 沟通完点「⚡ 生成用例」→ 产出 v2，抽屉标题行 `vN ▾` 可切回任一历史版本
+6. 一键下载导出的测试用例文件
 
 > 无模型 Key 时自动走 **mock 兜底**，无需联网即可演示完整编排流程。
 > 配置真实模型：点顶栏模型状态胶囊 → 选厂商 → 填 Key → 测试连通 → 保存。
@@ -246,9 +285,9 @@ npm run build   # 构建 → frontend/dist（产物入库，服务器 git pull �
 | ---- | ------------------------------- | ----------------------------------------- |
 | POST | `/api/tasks`                    | 提交任务：`file` 或 `text` + `kind` + `formats` |
 | GET  | `/api/tasks`                    | 任务列表（admin 加 `?all=true` 看全部）             |
-| GET  | `/api/tasks/{id}`               | 任务详情 + 四步骤日志 + 用例列表                       |
+| GET  | `/api/tasks/{id}`               | 任务详情 + 四步骤日志 + 用例列表（含 `conversation_id`、`parent_task_id`） |
 | DELETE | `/api/tasks/{id}`             | 删除任务（仅本人/admin）                           |
-| POST | `/api/tasks/{id}/iterate`      | 迭代补充：`instruction` + 可选 `file`（用例导入）+ 可选 `conversation_id`，生成新版本子任务 |
+| POST | `/api/tasks/{id}/iterate`      | 迭代补充：`instruction` + 可选 `file`（用例导入）+ 可选 `conversation_id`，生成新版本子任务（V2.10 起同步落会话 user/assistant 消息） |
 | GET  | `/api/tasks/{id}/download?fmt=` | 下载导出文件（xlsx/json/xmind）                   |
 
 ### 会话（V2.6）
@@ -265,7 +304,7 @@ npm run build   # 构建 → frontend/dist（产物入库，服务器 git pull �
 
 | 方法   | 路径                | 说明                          |
 | ---- | ----------------- | --------------------------- |
-| POST | `/api/chat/stream` | Buddy 流式对话（SSE），支持注入任务摘要上下文 + 深度思考 + 文档附件（file_id） |
+| POST | `/api/chat/stream` | Buddy 流式对话（SSE），支持注入任务摘要上下文（`task_id`）+ 深度思考 + 文档附件（file_id） |
 | POST | `/api/chat`        | 非流式对话（兜底，同渲染管线）              |
 
 ### 文件（V2.9 附件）
@@ -317,7 +356,7 @@ npm run build   # 构建 → frontend/dist（产物入库，服务器 git pull �
 | 方法  | 路径           | 说明           |
 | --- | ------------ | ------------ |
 | GET | `/config.js` | 前端配置（仅旧版单文件前端需要；React 版走相对路径） |
-| GET | `/health`    | 健康检查         |
+| GET | `/health`    | 健康检查（返回 `{"status":"ok","db_dialect":"mysql"}`） |
 
 ***
 
@@ -350,18 +389,20 @@ ai-testflow/
 │   │   ├── contexts/            # AuthContext（认证/加密快照）
 │   │   ├── store/               # zustand（chat/task/settings/category）
 │   │   ├── components/          # chat/ task/ settings/ admin/ common/
+│   │   ├── utils/               # taskChain.ts（迭代版本链解析，V2.11）
 │   │   └── styles/              # 样式（自旧版平移 + 迭代）
 │   ├── dist/                    # 构建产物（入库，FastAPI 同源伺服）
 │   ├── public/
 │   └── scripts/                 # Playwright e2e（M1~M5 里程碑验证脚本）
 ├── frontend-legacy/             # 旧原生单文件前端（回退保留：AITF_FRONTEND=legacy）
 ├── scripts/
-│   └── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
+│   ├── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
+│   └── start_local.sh           # 本地起服脚本（restart：kill 8000 后拉起）
 ├── tests/                       # 220 条自动化用例（认证 + 分级加密 + 权限 + 对话 + 迭代导入 + 附件解析 + 思考 + 标题复合化等，pytest）
 ├── app/
 │   ├── core/
 │   │   ├── config.py            # 配置加载
-│   │   ├── db.py                # 数据库连接
+│   │   ├── db.py                # 数据库连接（MySQL / SQLite 双方言）
 │   │   ├── security.py          # bcrypt + JWT
 │   │   ├── crypto.py            # AES-256-GCM 加解密
 │   │   ├── providers.py         # LLM 厂商预设
@@ -377,6 +418,7 @@ ai-testflow/
 │   ├── services/
 │   │   ├── pipeline_lib.py      # 调用内置 generator_core
 │   │   ├── llm_service.py       # OpenAI 兼容 LLM 客户端
+│   │   ├── sample_seeder.py     # 新访客示例数据播种（会话 + 任务 + 步骤日志）
 │   │   └── doc_extract.py       # 对话附件文档解析（docx/pdf/md → 纯文本，V2.9）
 │   ├── workflow/
 │   │   ├── engine.py            # 状态机 + 步骤调度
@@ -395,25 +437,38 @@ ai-testflow/
 │   └── jobs/
 │       └── guest_cleaner.py     # 访客清理（定时 + 懒清理 + 审计）
 ├── uploads/  outputs/           # 上传 / 导出目录（按用户分目录，已 gitignore）
-    └── docs/                        # 项目文档
-        ├── PRD.md                   # 产品需求文档
-        ├── DEPLOY.md                # 部署指南（同源单服务 + cpolar）
-        ├── 项目1-工作流平台-MVP执行方案.md  # 技术实现方案（架构底座，版本无关）
-        ├── 项目1-前端React重构执行方案-V2.8.md  # 前端重构执行方案
-        └── 项目1-功能增强执行方案-V2.9.md  # V2.9 功能增强执行方案
+├── deploy/
+│   └── ai-testflow.service      # systemd 单元（阿里云生产使用）
+└── docs/                        # 项目文档
+    ├── PRD.md                   # 产品需求文档
+    ├── DEPLOY.md                # 部署指南（同源单服务 + cloudflared 隧道）
+    ├── 项目1-工作流平台-MVP执行方案.md  # 技术实现方案（架构底座，版本无关）
+    ├── 项目1-前端React重构执行方案-V2.8.md      # 前端重构执行方案
+    ├── 项目1-功能增强执行方案-V2.9.md            # V2.9 功能增强执行方案
+    └── 项目1-统一入口与会话内迭代执行方案-V2.10.md  # V2.10 统一入口执行方案
 ```
 
 ***
 
 ## 部署架构
 
-- **同源单服务**：FastAPI（8000 端口）同时提供 API（`/api`）与前端静态资源（`frontend/dist`，相对路径调用，无跨域）；systemd 管理 uvicorn
+- **同源单服务**：FastAPI（127.0.0.1:8000）同时提供 API（`/api`）与前端静态资源（`frontend/dist`，相对路径调用，无跨域）；systemd 单元 `ai-testflow.service` 管理 uvicorn（`Restart=on-failure`）
 
-- **服务器**：阿里云 ECS，宝塔面板运维
+- **服务器**：阿里云 ECS（IP / 端口见运维记录，**不写入公开文档**），宝塔面板运维，MySQL 提供远程库
 
-- **公网访问**：cpolar 内网穿透隧道（web 隧道为本平台入口）
+- **公网访问**：**cloudflared 命名隧道**（`ai.clickscope.in` → `http://localhost:8000`）；因域名未完成 ICP 备案，不能直开 80/443，隧道为当前最稳方案
 
-- **被测系统**：DBERP 进销存，同样部署于该服务器，经 cpolar erp 隧道访问
+- **被测系统**：DBERP 进销存，同样部署于该服务器，经另一条隧道（`erp.clickscope.in`）访问
+
+```
+浏览器 ──HTTPS──> cloudflared 隧道 ──> 阿里云:8000 (uvicorn)
+                                        ├── /api/*  REST API
+                                        ├── /health 健康检查
+                                        └── /       前端静态页(frontend/dist)
+```
+
+> 注意：Cloudflare 分配的 IP 在国内部分网络/代理节点下会被干扰（表现为 `ERR_CONNECTION_CLOSED`）。
+> 若浏览器打不开而服务端正常，先排查本机代理（Clash 等）——给 `clickscope.in` 加 `DIRECT` 规则即可绕开。
 
 详见 `docs/DEPLOY.md`。
 
@@ -426,8 +481,10 @@ ai-testflow/
 | V2.5（已发布） | 任务详情页 3 Tab（思维导图 / 用例表格 / 步骤时间线） | ✅ 已上线 |
 | V2.6（已发布） | 对话驱动 Buddy 助手 + 会话持久化           | ✅ 已上线 |
 | V2.7（已发布） | 用例迭代与导入 + 步骤级预期结果               | ✅ 已上线 |
-| V2.8（已完成） | React + TS 前端重构：组件化拆分、zustand 状态、Playwright e2e 全覆盖、dist 同源托管 | ✅ 已完成（本地） |
-| V2.9（已完成） | 对话附件文档解析 + 深度思考管道与 Markdown 渲染 + 用例标题复合化与导图布局 + 用例 ID 回归修复 | ✅ 已完成（本地） |
+| V2.8（已完成） | React + TS 前端重构：组件化拆分、zustand 状态、Playwright e2e 全覆盖、dist 同源托管 | ✅ 已上线 |
+| V2.9（已完成） | 对话附件文档解析 + 深度思考管道与 Markdown 渲染 + 用例标题复合化与导图布局 + 用例 ID 回归修复 | ✅ 已上线 |
+| V2.10（已完成） | 统一入口与会话内迭代：详情页零输入表单 + 迭代引用 chip（先沟通再点「⚡ 生成用例」）+ TaskOut 补 `conversation_id` + 示例数据播种修复 | ✅ 已上线 |
+| V2.11（已完成） | 版本链聚合：`utils/taskChain.ts` 解析迭代链 + 抽屉版本切换器 + 会话流旧版本折叠 + 任务列表版本徽章展开 | ✅ 已上线 |
+| V2.12（已完成） | 导图控件迁出画布：导出 XMind / 全屏 / 缩放 / 百分比 / 居中 与「继续优化」融合进底栏单行 | ✅ 已上线 |
 | V3.0（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
 | V3.1（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
-
