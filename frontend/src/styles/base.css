@@ -100,6 +100,17 @@ body {
 }
 .app-logo { font-weight: 700; font-size: 16px; }
 .app-identity { display: flex; align-items: center; gap: 12px; }
+/* V2.13：顶栏 GitHub 仓库入口（幽灵图标按钮，与 .icon-btn 同尺寸） */
+.gh-link {
+  flex: none; width: 34px; height: 34px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #4e5969; text-decoration: none;
+  transition: background .18s, color .18s, transform .1s;
+}
+.gh-link:hover { background: #f0f6ff; color: #165dff; }
+.gh-link:active { transform: scale(.94); }
+.gh-link:focus-visible { outline: 2px solid #165dff; outline-offset: 2px; }
+.gh-link svg { display: block; }
 .btn.ghost { font-size: 13px; padding: 5px 12px; }
 .app-main {
   flex: 1; min-height: 0; display: grid;
