@@ -11,7 +11,8 @@ import type { Task } from "../types";
 
 const LIST_INTERVAL_MS = 5000;
 const ACTIVE_INTERVAL_MS = 2000;
-const ACTIVE_TTL_ROUNDS = 90; // 2s × 90 = 3 分钟，与旧版一致
+// 真实模型任务可达 10 分钟以上（N 个测试点 × 每次 30-90s）；TTL 放宽到 20 分钟
+const ACTIVE_TTL_ROUNDS = 600; // 2s × 600 = 20 分钟
 
 interface TaskState {
   tasks: Task[];

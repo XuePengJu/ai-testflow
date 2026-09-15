@@ -101,7 +101,8 @@ def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
         steps=[
             StepLogOut(
                 name=s.name, title=s.title, status=s.status,
-                duration_ms=s.duration_ms, input_summary=s.input_summary,
+                progress=s.progress, duration_ms=s.duration_ms,
+                input_summary=s.input_summary,
                 output_summary=s.output_summary, error=s.error,
             )
             for s in steps

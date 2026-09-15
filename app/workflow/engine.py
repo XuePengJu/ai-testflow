@@ -150,7 +150,15 @@ def run_task(task_id: str) -> None:
                     if vision_note:
                         summary = f"{summary}{vision_note}"
                 elif name == "generator":
-                    out, summary, details = fn(data["units"], llm_client, model_desc)
+                    def _progress(cur: int, total: int, unit_name: str, cases_so_far: int) -> None:
+                        """每个测试点完成 → 更新 StepLog.progress（前端轮询实时可见）。"""
+                        step.progress = (
+                            f"正在为第 {cur}/{total} 个测试点生成用例"
+                            f"（{unit_name}）· 已生成 {cases_so_far} 条"
+                        )
+                        db.commit()
+
+                    out, summary, details = fn(data["units"], llm_client, model_desc, _progress)
                 elif name == "reviewer":
                     out, summary, details = fn(data["cases"], llm_client)
                 else:  # exporter

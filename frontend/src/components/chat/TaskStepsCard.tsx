@@ -31,6 +31,8 @@ export function statusBadge(status: string): { text: string; cls: string } {
 
 interface StepInfo {
   status: string;
+  /** running 期间实时子进度（后端 StepLog.progress，轮询回写） */
+  progress?: string | null;
   input_summary?: string | null;
   output_summary?: string | null;
   error?: string | null;
@@ -38,7 +40,6 @@ interface StepInfo {
 
 /** showIterate：会话内任务卡传 true（挂「继续优化」→ 挂 chip）；详情页 running 卡不传（避免重复入口） */
 export default function TaskStepsCard({ task, showIterate = false }: { task: Task; showIterate?: boolean }) {
-  const badge = statusBadge(task.status);
   const tasks = useTaskStore((s) => s.tasks);
   const openDetail = useTaskStore((s) => s.openDetail);
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
@@ -47,11 +48,17 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
   // 会话流里同一条迭代链的旧版本卡折叠成一行细条：入口只留最新一张完整卡，避免翻页找入口。
   // 抽屉内的卡（showIterate=false）不做折叠，那里由版本切换器导航。
   const stale = showIterate && !isLatestOfChain(tasks, task.id);
+  // 步骤卡优先用列表轮询里的最新任务：列表 5s 轮询永不停，完成后的 steps 全量都在；
+  // 活跃任务轮询（pollTask）有 TTL，到期后卡片不能停在旧 running 状态。
+  const latest = tasks.find((t) => t.id === task.id);
+  const live = latest && latest.steps && latest.steps.length > 0 ? latest : task;
+  const badge = statusBadge(live.status);
   const stepMap: Record<string, StepInfo> = {};
-  (task.steps || []).forEach((s) => {
+  (live.steps || []).forEach((s) => {
     if (STEP_TITLES.includes(s.title))
       stepMap[s.title] = {
         status: s.status,
+        progress: s.progress,
         input_summary: s.input_summary,
         output_summary: s.output_summary,
         error: s.error,
@@ -87,9 +94,9 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
   return (
     <div className="task-steps-card" data-task-card={task.id}>
       <div className="tsc-head">
-        <span className="tsc-name">{task.name}</span>
+        <span className="tsc-name">{live.name}</span>
         <span className={`pill pill-${badge.cls}`}>{badge.text}</span>
-        {task.status === "completed" && <span className="tsc-cnt">共 {task.cases_count || 0} 个用例</span>}
+        {live.status === "completed" && <span className="tsc-cnt">共 {live.cases_count || 0} 个用例</span>}
       </div>
       <div className="tsc-steps">
         {STEP_TITLES.map((title) => {
@@ -104,14 +111,16 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
                 <span className="tsc-ring">{ring}</span>
                 <span className="tsc-title">{title}</span>
                 <span className="tsc-hint">
-                  {st === "running" ? RUNNING_HINTS[title] : s?.error ? "失败" : ""}
+                  {st === "running"
+                    ? (s?.progress || RUNNING_HINTS[title])
+                    : s?.error ? "失败" : ""}
                 </span>
                 <span className={`tsc-toggle ${open ? "open" : ""}`}>{open ? "▾" : "▸"}</span>
               </button>
               {open && (
                 <div className="tsc-step-detail">
                   {st === "running" && (
-                    <div className="tsc-io-text tsc-muted">{RUNNING_HINTS[title]}</div>
+                    <div className="tsc-io-text tsc-muted">{s?.progress || RUNNING_HINTS[title]}</div>
                   )}
                   {s?.input_summary && (
                     <div className="tsc-io">
@@ -140,7 +149,7 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
           );
         })}
       </div>
-      {task.status === "completed" && (
+      {live.status === "completed" && (
         <div className="tsc-actions">
           <button
             type="button"

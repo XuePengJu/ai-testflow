@@ -50,6 +50,7 @@ class StepLog(Base):
     name = Column(String(64), nullable=False)     # parser/generator/reviewer/exporter
     title = Column(String(255), default="")
     status = Column(String(32), nullable=False, default="pending")  # pending/running/completed/failed/skipped
+    progress = Column(Text, default="")   # running 期间实时子进度（如"正在为第 2/5 个测试点生成用例…"）
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
     duration_ms = Column(Float)

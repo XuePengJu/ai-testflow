@@ -268,7 +268,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       get().refreshConversations();
 
       void (async () => {
-        for (let i = 0; i < 300; i++) {
+        for (let i = 0; i < 600; i++) {
           await new Promise((res) => setTimeout(res, 2000));
           const rr = await api(API + "/tasks/" + child.id).catch(() => null);
           if (!rr || !rr.ok) continue;

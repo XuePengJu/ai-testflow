@@ -86,10 +86,21 @@ class CaseGenerator:
         text = self.client.generate(prompt)
         return self._parse_llm(text)
 
-    def generate(self, units: list[RequirementUnit]) -> list[TestCase]:
+    def generate(self, units: list[RequirementUnit], progress_cb=None) -> list[TestCase]:
+        """为全部测试点生成用例。
+
+        progress_cb(cur, total, unit_name, cases_so_far)：每个测试点完成后回调一次，
+        供上层做实时子进度展示（默认 None 不影响旧调用）。
+        """
         all_cases: list[TestCase] = []
-        for u in units:
+        total = len(units)
+        for i, u in enumerate(units, start=1):
             all_cases.extend(self.generate_for_unit(u))
+            if progress_cb:
+                try:
+                    progress_cb(i, total, u.name, len(all_cases))
+                except Exception:  # noqa: BLE001  进度回调失败绝不能影响生成
+                    pass
         # 去重
         seen, dedup = set(), []
         for c in all_cases:

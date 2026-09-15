@@ -40,9 +40,12 @@ def lib_parse(
     return parse_markdown(input_path, text=text)
 
 
-def lib_generate(units: list[RequirementUnit], client=None) -> list[TestCase]:
-    """按策略生成测试用例。client=平台注入的真实模型（V2.4）；None → mock/dashscope 兜底。"""
-    return CaseGenerator(client=client).generate(units)
+def lib_generate(units: list[RequirementUnit], client=None, progress_cb=None) -> list[TestCase]:
+    """按策略生成测试用例。client=平台注入的真实模型（V2.4）；None → mock/dashscope 兜底。
+
+    progress_cb：每个测试点完成后的实时进度回调（透传给 CaseGenerator）。
+    """
+    return CaseGenerator(client=client).generate(units, progress_cb=progress_cb)
 
 
 def lib_export(cases: list[TestCase], output_path: str, formats: list[str]) -> dict:

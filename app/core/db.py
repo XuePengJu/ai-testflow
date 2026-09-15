@@ -94,6 +94,15 @@ def _ensure_columns() -> None:
                 conn.execute(text(f"ALTER TABLE tasks {a}"))
             conn.commit()
 
+    # step_logs 补列（V3：生成用例实时子进度）
+    # 注意：MySQL 不允许 TEXT 列带 DEFAULT（1101），不能写 DEFAULT ''
+    if insp.has_table("step_logs"):
+        scol = {c["name"] for c in insp.get_columns("step_logs")}
+        if "progress" not in scol:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE step_logs ADD COLUMN progress TEXT"))
+                conn.commit()
+
 
 def get_db():
     """FastAPI 依赖：提供数据库会话。"""
