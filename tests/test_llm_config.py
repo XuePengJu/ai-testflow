@@ -1,6 +1,6 @@
 """V2.4 FR-I：模型接入配置（厂商预设 / 用户级 Key 加密 / 生效优先级 / 连通测试 / 管线注入）。
 
-外部 LLM 调用统一 mock `llm_service._post_chat`，离线可跑。
+外部 LLM 调用统一 mock `LangChainClient.chat`（V3 迁移后适配层），离线可跑。
 """
 import pytest
 
@@ -9,6 +9,7 @@ from app.core.db import SessionLocal
 from app.models.llm_config import LLMConfig
 from app.models.user import User
 from app.services import llm_service
+from app.services.langchain_client import LangChainClient
 
 _URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
@@ -238,21 +239,21 @@ def test_delete_slot(client, accounts, db_session):
 def test_connectivity_ok_and_fail(client, accounts, monkeypatch):
     tok = accounts["user"]["token"]
 
-    def fake_post(base_url, api_key, payload, timeout=60):
-        assert api_key == "sk-test-1234"
-        assert payload["model"] == "qwen-plus"
-        return {"choices": [{"message": {"content": "ok"}}]}
+    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180):
+        assert self.api_key == "sk-test-1234"
+        assert self.model == "qwen-plus"
+        return "ok"
 
-    monkeypatch.setattr(llm_service, "_post_chat", fake_post)
+    monkeypatch.setattr(LangChainClient, "chat", fake_chat)
     r = client.post("/api/llm/test", headers=_h(tok), json={
         "base_url": _URL, "model": "qwen-plus", "api_key": "sk-test-1234"})
     d = r.json()
     assert d["ok"] is True and d["reply"] == "ok" and d["latency_ms"] >= 0
 
-    def bad_post(base_url, api_key, payload, timeout=60):
+    def bad_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180):
         raise llm_service.LLMError("HTTP 401：无效的 API Key")
 
-    monkeypatch.setattr(llm_service, "_post_chat", bad_post)
+    monkeypatch.setattr(LangChainClient, "chat", bad_chat)
     r2 = client.post("/api/llm/test", headers=_h(tok), json={
         "base_url": _URL, "model": "qwen-plus", "api_key": "sk-bad"})
     assert r2.json()["ok"] is False and "401" in r2.json()["error"]
@@ -263,11 +264,11 @@ def test_connectivity_reuses_saved_key(client, accounts, monkeypatch):
     tok = accounts["user"]["token"]
     seen = {}
 
-    def fake_post(base_url, api_key, payload, timeout=60):
-        seen["key"] = api_key
-        return {"choices": [{"message": {"content": "ok"}}]}
+    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180):
+        seen["key"] = self.api_key
+        return "ok"
 
-    monkeypatch.setattr(llm_service, "_post_chat", fake_post)
+    monkeypatch.setattr(LangChainClient, "chat", fake_chat)
     r = client.post("/api/llm/test", headers=_h(tok), json={
         "base_url": _URL, "model": "qwen-plus", "api_key": ""})
     assert r.status_code == 200 and r.json()["ok"] is True
@@ -305,20 +306,18 @@ def test_generate_with_injected_client():
 
 
 def test_full_task_with_real_llm_path(client, accounts, monkeypatch):
-    """端到端：配置好 Key 的用户提交任务 → 引擎走真实调用路径（HTTP mock）。"""
+    """端到端：配置好 Key 的用户提交任务 → 引擎走真实调用路径（LangChain mock）。"""
     tok = accounts["user"]["token"]
     client.put("/api/llm/config", headers=_h(tok), json={
         "slot": "text", "provider": "bailian", "base_url": _URL,
         "model": "qwen-plus", "api_key": "sk-test-1234"})
 
-    def fake_post(base_url, api_key, payload, timeout=60):
-        assert base_url == _URL and api_key == "sk-test-1234"
-        return {"choices": [{"message": {"content":
-            '[{"title":"真实模型用例","module":"采购","case_type":"正向","priority":"P1",'
-            '"steps":["填写采购单","提交"],"expected":"创建成功"}]'
-        }}]}
+    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180):
+        assert self.base_url == _URL and self.api_key == "sk-test-1234"
+        return ('[{"title":"真实模型用例","module":"采购","case_type":"正向","priority":"P1",'
+                '"steps":["填写采购单","提交"],"expected":"创建成功"}]')
 
-    monkeypatch.setattr(llm_service, "_post_chat", fake_post)
+    monkeypatch.setattr(LangChainClient, "chat", fake_chat)
     r = client.post("/api/tasks", headers=_h(tok), data={
         "text": "采购管理 - 采购订单创建。功能点：新增、编辑、提交审批。",
         "kind": "business", "formats": "json", "name": "LLM路径任务"})

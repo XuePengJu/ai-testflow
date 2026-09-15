@@ -13,9 +13,11 @@ import asyncio
 import json
 
 import pytest
+from langchain_core.messages import AIMessageChunk
 
 from app.api import chat as chat_api
 from app.schemas.llm_config import ChatIn
+from app.services import langchain_client
 from app.services import llm_service
 
 
@@ -50,72 +52,50 @@ def platform_cfg(monkeypatch):
     )
 
 
-# ============ 1. 客户端：思考独立字段 → think 事件 ============
+# ============ 1. 客户端（LangChain 适配层）：思考独立字段 → think 事件 ============
 
-class _FakeResp:
-    def __init__(self, status_code, lines=None, body=b""):
-        self.status_code = status_code
-        self._lines = lines or []
-        self._body = body
+class _Chunk:
+    """AIMessageChunk 替身：content + additional_kwargs（未知字段直入，与真实 chunk 一致）。"""
 
-    def read(self):
-        return self._body
-
-    def iter_lines(self):
-        return iter(self._lines)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
+    def __init__(self, content="", **kw):
+        self.content = content
+        self.additional_kwargs = kw
 
 
-class _FakeHttpClient:
-    """httpx.Client 替身：按 scripts 顺序发响应，记录每次请求体。"""
+class _FakeModel:
+    """LangChain 模型替身：stream 按脚本吐 chunk；可配置第 N 次调用抛异常。"""
 
-    scripts: list = []
-    calls: list = []
+    def __init__(self, chunks=None, fail=None):
+        self._chunks = chunks or []
+        self._fail = fail   # (第几次调用, 异常)
+        self.calls = 0
 
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def stream(self, method, url, headers=None, json=None):
-        # 必须存副本：重试路径会 pop payload 里的 enable_thinking，
-        # 存引用的话第一次请求的记录会被一起改掉，断言会误判
-        type(self).calls.append(dict(json) if json else json)
-        return type(self).scripts.pop(0)
-
-
-def _lines(*deltas):
-    """把 delta dict 列表编成 SSE 行。"""
-    out = [f"data: {json.dumps(d)}" for d in deltas]
-    out.append("data: [DONE]")
-    return out
+    def stream(self, messages):
+        self.calls += 1
+        if self._fail and self.calls == self._fail[0]:
+            raise self._fail[1]
+        return iter(self._chunks)
 
 
 @pytest.fixture
-def fake_http(monkeypatch):
-    _FakeHttpClient.scripts = []
-    _FakeHttpClient.calls = []
-    monkeypatch.setattr(llm_service.httpx, "Client", _FakeHttpClient)
-    return _FakeHttpClient
+def fake_model(monkeypatch):
+    """把 LangChainClient._build_model 换成返回 _FakeModel 实例（测试里设置 _chunks）。"""
+    fm = _FakeModel()
+    monkeypatch.setattr(
+        langchain_client.LangChainClient, "_build_model",
+        lambda self, *a, **k: fm,
+    )
+    return fm
 
 
-def test_reasoning_content_becomes_think_event(fake_http):
+def test_reasoning_content_becomes_think_event(fake_model):
     """reasoning_content 必须产出 think 事件，且不与正文混在一起。"""
-    fake_http.scripts = [_FakeResp(200, _lines(
-        {"choices": [{"delta": {"reasoning_content": "先想"}}]},
-        {"choices": [{"delta": {"reasoning_content": "一下"}}]},
-        {"choices": [{"delta": {"content": "正式"}}]},
-        {"choices": [{"delta": {"content": "回复"}}]},
-    ))]
+    fake_model._chunks = [
+        _Chunk(reasoning_content="先想"),
+        _Chunk(reasoning_content="一下"),
+        _Chunk(content="正式"),
+        _Chunk(content="回复"),
+    ]
     client = llm_service.OpenAICompatClient("http://x/v1", "k", "m")
 
     events = list(client.chat_stream([{"role": "user", "content": "hi"}]))
@@ -128,12 +108,12 @@ def test_reasoning_content_becomes_think_event(fake_http):
     assert "先想" not in done["full"]          # 正文里绝不能混入思考
 
 
-def test_reasoning_field_fallback_order(fake_http):
+def test_reasoning_field_fallback_order(fake_model):
     """字段名各厂商不同：reasoning / thinking 都要能兜住。"""
-    fake_http.scripts = [_FakeResp(200, _lines(
-        {"choices": [{"delta": {"reasoning": "A"}}]},
-        {"choices": [{"delta": {"thinking": "B"}}]},
-    ))]
+    fake_model._chunks = [
+        _Chunk(reasoning="A"),
+        _Chunk(thinking="B"),
+    ]
     client = llm_service.OpenAICompatClient("http://x/v1", "k", "m")
 
     events = list(client.chat_stream([{"role": "user", "content": "hi"}]))
@@ -141,52 +121,96 @@ def test_reasoning_field_fallback_order(fake_http):
     assert "".join(p for k, p in events if k == "think") == "AB"
 
 
+def test_openai_chunk_thinking_patch():
+    """补丁守护：ChatOpenAI 默认丢弃 reasoning_content（第三方非标准字段），
+    适配层包装 _convert_delta_to_message_chunk 后必须恢复进 additional_kwargs；
+    正文 chunk 不得被污染。"""
+    from langchain_openai.chat_models.base import _convert_delta_to_message_chunk
+
+    assert langchain_client._THINK_PATCH_INSTALLED, "思考字段恢复补丁未生效"
+
+    chunk = _convert_delta_to_message_chunk(
+        {"role": "assistant", "content": "", "reasoning_content": "先想想"},
+        AIMessageChunk,
+    )
+    assert chunk.additional_kwargs.get("reasoning_content") == "先想想"
+
+    body = _convert_delta_to_message_chunk(
+        {"role": "assistant", "content": "正文"},
+        AIMessageChunk,
+    )
+    assert "reasoning_content" not in body.additional_kwargs
+
+
 # ============ 2. 开关注入与 400 降级 ============
 
-def test_enable_thinking_injected_by_flag(fake_http):
-    """开关 True/False 分别注入对应值；None 表示不注入（走模型默认）。"""
-    for flag, expected in ((True, True), (False, False)):
-        fake_http.scripts = [_FakeResp(200, _lines())]
-        fake_http.calls = []
-        client = llm_service.OpenAICompatClient("http://x/v1", "k", "m")
-        list(client.chat_stream([{"role": "user", "content": "hi"}], enable_thinking=flag))
-        assert fake_http.calls[0]["enable_thinking"] is expected
+def test_enable_thinking_injected_by_flag(monkeypatch):
+    """开关 True/False 分别注入对应值；None 表示不注入（走模型默认）。
 
-    fake_http.scripts = [_FakeResp(200, _lines())]
-    fake_http.calls = []
+    必须走 extra_body：model_kwargs 会被展开到请求顶层，openai SDK 不认（TypeError）。
+    """
+    captured = {}
+
+    def fake_init(model, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeModel()
+
+    monkeypatch.setattr(langchain_client, "init_chat_model", fake_init)
     client = llm_service.OpenAICompatClient("http://x/v1", "k", "m")
+
+    for flag, expected in ((True, True), (False, False)):
+        list(client.chat_stream([{"role": "user", "content": "hi"}], enable_thinking=flag))
+        assert captured["kwargs"]["extra_body"] == {"enable_thinking": expected}
+
     list(client.chat_stream([{"role": "user", "content": "hi"}], enable_thinking=None))
-    assert "enable_thinking" not in fake_http.calls[0]
+    assert "extra_body" not in captured["kwargs"]
 
 
-def test_400_on_thinking_param_retries_without_it(fake_http):
+def test_400_on_thinking_param_retries_without_it(monkeypatch):
     """端点不认 enable_thinking（400）→ 去掉参数重试一次，用户无感。"""
-    fake_http.scripts = [
-        _FakeResp(400, body=b'{"error":"unknown field enable_thinking"}'),
-        _FakeResp(200, _lines({"choices": [{"delta": {"content": "ok"}}]})),
-    ]
+    class _FakeStatusError(Exception):
+        def __init__(self, status_code=400, body=None):
+            self.status_code = status_code
+            self.body = body
+
+    monkeypatch.setattr(langchain_client, "APIStatusError", _FakeStatusError)
+    captured = []
+
+    def fake_init(model, **kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            return _FakeModel(fail=(1, _FakeStatusError(400, {"error": {"message": "unknown"}})))
+        return _FakeModel(chunks=[_Chunk(content="ok")])
+
+    monkeypatch.setattr(langchain_client, "init_chat_model", fake_init)
     client = llm_service.OpenAICompatClient("http://x/v1", "k", "m")
 
     events = list(client.chat_stream([{"role": "user", "content": "hi"}], enable_thinking=True))
 
     assert "error" not in [k for k, _ in events]
     assert "".join(p for k, p in events if k == "delta") == "ok"
-    assert len(fake_http.calls) == 2
-    assert "enable_thinking" in fake_http.calls[0]
-    assert "enable_thinking" not in fake_http.calls[1]
+    assert len(captured) == 2                       # 第一次带参失败 → 第二次去参成功
+    assert "extra_body" in captured[0]
+    assert "extra_body" not in captured[1]
     # 该端点被记住 → 下次不再注入，省掉一次 400
     assert "http://x/v1|m" in llm_service._NO_THINKING_PARAM
 
 
-def test_known_bad_endpoint_skips_param(fake_http):
+def test_known_bad_endpoint_skips_param(monkeypatch):
     """已记住不认参数的端点，后续请求直接不带该参数。"""
     llm_service._NO_THINKING_PARAM.add("http://x/v1|m")
-    fake_http.scripts = [_FakeResp(200, _lines())]
+    captured = {}
+
+    def fake_init(model, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeModel()
+
+    monkeypatch.setattr(langchain_client, "init_chat_model", fake_init)
     client = llm_service.OpenAICompatClient("http://x/v1", "k", "m")
 
     list(client.chat_stream([{"role": "user", "content": "hi"}], enable_thinking=False))
 
-    assert "enable_thinking" not in fake_http.calls[0]
+    assert "extra_body" not in captured["kwargs"]
 
 
 # ============ 3. 开关对服务层/提示词的影响 ============

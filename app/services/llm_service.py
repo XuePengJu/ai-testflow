@@ -1,191 +1,38 @@
-"""LLM 服务层（V2.4 FR-I）。
+"""LLM 服务层（V2.4 FR-I，V3 迁移 LangChain）。
 
-- OpenAICompatClient：httpx 直连 {base_url}/chat/completions（OpenAI 兼容协议）
+- OpenAICompatClient：客户端实现迁移至 app.services.langchain_client（V3 阶段 2）
+  - 默认 LangChainClient（init_chat_model + stream() 收集/逐段两用）
+  - 应急回退 _HttpxCompatClient（AITF_LLM_BACKEND=httpx）
 - resolve_effective：模型解析优先级 = 用户配置 > 平台默认 > 服务器环境变量 > mock 兜底
 - Key 落库加密：复用 crypto 的 AES-256-GCM 原语，密钥 HKDF(JWT_SECRET, info=llm-at-rest:<owner>)
 - 两段式视觉理解：图片（data: URI / http URL）先交视觉模型转文字描述，再进文本模型
 - chat_stream：流式输出（前端打字机体验），yield 内容片段（prompt 强制 <think>…</think> 切分）
 """
 import asyncio
-import asyncio
-import json
 import re
 import time
 
-import httpx
 from sqlalchemy.orm import Session
 
 from app.core import config, crypto
 from app.core.providers import provider_label, FREE_PROVIDERS
 from app.models.llm_config import LLMConfig
 from app.models.user import User
+from app.services.langchain_client import (
+    LangChainClient,
+    _HttpxCompatClient,
+    LLMError,
+    _NO_THINKING_PARAM,
+)
 
 # 服务器环境变量兜底（兼容老部署：.env 里的 DASHSCOPE_API_KEY）
 _BAILIAN_COMPAT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-_TIMEOUT = 180           # 生成用例的常规超时（免费模型慢，放宽到 3 分钟）
 _VISION_TIMEOUT = 180    # 视觉模型看图慢一些
 
-# 录得不认 enable_thinking 参数的端点（base_url|model）。命中后不再注入，
-# 避免每次都先吃一个 400 再重试。
-_NO_THINKING_PARAM: set[str] = set()
-
-# 思考内容的字段名：主流厂商各不同，按优先级取第一个非空字符串
-_THINK_FIELDS = ("reasoning_content", "reasoning", "thinking")
-
-# 思考标签（真实模型把思考混进正文时的形态）与 mock 的中文分隔符
-_THINK_TAG_RE = re.compile(r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>")
-
-
-class LLMError(Exception):
-    """LLM 调用失败（网络 / 鉴权 / 响应异常）。"""
-
-
-def _post_chat(base_url: str, api_key: str, payload: dict, timeout: float = _TIMEOUT) -> dict:
-    """POST {base_url}/chat/completions，返回解析后的 JSON。单点便于测试 mock。"""
-    url = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    try:
-        with httpx.Client(timeout=timeout) as hc:
-            r = hc.post(url, headers=headers, json=payload)
-    except httpx.HTTPError as e:
-        raise LLMError(f"网络错误：{e.__class__.__name__}") from e
-    if r.status_code != 200:
-        detail = ""
-        try:
-            detail = (r.json().get("error") or {}).get("message", "")
-        except Exception:  # noqa: BLE001
-            detail = r.text[:200]
-        raise LLMError(f"HTTP {r.status_code}：{detail or '调用失败'}")
-    try:
-        return r.json()
-    except ValueError as e:
-        raise LLMError("响应不是合法 JSON") from e
-
-
-class OpenAICompatClient:
-    """OpenAI 兼容客户端。generate() 与旧 BailianClient 同签名，管线可直接替换。"""
-
-    def __init__(self, base_url: str, api_key: str, model: str):
-        if not base_url or not api_key or not model:
-            raise LLMError("模型配置不完整（缺 base_url / api_key / model）")
-        self.base_url = base_url
-        self.api_key = api_key
-        self.model = model
-
-    def chat(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192) -> str:
-        data = _post_chat(self.base_url, self.api_key, {
-            "model": self.model, "messages": messages,
-            "temperature": temperature, "max_tokens": max_tokens,
-        })
-        try:
-            content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as e:
-            raise LLMError("响应缺少 choices[0].message.content") from e
-        if not isinstance(content, str):
-            # 兼容部分厂商返回 content 为分段列表的形态
-            if isinstance(content, list):
-                content = "".join(
-                    seg.get("text", "") for seg in content if isinstance(seg, dict)
-                )
-            else:
-                content = str(content)
-        # 防御：部分厂商会把思考过程以 <think>/<thinking> 混入 content，去除避免污染生成结果
-        content = _THINK_TAG_RE.sub("", content).strip()
-        return content
-
-    def generate(self, prompt: str) -> str:
-        """与旧 BailianClient.generate 同签名：prompt 进、文本出。"""
-        return self.chat([{"role": "user", "content": prompt}])
-
-    def chat_stream(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192,
-                    timeout: float = _TIMEOUT, enable_thinking: bool | None = None):
-        """流式 chat_completions：yield (event, payload)。
-
-        event in {"think", "delta", "done", "error"}：
-        - think： payload=str，本次增量「思考内容」（来自 reasoning_content 等字段）
-        - delta： payload=str，本次增量正文（老模型可能把 <think> 混在正文里，前端会切分）
-        - done： payload={"full": str, "clean": str, "thinking": str}
-        - error：payload=str，错误描述
-
-        实现：httpx.stream() 逐行解析 SSE，取 choices[0].delta。思考与正文分开取：
-        部分厂商把推理放在独立字段（reasoning_content / reasoning / thinking），
-        只读 content 会把整段思考丢掉（思考面板恒空）。
-        enable_thinking=None 表示不注入（走模型默认）；True/False 显式开关。
-        个别端点不认该参数会返回 400，此时自动去掉参数重试一次并记入 _NO_THINKING_PARAM。
-        """
-        url = self.base_url.rstrip("/") + "/chat/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        payload = {
-            "model": self.model, "messages": messages,
-            "temperature": temperature, "max_tokens": max_tokens, "stream": True,
-        }
-        ep_key = f"{self.base_url}|{self.model}"
-        if enable_thinking is not None and ep_key not in _NO_THINKING_PARAM:
-            payload["enable_thinking"] = bool(enable_thinking)
-
-        full = ""
-        think_full = ""
-        for attempt in (0, 1):
-            full, think_full = "", ""
-            try:
-                with httpx.Client(timeout=timeout) as hc:
-                    with hc.stream("POST", url, headers=headers, json=payload) as r:
-                        if r.status_code != 200:
-                            body = r.read().decode("utf-8", errors="ignore")[:300]
-                            # 端点不认 enable_thinking（400）→ 去掉参数重试一次，并记住该端点
-                            if attempt == 0 and r.status_code == 400 and "enable_thinking" in payload:
-                                _NO_THINKING_PARAM.add(ep_key)
-                                payload.pop("enable_thinking", None)
-                                continue
-                            yield ("error", f"HTTP {r.status_code}：{body}")
-                            return
-                        for line in r.iter_lines():
-                            if not line or not line.startswith("data:"):
-                                continue
-                            data = line[5:].strip()
-                            if data == "[DONE]":
-                                break
-                            try:
-                                obj = json.loads(data)
-                                d = obj["choices"][0].get("delta") or {}
-                            except (KeyError, IndexError, ValueError):
-                                continue
-                            reason = ""
-                            for f in _THINK_FIELDS:
-                                v = d.get(f)
-                                if isinstance(v, str) and v:
-                                    reason = v
-                                    break
-                            if reason:
-                                think_full += reason
-                                yield ("think", reason)
-                            delta = d.get("content") or ""
-                            if delta:
-                                full += delta
-                                yield ("delta", delta)
-            except httpx.HTTPError as e:
-                yield ("error", f"网络错误：{e.__class__.__name__}")
-                return
-            except Exception as e:  # noqa: BLE001
-                yield ("error", f"流式中断：{e.__class__.__name__}: {str(e)[:80]}")
-                return
-            break   # 正常跑完 → 不重试
-        # 防御：正文里混入的 <think>/<thinking> 思考块清掉（前端也会切分，这里保完整存档干净）
-        clean = _THINK_TAG_RE.sub("", full).strip()
-        yield ("done", {"full": full, "clean": clean, "thinking": think_full})
-
-    def describe_image(self, image_url: str, hint: str = "") -> str:
-        """视觉理解：图片 + 指令 → 中文文字描述（两段式第一步）。"""
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": hint or "请用中文客观描述这张软件相关截图的内容，"
-                    "重点说明界面元素、字段、按钮、流程或数据，供测试用例设计参考。"},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ],
-        }]
-        return self.chat(messages, temperature=0.1, max_tokens=1024)
+# LLM 调用后端开关：langchain（默认）/ httpx（旧直连，应急回退）
+_LLM_BACKEND = getattr(config, "AITF_LLM_BACKEND", "langchain")
+OpenAICompatClient = LangChainClient if _LLM_BACKEND == "langchain" else _HttpxCompatClient
 
 
 # ============ Key 落库加密 ============

@@ -12,6 +12,8 @@ from pathlib import Path
 # ---- 必须在 import app 之前 ----
 _TMP_ROOT = tempfile.mkdtemp(prefix="aitf_test_")
 os.environ["AITF_ROOT_DIR"] = _TMP_ROOT          # 数据落临时目录，不污染真实 app.db
+os.environ["DB_TYPE"] = "sqlite"                 # 测试强制本地 SQLite，绝不连真实 MySQL
+os.environ["DATABASE_URL"] = ""                  # 清掉任何直填 URL（.env 可能配了远程库）
 os.environ["JWT_SECRET"] = "test-secret-for-pytest"
 os.environ["ENV"] = "dev"
 os.environ["DASHSCOPE_API_KEY"] = ""             # 强制 mock 兜底

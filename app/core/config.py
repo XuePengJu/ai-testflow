@@ -50,6 +50,12 @@ API_ENCRYPT = os.getenv("API_ENCRYPT", "1") == "1"
 def jwt_secret_is_placeholder() -> bool:
     return JWT_SECRET == "change-me-in-production"
 
+# ============ LLM 调用后端（V3 LangChain 迁移）============
+# langchain（默认）：init_chat_model + stream()；httpx：旧直连，应急回退
+AITF_LLM_BACKEND = os.getenv("AITF_LLM_BACKEND", "langchain").strip().lower()
+if AITF_LLM_BACKEND not in ("langchain", "httpx"):
+    AITF_LLM_BACKEND = "langchain"
+
 # 内置的用例生成核心库（已整合，使项目自包含、clone 即跑）
 GENERATOR_CORE_DIR = BASE_DIR / "generator_core"
 
