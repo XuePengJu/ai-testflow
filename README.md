@@ -78,6 +78,22 @@
 
 - 底栏右侧「💬 继续优化」保持不变 —— 迭代唯一入口不受影响
 
+### LLM 接入层 LangChain 化（V3）
+
+- LLM 调用层从 HTTP 直连迁移到 **LangChain**：`init_chat_model()` 统一入口 + 全链路统一 `stream()`（收集/逐段两用，打字机协议不变）
+
+- **一个 `model_provider="openai"` 打遍所有厂商**（8 家全 OpenAI 兼容，差异只留 base_url/api_key），不用自己写 if/else
+
+- 厂商自定义参数走 `extra_body` 透传（`enable_thinking` 深度思考开关）；思考字段恢复补丁（ChatOpenAI 默认丢弃 `reasoning_content` 等第三方字段）
+
+- `AITF_LLM_BACKEND=langchain`（默认）/ `httpx`（旧直连）双实现一键回退；`langsmith` 已入依赖，LangSmith 可观测接入规划中
+
+### 生成用例实时进度（V3）
+
+- 「AI 生成用例」节点运行中实时显示子进度：`正在为第 2/5 个测试点生成用例（下单）· 已生成 18 条`（后端 `StepLog.progress` 逐测试点回调）
+
+- 步骤卡与任务列表状态强同步（列表轮询兜底），不再出现"任务已完成、节点还转圈"
+
 ### 任务详情（3 Tab）
 
 - 🧠 **思维导图**：MindElixir 在线渲染，模块 → 用例层级，标签显示类型与优先级（P0/P1/P2）
@@ -134,9 +150,13 @@
 
 ### 多厂商大模型接入
 
-- 7+ 厂商预设（OpenAI 兼容协议，HTTP 直连）：
+- 7+ 厂商预设（OpenAI 兼容协议，**LangChain `init_chat_model` 统一入口 + 统一 `stream()`**）：
 
   - 阿里百炼 / 智谱 GLM（含 Coding Plan 专用端点）/ 腾讯混元 / DeepSeek / Kimi / 豆包（火山方舟）/ 自定义
+
+- **统一模型入口**：`model_provider="openai"` 一个打遍全部兼容端点，差异只留 base_url/api_key；`AITF_LLM_BACKEND=httpx` 可回退旧直连
+
+- **深度思考开关**：`enable_thinking` 经 `extra_body` 透传；端点不认时 400 自动去参重试并记忆；思考字段（reasoning_content 等）经补丁恢复进 LangChain chunk
 
 - **双槽位配置**：文本模型 + 视觉模型（多模态）
 
@@ -203,13 +223,13 @@
 | 数据库   | **MySQL**（生产，远程库，地址见 `.env`）+ 本地 SQLite；SQLAlchemy ORM 双方言适配 |
 | 认证    | **bcrypt + JWT**（passlib / pyjwt）+ 每请求回查用户状态     |
 | 加密    | **AES-256-GCM**（Python cryptography + 前端纯 JS 实现） |
-| AI 模型 | OpenAI 兼容协议 HTTP 直连，支持 7+ 厂商；无 Key 自动 mock 兜底    |
+| AI 模型 | **LangChain**（`init_chat_model` + 统一 `stream()`，langchain==1.4.0 / langchain-openai==1.6.2 / langsmith==0.12.4），支持 7+ 厂商；`AITF_LLM_BACKEND=httpx` 可回退旧直连；无 Key 自动 mock 兜底 |
 | 前端    | **React 18 + TypeScript + Vite**（zustand 状态管理），构建产物纯静态、FastAPI 同源托管 |
 | 思维导图  | **MindElixir**（120KB，可编辑，原生标签支持）                 |
 | 前端渲染  | **marked**（Markdown 解析）+ **DOMPurify**（XSS 净化）          |
 | 文档解析  | **python-docx**（docx 抽取）+ **pdfplumber**（pdf 抽取）         |
 | 任务调度  | APScheduler（访客清理定时任务）                            |
-| 测试    | pytest（220 条后端自动化用例）+ Playwright（M1~M5 浏览器端到端验证脚本）          |
+| 测试    | pytest（221 条后端自动化用例）+ Playwright（M1~M5 浏览器端到端验证脚本）          |
 
 ***
 

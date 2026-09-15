@@ -452,19 +452,62 @@
 - **能力等价**：控件经 React portal 渲染，全部走公开 API（`scale(scaleVal ± scaleSensitivity)` / `toCenter()` / `requestFullscreen()`）；滚轮缩放时百分比实时同步，点击百分比一键回 100%，全屏切换后自动补居中
 - **入口不变**：底栏右侧「💬 继续优化（回到会话）」仍为唯一迭代入口，不受本次调整影响
 
+### FR-T LLM 接入层 LangChain 化【V3 已上线】
+
+> 解决「学习 LangChain 生态 + 接入 LangSmith 可观测（httpx 直连看不到每次调用内部发了什么）」：把 LLM 调用层从 HTTP 直连迁移到 LangChain，统一多厂商接入路径，并为后续「多角色协作」铺路。
+>
+> 落地形态：`app/services/langchain_client.py`（适配层：LangChainClient + `_HttpxCompatClient` 回退）+ `llm_service.OpenAICompatClient` 别名按 `AITF_LLM_BACKEND` 切换（默认 langchain）。
+
+- **统一入口 `init_chat_model()`**：`model_provider` 按字符串路由厂商；8 家厂商全部 OpenAI 兼容协议 → `model_provider="openai"` 一个打遍所有端点，差异只留 `base_url` / `api_key`（无需为每家引原生 provider 包、无需自己写 if/else 分支）
+- **全链路统一 `stream()`（不用 invoke）**：一个 stream 实现两用——收集模式（`chat()`，生成用例主链路，与旧签名一致）+ 逐段模式（`chat_stream()`，Buddy 打字机事件流 `think/delta/done/error` 协议不变）
+- **厂商自定义参数透传**：`enable_thinking`（深度思考开关）走 `extra_body`——`model_kwargs` 会被 langchain-openai 展开到请求顶层，openai SDK 的 `create()` 不认未知顶层参数（TypeError）
+- **思考字段恢复补丁**：`ChatOpenAI` 官方实现只保留 OpenAI 规范字段，`reasoning_content` 等第三方非标准字段默认丢弃 → 适配层包装 `_convert_delta_to_message_chunk` 恢复进 `additional_kwargs`，思考面板行为与旧实现一致
+- **兼容不丢**：端点不认 `enable_thinking` 时 400 自动去参重试 + 记忆端点（`_NO_THINKING_PARAM`）；content 分段列表归一；`<think>`/`<thinking>` 标签清理——全部平移
+- **双实现回退**：`AITF_LLM_BACKEND=langchain`（默认）走 LangChain；`=httpx` 走保留的旧 `_HttpxCompatClient` 直连，一键应急回退
+- **依赖**：`langchain==1.4.0` / `langchain-openai==1.6.2` / `langsmith==0.12.4`（已入 requirements.txt）
+
+### FR-U 生成用例实时进度【V3 已上线】
+
+> 解决「真实模型任务慢（N 个测试点 × 每次 30-90s 串行），『AI 生成用例』节点长时间无中间反馈，用户以为死机」。
+
+- **子进度字段**：`StepLog.progress`（TEXT，幂等迁移自动加列；注意 MySQL 不允许 TEXT 列带 DEFAULT，迁移语句不含默认值）
+- **逐测试点回调**：生成核心 `CaseGenerator` 每处理完一个测试点回调一次 → 引擎实时写入进度并落库，前端轮询可见：`正在为第 2/5 个测试点生成用例（下单）· 已生成 18 条`
+- **接口透出**：任务详情接口 `steps[].progress` 返回实时值；步骤卡运行中显示实时文本（无值回退原固定提示）
+- **状态同步修复**：步骤卡数据源优先取列表轮询（5s 永不停）的最新任务，修复活跃任务轮询 TTL 到期后卡片停在旧 running 状态；活跃/迭代轮询 TTL 放宽至 20 分钟（覆盖真实模型慢任务）
+- **节奏说明**：生成节点耗时 ≈ 测试点数 × 单次模型耗时（免费模型 30-90s/次），多测试点任务 5-10 分钟属正常，进度提示让用户明确知道"在干活"
+
+### FR-V LLM 可观测性（LangSmith）【V3 规划】
+
+> 解决「自己调 API 看不到里面发了什么」：直连 httpx 只有返回文本，请求构造、重试、耗时、Token 用量全部不可见。
+
+- **目标**：接入 LangSmith 后，每次 LLM 调用自动产出 trace（模型/请求参数/流式耗时/Token 用量/错误重试），可视化排查"调用发了什么、为什么慢、为什么错"
+- **接入点**：适配层 `LangChainClient._build_model` 已统一收敛模型构造，Trace 可在该层无侵入开启（LangChain 默认环境变量自动打点，无需改调用方）
+- **前置条件**：注册 LangSmith 获取 `LANGSMITH_API_KEY`，写入 `.env`（当前为空，阶段 3 待 Key 启动）
+- **落地项**：`.env` 配 Key + 本地验证 trace 链路 + 前端/文档补充观测入口说明
+
+### FR-W 多角色协作（产品 / 测试 / 开发）【V3 规划】
+
+> 用户诉求：让不同角色（产品、测试、开发）以各自视角参与同一需求的用例设计，形成多角色协作工作流。
+
+- **轻量版（推荐先做）**：不引入编排框架——角色化提示词路由，同一任务按角色生成差异化视角（产品：需求完整性与业务规则；测试：可测性与边界/异常；开发：技术约束与实现细节），结果合并去重
+- **编排版（研讨后再定）**：引入 LangGraph 做状态图编排（角色节点 + 评审回路），依赖本次迁移打好的 LangChain 基础；若角色间仅是"顺序产出 + 合并"，轻量版足够，不必上框架
+- **承接基础**：FR-T 的统一入口与适配层是多角色共用的模型底座；LangSmith（FR-V）提供多角色调用链路的可观测
+- **阶段建议**：V3.1 先落地轻量版验证价值，确有复杂交互（角色间互相评审、迭代反驳）再评估 LangGraph
+
 ***
 
 ## 4. 非功能需求
 
 | 类别   | 要求                                                                      |
 | ---- | ----------------------------------------------------------------------- |
-| 性能   | 单任务（百条用例级）全流程 < 1 分钟（mock 模式 < 3 秒）；页面轮询间隔 4s                           |
+| 性能   | 单任务（百条用例级）全流程 mock 模式 < 3 秒；真实模型模式 = 测试点数 × 单次模型耗时（30-90s/次，多测试点 5-10 分钟属正常），生成节点实时子进度提示；页面轮询：列表 5s / 活跃任务 2s（TTL 20 分钟） |
 | 安全   | 见 FR-G；接口越权统一 404；登录限速；访客 TTL 自动清理；API Key 加密落库                         |
 | 兼容   | 主流现代浏览器（Chrome/Edge/Safari）；HTTP 非安全上下文可用（加密为纯 JS 实现，不依赖 crypto.subtle） |
 | 可演示性 | 零外部依赖即可完整演示（mock 兜底）；5 分钟内可从启动到导出全流程走通                                  |
-| 可维护  | 前端组件化（React+TS）；后端 FastAPI 分层；pytest 测试套件（220 条）随代码演进回归                         |
+| 可维护  | 前端组件化（React+TS）；后端 FastAPI 分层；pytest 测试套件（221 条）随代码演进回归；LLM 调用统一收敛适配层（langchain/httpx 双实现回退） |
 | 可部署  | 前后端同源伺服（FastAPI 挂载前端静态文件，单端口 8000 完整提供前端+API），部署阿里云服务器 + cloudflared 命名隧道对外访问（`ai.clickscope.in`）；systemd 托管 uvicorn；支持 Docker 化部署               |
-| 数据层  | 生产 MySQL（阿里云远程库），本地可降级 SQLite；SQLAlchemy ORM 双方言适配，迁移幂等               |
+| 数据层  | 生产 MySQL（阿里云远程库），本地可降级 SQLite；SQLAlchemy ORM 双方言适配，迁移幂等（TEXT 列迁移不带 DEFAULT，规避 MySQL 1101） |
+| 可观测  | LLM 调用链路 LangSmith 打点（FR-V 规划中，需 `LANGSMITH_API_KEY`）；任务步骤子进度实时可见（FR-U） |
 
 ***
 
@@ -486,8 +529,11 @@
 | **V2.10**  | **统一入口与会话内迭代（FR-Q）：详情页迭代输入区移除，收敛为主页会话输入框唯一入口 + 迭代引用 chip（先沟通、点「⚡ 生成用例」再生成）+ `TaskOut` 补 `conversation_id` + 示例数据播种修复（MySQL 外键 1452）** | ✅ 已上线 |
 | **V2.11**  | **版本链聚合（FR-R）：`utils/taskChain.ts` 解析迭代链 + 抽屉标题行版本切换器 + 会话流旧版本卡折叠 + 任务列表同链聚合（版本徽章展开历史）** | ✅ 已上线 |
 | **V2.12**  | **导图控件迁出画布（FR-S）：导出 XMind / 全屏 / 缩放 / 百分比 / 居中 迁入详情抽屉底栏，与「继续优化」融合一行；保留左上方向切换栏** | ✅ 已上线 |
-| V3.0（规划）   | 定时执行 + Allure 报告集成                                                                                                            | 📋 规划 |
-| V3.1（规划）   | 接真实 DBERP 后端做端到端接口自动化闭环                                                                                                       | 📋 规划 |
+| **V2.13**  | **顶栏新增 GitHub 仓库入口**                                                                                               | ✅ 已上线 |
+| **V3**     | **LLM 接入层 LangChain 化（FR-T）：`init_chat_model` 统一入口 + 全链路统一 `stream()` + `enable_thinking` extra_body 透传 + 思考字段恢复补丁 + `AITF_LLM_BACKEND` 双实现回退；生成用例实时子进度（FR-U）：`StepLog.progress` 逐测试点回调 + 步骤卡状态同步修复** | ✅ 已上线 |
+| **V3.1（规划）** | **LangSmith 可观测性（FR-V，需 `LANGSMITH_API_KEY`）+ 多角色协作（产品/测试/开发）（FR-W，轻量版角色化提示词路由）** | 📋 规划 |
+| V3.2（规划）   | 定时执行 + Allure 报告集成                                                                                                            | 📋 规划 |
+| V3.3（规划）   | 接真实 DBERP 后端做端到端接口自动化闭环                                                                                                       | 📋 规划 |
 
 ***
 
@@ -513,4 +559,12 @@
 | 迭代链 / 版本链 | 同一任务经多次迭代形成的 `parent_task_id` 父子链，前端解析为 v1…vN 有序版本序列 |
 | 版本切换器 | 详情抽屉标题行的 `vN ▾` 下拉，用于在一条迭代链的任意历史版本间切换查看 |
 | MindElixir | 轻量思维导图库（见上）；其右下角工具栏已在 V2.12 迁至底栏，仅保留左上方向切换栏 |
+| LangChain | 大模型应用开发框架：统一模型入口（init_chat_model）、流式调用、可观测（LangSmith）、编排（LangGraph）生态；本平台 V3 起作为 LLM 调用层底座 |
+| `init_chat_model()` | LangChain 的统一模型构造入口：`model_provider` 按字符串路由厂商；8 家厂商全走 OpenAI 兼容协议 → 恒为 `"openai"`，差异只留 base_url/api_key |
+| 统一 `stream()` | 全链路只用流式调用：收集模式 = 一次性完整返回（生成用例主链路），逐段模式 = Buddy 打字机事件流（think/delta/done/error）；不用 invoke |
+| `extra_body` | openai SDK 官方支持的"任意厂商自定义参数"通道：`enable_thinking` 等非 OpenAI 标准参数经它透传（`model_kwargs` 会展开到请求顶层致 TypeError） |
+| 思考字段恢复补丁 | `ChatOpenAI` 默认丢弃第三方厂商非标准字段（reasoning_content 等）；适配层包装内部 chunk 转换函数恢复之，思考面板行为与旧实现一致 |
+| 生成子进度 | `StepLog.progress`：生成核心每处理完一个测试点回调写入「正在为第 X/Y 个测试点生成用例·已生成 N 条」，前端步骤卡实时显示 |
+| LangSmith | LangChain 官方可观测平台：每次 LLM 调用产出 trace（模型/参数/耗时/Token/错误），回答"调用到底发了什么"；接入需 `LANGSMITH_API_KEY` |
+| 多角色协作 | 规划中的协作形态：产品 / 测试 / 开发角色以各自视角参与同一需求的用例设计；轻量版=角色化提示词路由，编排版=LangGraph 状态图 |
 

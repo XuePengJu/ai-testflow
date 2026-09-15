@@ -1,10 +1,11 @@
 # 项目 1：LLM 调用层迁移 LangChain 执行方案
 
-> 状态：方案评审中（未动代码）
+> 状态：**阶段 1（依赖+实测）与阶段 2（主链路迁移）已完成**，验证全过（221 条 pytest + 真实模型端到端 26 用例）；分支 `feature/multi-role-collab` 已推 GitHub
 > 分支：
 >
 > `feature/multi-role-collab`
 > 背景：学习 LangChain 生态 + 接入 LangSmith 可观测（直连看不到调用内部发了什么），并为后续「多角色协作」（产品 / 测试 / 开发）铺路
+> 待办：阶段 3 LangSmith 接入需 `LANGSMITH_API_KEY`（.env 当前为空）
 
 
 
