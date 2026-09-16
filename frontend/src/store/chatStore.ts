@@ -413,6 +413,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
               patchAi({ state: "error", error: String(ev.data.message || "未知错误") });
             } else if (ev.event === "done") {
               const full = typeof ev.data.full === "string" ? ev.data.full : "";
+              // 后端自动创建的会话 id（新会话首轮）：保存后切走/刷新可回到同一会话
+              if (ev.data.conversation_id) {
+                set({ conversationId: String(ev.data.conversation_id) });
+              }
               // done 里的 thinking 与流式 think 事件同源，取其一避免重复拼接
               const doneThink = typeof ev.data.thinking === "string" ? ev.data.thinking : "";
               const thinkBase = streamThink || doneThink;

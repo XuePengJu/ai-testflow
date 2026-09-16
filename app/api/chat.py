@@ -28,6 +28,7 @@ SSE 协议：
 """
 import json
 import re
+import uuid
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -72,6 +73,30 @@ def _split_think(full: str) -> tuple[str, str]:
         reply = (full[:m.start()] + full[m.end():]).strip()
         return thinking, reply
     return "", full.strip()
+
+
+def _ensure_conversation(db: Session, user: User | None, body: ChatIn) -> None:
+    """确保 conversation_id 有效；无/无效/不属于当前用户时自动创建会话。
+
+    修复「新会话发送消息不落库」：前端新会话 conversation_id 为空，原先直接跳过
+    持久化，切换会话/刷新后聊天记录丢失。此处统一由后端兜底创建会话，
+    并在 SSE done 事件把 conversation_id 回传给前端保存。
+    """
+    if user is None:
+        return  # 游客（未登录）保持原行为：不落库
+    if body.conversation_id:
+        conv = db.get(Conversation, body.conversation_id)
+        if conv and conv.user_id == user.id:
+            return
+    conv = Conversation(
+        id=uuid.uuid4().hex[:12],
+        user_id=user.id,
+        title=(body.message or "新会话")[:40],
+    )
+    db.add(conv)
+    db.commit()
+    db.refresh(conv)
+    body.conversation_id = conv.id
 
 
 def _persist_chat(db: Session, user: User | None, body: ChatIn, full_text: str,
@@ -170,14 +195,17 @@ async def _run(db: Session, user: User | None, body: ChatIn, source: str):
                 up_think = (payload or {}).get("thinking") if isinstance(payload, dict) else ""
                 if up_think and not think_text:
                     think_text = up_think
-                yield _sse("done", {"full": full, "source": source, "thinking": think_text})
+                yield _sse("done", {"full": full, "source": source,
+                                    "thinking": think_text,
+                                    "conversation_id": body.conversation_id})
             elif ev == "notice":
                 # 降级/中断提示：非终态错误，前端以黄色提示条展示，流会继续
                 yield _sse("notice", {"message": str(payload)[:300]})
             elif ev == "error":
                 msg = payload if isinstance(payload, str) else str(payload)
                 yield _sse("error", {"message": msg[:300]})
-                yield _sse("done", {"full": "", "source": source, "had_error": True})
+                yield _sse("done", {"full": "", "source": source, "had_error": True,
+                                    "conversation_id": body.conversation_id})
     except Exception as e:  # noqa: BLE001
         try:
             yield _sse("error", {"message": f"流式中断：{e.__class__.__name__}: {str(e)[:120]}"})
@@ -195,6 +223,8 @@ async def chat_stream(
     user: User | None = Depends(get_current_user),
 ):
     """对话流式端点（SSE 协议）。"""
+    # V3.1.1：新会话（conversation_id 为空）自动创建会话并回传 id，保证消息落库不丢
+    _ensure_conversation(db, user, body)
     eff = llm_service.resolve_effective(db, user)
     source = eff.get("source", "mock")
     return StreamingResponse(
