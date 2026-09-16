@@ -6,6 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
+from sqlalchemy import select, func, delete, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -69,10 +70,11 @@ def _resolve_conversation(db: Session, task: Task) -> str | None:
     if task.conversation_id:
         return task.conversation_id
 
-    hit = (db.query(Message.conversation_id)
-             .filter(Message.task_id == task.id)
-             .order_by(Message.id.asc())
-             .first())
+    hit = db.execute(
+        select(Message.conversation_id)
+        .where(Message.task_id == task.id)
+        .order_by(Message.id.asc())
+    ).first()
     if hit and hit[0]:
         task.conversation_id = hit[0]
         db.commit()
@@ -88,9 +90,9 @@ def _resolve_conversation(db: Session, task: Task) -> str | None:
 
 
 def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
-    steps = (
-        db.query(StepLog).filter_by(task_id=task.id).order_by(StepLog.id).all()
-    )
+    steps = db.execute(
+        select(StepLog).where(StepLog.task_id == task.id).order_by(StepLog.id)
+    ).scalars().all()
     return TaskOut(
         id=task.id, name=task.name, kind=task.kind, source_type=task.source_type,
         status=task.status, cases_count=task.cases_count, duration_ms=task.duration_ms,
@@ -135,9 +137,11 @@ async def create_task(
     """提交一个测试用例生成任务。可上传规格文件或粘贴文本。"""
     # 访客任务上限（防滥用）
     if user.role == "guest":
-        count = db.query(Task).filter(
-            Task.user_id == user.id, Task.is_sample.is_(False)
-        ).count()
+        count = db.execute(
+            select(func.count()).select_from(Task).where(
+                Task.user_id == user.id, Task.is_sample.is_(False)
+            )
+        ).scalar_one()
         if count >= GUEST_MAX_TASKS:
             raise HTTPException(status_code=429, detail=f"访客最多 {GUEST_MAX_TASKS} 个任务，注册后无限制")
 
@@ -184,11 +188,13 @@ async def create_task(
 
     # 回填该会话下最后一条 assistant 消息的 task_id（聊天流回放时据此渲染节点/用例卡）
     if conversation_id:
-        last_msg = (db.query(Message)
-                    .filter(Message.conversation_id == conversation_id,
-                            Message.role == "assistant",
-                            Message.task_id.is_(None))
-                    .order_by(Message.id.desc()).first())
+        last_msg = db.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id,
+                   Message.role == "assistant",
+                   Message.task_id.is_(None))
+            .order_by(Message.id.desc())
+        ).scalar_one_or_none()
         if last_msg:
             last_msg.task_id = task_id
             db.commit()
@@ -202,10 +208,10 @@ def list_tasks(db: Session = Depends(get_db),
                user: User = Depends(get_current_user),
                all: bool = False):
     """只返回当前用户的任务；admin 可带 ?all=true 看全部。"""
-    q = db.query(Task)
+    stmt = select(Task)
     if not (user.role == "admin" and all):
-        q = q.filter(Task.user_id == user.id)
-    tasks = q.order_by(Task.created_at.desc()).all()
+        stmt = stmt.where(Task.user_id == user.id)
+    tasks = db.execute(stmt.order_by(Task.created_at.desc())).scalars().all()
     return [_to_out(db, t) for t in tasks]
 
 
@@ -237,7 +243,7 @@ def delete_task(task_id: str,
 def _delete_task_cascade(db: Session, t: Task) -> int:
     """删除任务的级联副作用：StepLog + 导出文件 + 清除 messages.task_id。
     返回删除的导出文件数。调用方负责 db.commit() 和 db.delete(t)。"""
-    db.query(StepLog).filter(StepLog.task_id == t.id).delete(synchronize_session=False)
+    db.execute(delete(StepLog).where(StepLog.task_id == t.id))
     data_dir = t.user_data_dir(db)
     deleted_files = 0
     for ext in ("xlsx", "json", "xmind"):
@@ -249,8 +255,9 @@ def _delete_task_cascade(db: Session, t: Task) -> int:
             except OSError:
                 pass
     # 清除关联 assistant 消息的 task_id（消息本身保留，只是解除关联）
-    db.query(Message).filter(Message.task_id == t.id).update(
-        {"task_id": None}, synchronize_session=False)
+    db.execute(
+        update(Message).where(Message.task_id == t.id).values(task_id=None)
+    )
     return deleted_files
 
 
@@ -290,9 +297,11 @@ async def iterate_task(
         raise HTTPException(status_code=400, detail="补充要求（instruction）与用例文件至少提供一个")
 
     # 并发保护：同一原任务下不能有正在运行的子任务
-    running_child = (db.query(Task)
-                     .filter(Task.parent_task_id == task_id, Task.status == "running")
-                     .first())
+    running_child = db.execute(
+        select(Task).where(
+            Task.parent_task_id == task_id, Task.status == "running"
+        )
+    ).scalar_one_or_none()
     if running_child:
         raise HTTPException(status_code=409, detail="该任务已有迭代正在进行中，请等待完成")
 

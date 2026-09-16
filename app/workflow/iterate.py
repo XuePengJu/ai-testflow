@@ -18,6 +18,8 @@ import json
 import os
 import time
 
+from sqlalchemy import select
+
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR
 from app.core.db import SessionLocal
 from app.core.utils import utcnow
@@ -171,8 +173,9 @@ def run_iterate(
         to_check = [root.id]
         while to_check:
             pid = to_check.pop()
-            children = db.query(Task).filter(
-                Task.parent_task_id == pid, Task.id != new_task_id).all()
+            children = db.execute(
+                select(Task).where(Task.parent_task_id == pid, Task.id != new_task_id)
+            ).scalars().all()
             chain_count += len(children)
             to_check.extend([c.id for c in children])
         version = chain_count + 1  # 新任务是第 chain_count+1 个版本
@@ -261,11 +264,13 @@ def run_iterate(
 
         # 回填会话最后一条 assistant 消息的 task_id（聊天流回放时渲染节点卡）
         if new_task.conversation_id:
-            last_msg = (db.query(Message)
-                        .filter(Message.conversation_id == new_task.conversation_id,
-                                Message.role == "assistant",
-                                Message.task_id.is_(None))
-                        .order_by(Message.id.desc()).first())
+            last_msg = db.execute(
+            select(Message)
+            .where(Message.conversation_id == new_task.conversation_id,
+                   Message.role == "assistant",
+                   Message.task_id.is_(None))
+            .order_by(Message.id.desc())
+        ).scalar_one_or_none()
             if last_msg:
                 last_msg.task_id = new_task_id
                 db.commit()

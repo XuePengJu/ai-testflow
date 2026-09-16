@@ -8,6 +8,7 @@ from app.core.utils import utcnow
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -80,13 +81,15 @@ def _validate_password(pwd: str) -> None:
 @router.post("/register", status_code=201)
 def register(body: RegisterIn, db: Session = Depends(get_db)):
     _validate_password(body.password)
-    if db.query(User).filter(User.username == body.username).first():
+    if db.execute(select(User).where(User.username == body.username)).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="用户名已存在")
-    if db.query(User).filter(User.email == body.email).first():
+    if db.execute(select(User).where(User.email == body.email)).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="邮箱已被注册")
 
     # 首个注册用户 = admin
-    role = "admin" if db.query(User).filter(User.role != "guest").count() == 0 else "user"
+    role = "admin" if db.execute(
+        select(func.count()).select_from(User).where(User.role != "guest")
+    ).scalar_one() == 0 else "user"
     user = User(
         username=body.username, email=body.email,
         password_hash=security.hash_password(body.password),
@@ -113,7 +116,7 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
 @router.post("/login")
 def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     _check_lock(form.username)
-    user = db.query(User).filter(User.username == form.username).first()
+    user = db.execute(select(User).where(User.username == form.username)).scalar_one_or_none()
     # 用户不存在与密码错误同文案，防枚举
     if not user or not security.verify_password(form.password, user.password_hash or ""):
         _record_fail(form.username)

@@ -7,6 +7,7 @@ import logging
 import shutil
 from app.core.utils import utcnow
 
+from sqlalchemy import select, func, delete
 from sqlalchemy.orm import Session
 
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR
@@ -19,14 +20,17 @@ logger = logging.getLogger("guest_cleaner")
 
 def clean_guest(db: Session, guest: User, trigger: str) -> dict:
     """清理单个 guest：级联任务/日志/文件/目录/用户记录，返回统计。"""
-    deleted_tasks = db.query(Task).filter(Task.user_id == guest.id).count()
+    deleted_tasks = db.execute(
+        select(func.count()).select_from(Task).where(Task.user_id == guest.id)
+    ).scalar_one()
 
     # DB 级联：categories（示例分类易积留）→ step_logs → tasks → user
-    db.query(Category).filter(Category.user_id == guest.id).delete(synchronize_session=False)
-    task_ids = [t.id for t in db.query(Task.id).filter(Task.user_id == guest.id).all()]
+    db.execute(delete(Category).where(Category.user_id == guest.id))
+    task_rows = db.execute(select(Task.id).where(Task.user_id == guest.id)).all()
+    task_ids = [r[0] for r in task_rows]
     if task_ids:
-        db.query(StepLog).filter(StepLog.task_id.in_(task_ids)).delete(synchronize_session=False)
-        db.query(Task).filter(Task.user_id == guest.id).delete(synchronize_session=False)
+        db.execute(delete(StepLog).where(StepLog.task_id.in_(task_ids)))
+        db.execute(delete(Task).where(Task.user_id == guest.id))
 
     # 文件：删 uploads / outputs 下的 guest 临时目录
     deleted_files = 0
@@ -54,9 +58,9 @@ def clean_guest(db: Session, guest: User, trigger: str) -> dict:
 def clean_expired(db: Session, trigger: str = "scheduler") -> list[dict]:
     """删除所有过期 guest。启动兜底 / 定时任务 / admin 手动触发共用。"""
     now = utcnow()
-    guests = db.query(User).filter(
-        User.role == "guest", User.expires_at < now,
-    ).all()
+    guests = db.execute(
+        select(User).where(User.role == "guest", User.expires_at < now)
+    ).scalars().all()
     return [clean_guest(db, g, trigger) for g in guests]
 
 

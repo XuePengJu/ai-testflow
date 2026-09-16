@@ -9,7 +9,7 @@ import os
 from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, event, text, inspect as sa_inspect
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import (
     DB_PATH, DATABASE_URL, DB_TYPE, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD,
@@ -58,7 +58,10 @@ if os.environ.get("AITF_DB_MEMORY_JOURNAL") == "1" and engine.dialect.name == "s
         cur.execute("PRAGMA synchronous=OFF")
         cur.close()
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    """ORM 基类（SQLAlchemy 2.0 风格）。"""
+    pass
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

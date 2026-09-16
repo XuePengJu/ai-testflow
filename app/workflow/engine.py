@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 
+from sqlalchemy import select, func
+
 from app.core.utils import utcnow
 
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR
@@ -66,9 +68,10 @@ def _apply_requirement_naming(db, task: Task, details: str) -> None:
 
         conv_id = task.conversation_id
         if title and conv_id:
-            siblings = (db.query(Task)
-                        .filter(Task.conversation_id == conv_id, Task.id != task.id)
-                        .count())
+            siblings = db.execute(
+                select(func.count()).select_from(Task).where(
+                    Task.conversation_id == conv_id, Task.id != task.id)
+            ).scalar_one()
             if siblings == 0:
                 conv = db.get(Conversation, conv_id)
                 if conv and conv.title != title:

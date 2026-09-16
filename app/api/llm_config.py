@@ -7,6 +7,7 @@
 - POST /api/llm/test             连通测试（不落库）
 """
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin, require_user
@@ -28,11 +29,9 @@ def _to_out(row: LLMConfig) -> LLMConfigOut:
 
 
 def _get_row(db: Session, owner_id: int, slot: str) -> LLMConfig | None:
-    return (
-        db.query(LLMConfig)
-        .filter(LLMConfig.user_id == owner_id, LLMConfig.slot == slot)
-        .first()
-    )
+    return db.execute(
+        select(LLMConfig).where(LLMConfig.user_id == owner_id, LLMConfig.slot == slot)
+    ).scalar_one_or_none()
 
 
 def _upsert(db: Session, owner_id: int, body: LLMConfigIn) -> LLMConfig:
@@ -97,7 +96,9 @@ def get_effective(db: Session = Depends(get_db),
 @router.get("/llm/config")
 def get_config(db: Session = Depends(get_db),
                user: User = Depends(require_user)):
-    rows = db.query(LLMConfig).filter(LLMConfig.user_id == user.id).all()
+    rows = db.execute(
+        select(LLMConfig).where(LLMConfig.user_id == user.id)
+    ).scalars().all()
     return [_to_out(r) for r in rows]
 
 
@@ -131,7 +132,9 @@ def delete_config(slot: str,
 @router.get("/llm/platform-config", response_model=list[LLMConfigOut])
 def get_platform(db: Session = Depends(get_db),
                  admin: User = Depends(require_admin)):
-    rows = db.query(LLMConfig).filter(LLMConfig.user_id == 0).all()
+    rows = db.execute(
+        select(LLMConfig).where(LLMConfig.user_id == 0)
+    ).scalars().all()
     return [_to_out(r) for r in rows]
 
 

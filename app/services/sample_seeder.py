@@ -14,6 +14,7 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import OUTPUT_DIR
@@ -37,7 +38,9 @@ def seed_sample_tasks(db: Session, user: User) -> int:
     """
     try:
         # 幂等检查：已播种过则跳过
-        if db.query(Task).filter(Task.user_id == user.id, Task.is_sample.is_(True)).first():
+        if db.execute(
+            select(Task).where(Task.user_id == user.id, Task.is_sample.is_(True))
+        ).scalar_one_or_none():
             return 0
         data = json.loads(_ASSET.read_text(encoding="utf-8"))
         now = utcnow()

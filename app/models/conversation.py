@@ -4,11 +4,13 @@
 发言，assistant 消息可关联一个生成任务（task_id），聊天流回放时按 task_id 实时拉
 该任务的节点步骤（StepLog）与用例（Task.cases_json），避免冗余存储。
 """
+from datetime import datetime
+
 from app.core.utils import utcnow
 
-from sqlalchemy import (
-    Column, String, Integer, Text, DateTime, ForeignKey,
-)
+from sqlalchemy import String, Integer, Text, DateTime, ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column
+
 from app.core.db import Base
 
 
@@ -16,21 +18,21 @@ class Conversation(Base):
     """一次对话会话（所有对话都落库，跨刷新可回放）。"""
     __tablename__ = "conversations"
 
-    id = Column(String(64), primary_key=True)                # uuid hex
-    user_id = Column(Integer, nullable=False, index=True)
-    title = Column(String(255), default="新会话")              # 首条用户消息截断
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    title: Mapped[str | None] = mapped_column(String(255), default="新会话")
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class Message(Base):
     """会话中的一条消息（role: user / assistant）。"""
     __tablename__ = "messages"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    conversation_id = Column(String(64), ForeignKey("conversations.id"), nullable=False, index=True)
-    role = Column(String(32), nullable=False)                # user / assistant
-    content = Column(Text, default="")
-    thinking = Column(Text, default="")                      # assistant 思考过程
-    task_id = Column(String(64), nullable=True, index=True)  # 关联生成任务（点"生成测试用例"后回填）
-    created_at = Column(DateTime, default=utcnow)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), ForeignKey("conversations.id"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str | None] = mapped_column(Text, default="")
+    thinking: Mapped[str | None] = mapped_column(Text, default="")
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=utcnow)

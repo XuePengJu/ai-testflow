@@ -7,6 +7,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select, func, delete
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -47,7 +48,9 @@ def _task_brief(db: Session, task_id: str | None) -> dict | None:
     t = db.get(Task, task_id)
     if not t:
         return None
-    steps = db.query(StepLog).filter_by(task_id=task_id).order_by(StepLog.id).all()
+    steps = db.execute(
+        select(StepLog).where(StepLog.task_id == task_id).order_by(StepLog.id)
+    ).scalars().all()
     return {
         "id": t.id,
         "name": t.name,
@@ -67,14 +70,20 @@ def _task_brief(db: Session, task_id: str | None) -> dict | None:
 
 
 def _to_out(db: Session, c: Conversation, include_messages: bool = False) -> ConversationOut:
-    count = db.query(Message).filter_by(conversation_id=c.id).count()
-    task_count = db.query(Task).filter(Task.conversation_id == c.id).count()
+    count = db.execute(
+        select(func.count()).select_from(Message).where(Message.conversation_id == c.id)
+    ).scalar_one()
+    task_count = db.execute(
+        select(func.count()).select_from(Task).where(Task.conversation_id == c.id)
+    ).scalar_one()
     out = ConversationOut(
         id=c.id, title=c.title, created_at=c.created_at, updated_at=c.updated_at,
         message_count=count, task_count=task_count, messages=[],
     )
     if include_messages:
-        msgs = db.query(Message).filter_by(conversation_id=c.id).order_by(Message.id).all()
+        msgs = db.execute(
+            select(Message).where(Message.conversation_id == c.id).order_by(Message.id)
+        ).scalars().all()
         out.messages = [
             MessageOut(
                 id=m.id, role=m.role, content=m.content, thinking=m.thinking,
@@ -101,9 +110,11 @@ def create_conversation(body: ConversationIn,
 @router.get("", response_model=list[ConversationOut])
 def list_conversations(user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)):
-    rows = (db.query(Conversation)
-            .filter(Conversation.user_id == user.id)
-            .order_by(Conversation.updated_at.desc()).all())
+    rows = db.execute(
+        select(Conversation)
+        .where(Conversation.user_id == user.id)
+        .order_by(Conversation.updated_at.desc())
+    ).scalars().all()
     return [_to_out(db, c) for c in rows]
 
 
@@ -140,13 +151,15 @@ def delete_conversation(conv_id: str,
     对话一旦删除不可恢复——前端应弹确认窗。"""
     c = _own_conversation(db, user, conv_id)
     # 1. 连带删除该会话下所有任务
-    tasks = db.query(Task).filter(Task.conversation_id == conv_id).all()
+    tasks = db.execute(
+        select(Task).where(Task.conversation_id == conv_id)
+    ).scalars().all()
     deleted_files = 0
     for t in tasks:
         deleted_files += _delete_task_cascade(db, t)
         db.delete(t)
     # 2. 删该会话的所有消息
-    db.query(Message).filter(Message.conversation_id == conv_id).delete(synchronize_session=False)
+    db.execute(delete(Message).where(Message.conversation_id == conv_id))
     # 3. 删会话本身
     db.delete(c)
     db.commit()

@@ -6,6 +6,7 @@ from app.core.utils import utcnow
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_guest
@@ -40,10 +41,12 @@ def guest_token(request: Request, db: Session = Depends(get_db)):
     ip_hash = _ip_hash(_client_ip(request))
 
     # 1) 未过期 guest 直接复用（数据续用）
-    guest = db.query(User).filter(
-        User.ip_hash == ip_hash, User.role == "guest",
-        User.expires_at > utcnow(),
-    ).first()
+    guest = db.execute(
+        select(User).where(
+            User.ip_hash == ip_hash, User.role == "guest",
+            User.expires_at > utcnow(),
+        )
+    ).scalar_one_or_none()
     if guest:
         remaining = (guest.expires_at - utcnow()).total_seconds() / 3600
         token = security.create_token(guest.id, guest.username, "guest", ttl_hours=int(remaining) + 1)
@@ -52,16 +55,21 @@ def guest_token(request: Request, db: Session = Depends(get_db)):
                 "enc_key": crypto.derive_key(guest.id)}
 
     # 2) 防滥用：24h 窗口创建计数（独立表，guest 删除后计数仍在）
-    recent = db.query(GuestCreationLog).filter(
-        GuestCreationLog.ip_hash == ip_hash,
-        GuestCreationLog.created_at >= utcnow() - timedelta(hours=24),
-    ).count()
+    recent = db.execute(
+        select(func.count()).select_from(GuestCreationLog).where(
+            GuestCreationLog.ip_hash == ip_hash,
+            GuestCreationLog.created_at >= utcnow() - timedelta(hours=24),
+        )
+    ).scalar_one()
     if recent >= config.GUEST_DAILY_LIMIT:
         raise HTTPException(status_code=429,
                             detail="该 IP 今日访客体验次数已用完，请注册账号")
 
     # 3) 新建 guest：username 带 seq 防撞唯一约束（记录物理删也不冲突）
-    seq = db.query(GuestCreationLog).filter(GuestCreationLog.ip_hash == ip_hash).count()
+    seq = db.execute(
+        select(func.count()).select_from(GuestCreationLog).where(
+            GuestCreationLog.ip_hash == ip_hash)
+    ).scalar_one()
     expires_at = utcnow() + timedelta(hours=config.GUEST_TTL_HOURS)
     guest = User(
         username=f"guest_{ip_hash}_{seq}", role="guest",
@@ -92,9 +100,9 @@ def guest_upgrade(body: UpgradeIn,
     # 密码强度校验（与注册一致）
     from app.api.auth import _validate_password
     _validate_password(body.password)
-    if db.query(User).filter(User.username == body.username).first():
+    if db.execute(select(User).where(User.username == body.username)).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="用户名已存在")
-    if db.query(User).filter(User.email == body.email).first():
+    if db.execute(select(User).where(User.email == body.email)).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="邮箱已被注册")
 
     # 原子迁移：guest 记录原地转正，保留 id/任务/文件，目录改名

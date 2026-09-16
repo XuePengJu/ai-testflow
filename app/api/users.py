@@ -6,6 +6,7 @@ from app.core.utils import utcnow
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select, func, delete
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin
@@ -36,8 +37,10 @@ class UserRow(BaseModel):
 @router.get("/users", response_model=list[UserRow])
 def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     rows = []
-    for u in db.query(User).order_by(User.id).all():
-        n = db.query(Task).filter(Task.user_id == u.id).count()
+    for u in db.execute(select(User).order_by(User.id)).scalars().all():
+        n = db.execute(
+            select(func.count()).select_from(Task).where(Task.user_id == u.id)
+        ).scalar_one()
         rows.append(UserRow(id=u.id, username=u.username, email=u.email, role=u.role,
                             is_active=u.is_active, expires_at=u.expires_at,
                             tasks=n, created_at=u.created_at))
@@ -77,10 +80,11 @@ def delete_user(user_id: int, admin: User = Depends(require_admin),
         raise HTTPException(status_code=400, detail="管理员不可删除自己")
 
     # 级联：step_logs → tasks → 文件目录 → 用户
-    task_ids = [t.id for t in db.query(Task.id).filter(Task.user_id == u.id).all()]
+    task_rows = db.execute(select(Task.id).where(Task.user_id == u.id)).all()
+    task_ids = [r[0] for r in task_rows]
     if task_ids:
-        db.query(StepLog).filter(StepLog.task_id.in_(task_ids)).delete(synchronize_session=False)
-        db.query(Task).filter(Task.user_id == u.id).delete(synchronize_session=False)
+        db.execute(delete(StepLog).where(StepLog.task_id.in_(task_ids)))
+        db.execute(delete(Task).where(Task.user_id == u.id))
     if u.data_dir:
         for base in (UPLOAD_DIR, OUTPUT_DIR):
             shutil.rmtree(base / u.data_dir, ignore_errors=True)
@@ -98,7 +102,7 @@ def manual_clean(admin: User = Depends(require_admin), db: Session = Depends(get
 @router.post("/admin/guests/clean-all")
 def clean_all_guests(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """强制清理全部活跃访客（无论是否到期）——管理员主动批量清理入口。"""
-    guests = db.query(User).filter(User.role == "guest").all()
+    guests = db.execute(select(User).where(User.role == "guest")).scalars().all()
     stats = [clean_guest(db, g, trigger="force") for g in guests]
     return {"cleaned": len(stats), "detail": stats}
 
@@ -107,10 +111,16 @@ def clean_all_guests(admin: User = Depends(require_admin), db: Session = Depends
 def stats(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     now = utcnow()
     return {
-        "registered_users": db.query(User).filter(User.role != "guest").count(),
-        "active_guests": db.query(User).filter(
-            User.role == "guest", User.expires_at > now).count(),
-        "cleaned_24h": db.query(CleanLog).filter(
-            CleanLog.cleaned_at >= now - timedelta(hours=24)).count(),
-        "total_tasks": db.query(Task).count(),
+        "registered_users": db.execute(
+            select(func.count()).select_from(User).where(User.role != "guest")
+        ).scalar_one(),
+        "active_guests": db.execute(
+            select(func.count()).select_from(User).where(
+                User.role == "guest", User.expires_at > now)
+        ).scalar_one(),
+        "cleaned_24h": db.execute(
+            select(func.count()).select_from(CleanLog).where(
+                CleanLog.cleaned_at >= now - timedelta(hours=24))
+        ).scalar_one(),
+        "total_tasks": db.execute(select(func.count()).select_from(Task)).scalar_one(),
     }

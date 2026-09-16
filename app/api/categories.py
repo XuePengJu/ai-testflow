@@ -7,6 +7,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select, func, delete, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -43,9 +44,11 @@ def _descendant_ids(db: Session, root_id: int, user_id: int) -> set[int]:
     """root_id 及其全部子孙 id（用于防环校验与级联删除）。"""
     ids = {root_id}
     while True:
-        children = db.query(Category.id).filter(
-            Category.user_id == user_id, Category.parent_id.in_(ids),
-            ~Category.id.in_(ids)).all()
+        children = db.execute(
+            select(Category.id).where(
+                Category.user_id == user_id, Category.parent_id.in_(ids),
+                ~Category.id.in_(ids))
+        ).all()
         new = {c[0] for c in children} - ids
         if not new:
             return ids
@@ -54,10 +57,13 @@ def _descendant_ids(db: Session, root_id: int, user_id: int) -> set[int]:
 
 @router.get("")
 def list_categories(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    rows = db.query(Category).filter(Category.user_id == user.id).order_by(Category.sort, Category.id).all()
+    rows = db.execute(
+        select(Category).where(Category.user_id == user.id).order_by(Category.sort, Category.id)
+    ).scalars().all()
     counts: dict[int, int] = {}
-    for cid, in db.query(Task.category_id).filter(
-            Task.user_id == user.id, Task.category_id.isnot(None)).all():
+    for row in db.execute(select(Task.category_id).where(
+            Task.user_id == user.id, Task.category_id.isnot(None))).all():
+        cid = row[0]
         counts[cid] = counts.get(cid, 0) + 1
     return [{"id": c.id, "name": c.name, "parent_id": c.parent_id,
              "task_count": counts.get(c.id, 0)} for c in rows]
@@ -98,10 +104,13 @@ def delete_category(cat_id: int, user: User = Depends(get_current_user),
                     db: Session = Depends(get_db)):
     c = _own_cat(db, user, cat_id)
     ids = _descendant_ids(db, c.id, user.id)          # 含自身，级联删子树
-    moved = db.query(Task).filter(
-        Task.user_id == user.id, Task.category_id.in_(ids)).update(
-        {Task.category_id: None}, synchronize_session=False)
-    db.query(Category).filter(Category.id.in_(ids)).delete(synchronize_session=False)
+    result = db.execute(
+        update(Task).where(
+            Task.user_id == user.id, Task.category_id.in_(ids)
+        ).values(category_id=None)
+    )
+    moved = result.rowcount
+    db.execute(delete(Category).where(Category.id.in_(ids)))
     db.commit()
     return {"ok": True, "deleted_categories": len(ids), "tasks_to_uncategorized": moved}
 

@@ -12,6 +12,7 @@ import asyncio
 import re
 import time
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import config, crypto
@@ -102,10 +103,14 @@ def resolve_effective(db: Session, user: User | None) -> dict:
     因此"平台默认"是模型选择的唯一权威来源，徽标与模型管理页展示完全一致。
     """
     if user is not None:
-        own = {r.slot: r for r in db.query(LLMConfig).filter(LLMConfig.user_id == user.id).all()}
+        own = {r.slot: r for r in db.execute(
+            select(LLMConfig).where(LLMConfig.user_id == user.id)
+        ).scalars().all()}
     else:
         own = {}
-    platform = {r.slot: r for r in db.query(LLMConfig).filter(LLMConfig.user_id == 0).all()}
+    platform = {r.slot: r for r in db.execute(
+        select(LLMConfig).where(LLMConfig.user_id == 0)
+    ).scalars().all()}
 
     def pick(slot: str) -> tuple[dict | None, str | None]:
         if slot in own:
