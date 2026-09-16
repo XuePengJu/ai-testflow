@@ -479,6 +479,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     fd.append("text", text);
     fd.append("kind", draft.kind || "business");
     fd.append("formats", (draft.formats.length ? draft.formats : ["xlsx", "json", "xmind"]).join(","));
+    fd.append("roles", (draft.roles?.length ? draft.roles : ["qa"]).join(","));
     fd.append("name", text.slice(0, 40) || "未命名任务");
     fd.append("conversation_id", get().conversationId || "");
 

@@ -474,6 +474,20 @@ body {
 .think-toggle:hover { border-color: #bedaff; color: #165dff; }
 .think-toggle.active { border-color: #bedaff; background: #f0f7ff; color: #165dff; font-weight: 500; }
 .think-toggle:disabled { opacity: .5; cursor: default; }
+/* V3.1 多角色协作：角色 pill 组（产品/测试/开发 多选，选中蓝底高亮） */
+.role-picker {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 6px; padding: 2px; border-radius: 999px;
+  background: #f2f3f5; border: 1px solid #e5e6eb;
+}
+.role-chip {
+  height: 26px; padding: 0 10px; border: none; border-radius: 999px;
+  background: transparent; color: #646a73; font-size: 12px; font-family: inherit;
+  cursor: pointer; transition: background .18s, color .18s, box-shadow .18s;
+}
+.role-chip:hover { color: #165dff; }
+.role-chip.active { background: #fff; color: #165dff; font-weight: 500; box-shadow: 0 1px 3px rgba(22, 93, 255, .18); }
+.role-chip:disabled { opacity: .5; cursor: default; }
 .send-btn {
   position: absolute; right: 8px; bottom: 8px;
   width: 40px; height: 40px; border: none; border-radius: 50%;

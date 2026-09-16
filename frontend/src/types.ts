@@ -113,6 +113,8 @@ export interface ChatDraft {
   formats: string[];
   /** 「深度思考」开关（默认开）：关掉则不请求模型思考，也不展示思考面板 */
   thinking?: boolean;
+  /** 多角色协作（V3.1）：参与生成的视角，如 ["pm","qa","dev"]，默认 ["qa"] */
+  roles?: string[];
 }
 
 /* ===== V2.8 M4：设置页 / admin / 分类（与后端对齐） ===== */

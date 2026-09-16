@@ -20,6 +20,7 @@ from app.services.doc_extract import SUPPORTED_EXTS
 from app.workflow.engine import run_task
 from app.workflow.iterate import run_iterate
 from src.models.testcase import ensure_case_ids, ensure_compound_titles
+from src.generator.case_generator import parse_roles
 
 router = APIRouter()
 
@@ -96,7 +97,8 @@ def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
     return TaskOut(
         id=task.id, name=task.name, kind=task.kind, source_type=task.source_type,
         status=task.status, cases_count=task.cases_count, duration_ms=task.duration_ms,
-        formats=task.formats, category_id=task.category_id,
+        formats=task.formats, roles=task.roles or '["qa"]',
+        category_id=task.category_id,
         parent_task_id=task.parent_task_id,
         conversation_id=task.conversation_id,
         created_at=task.created_at, finished_at=task.finished_at,
@@ -131,6 +133,7 @@ async def create_task(
     text: str = Form(""),
     kind: str = Form("business"),
     formats: str = Form("xlsx,json"),
+    roles: str = Form("qa"),
     name: str = Form(""),
     conversation_id: str = Form(""),
 ):
@@ -178,6 +181,7 @@ async def create_task(
         source_type=source_type,
         input_ref=input_ref,
         formats=formats,
+        roles=json.dumps(parse_roles(roles), ensure_ascii=False),
         status="pending",
         user_id=user.id,
         conversation_id=conversation_id or None,
@@ -330,6 +334,7 @@ async def iterate_task(
         source_type="iterate",
         input_ref=instruction[:500],
         formats=parent.formats,
+        roles=parent.roles or '["qa"]',
         status="pending",
         user_id=parent.user_id,
         conversation_id=eff_conv,

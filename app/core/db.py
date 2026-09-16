@@ -91,6 +91,9 @@ def _ensure_columns() -> None:
         alters.append("ADD COLUMN conversation_id VARCHAR(64)")
     if "parent_task_id" not in cols:
         alters.append("ADD COLUMN parent_task_id VARCHAR(64)")
+    # V3.1 多角色协作：roles JSON 数组文本（MySQL 不允许 TEXT 带 DEFAULT，Python 层兜底）
+    if "roles" not in cols:
+        alters.append("ADD COLUMN roles TEXT")
     if alters:
         with engine.connect() as conn:
             for a in alters:

@@ -1,6 +1,7 @@
-"""GeneratorAgent：按策略调用模型生成测试用例（V2.4 支持注入真实模型）。
+"""GeneratorAgent：按策略调用模型生成测试用例（V2.4 支持注入真实模型；V3.1 多角色）。
 
 入参：units（ParserAgent 产出的测试单元列表）、client（可选，OpenAI 兼容客户端）、
+     roles（可选，参与生成的角色 pm/qa/dev，默认 qa）、
      progress_cb（可选，每个测试点完成后的实时进度回调）
 出参：(cases, output_summary, details_json)
 """
@@ -8,17 +9,22 @@ import json
 from collections import Counter
 from app.services.pipeline_lib import lib_generate
 from src.models.testcase import RequirementUnit, TestCase
+from src.generator.case_generator import ROLE_LABELS, parse_roles
 
 
 def run_generator(units: list[RequirementUnit], client=None, model_desc: str = "",
-                  progress_cb=None):
-    cases: list[TestCase] = lib_generate(units, client=client, progress_cb=progress_cb)
+                  progress_cb=None, roles=None):
+    role_list = parse_roles(roles)
+    role_note = "、".join(ROLE_LABELS.get(r, r) for r in role_list)
+    cases: list[TestCase] = lib_generate(units, client=client, progress_cb=progress_cb,
+                                         roles=role_list)
     model_note = model_desc or "mock 兜底"
     # 统计每个测试点生成多少条用例
     case_count_by_unit = Counter()
     for c in cases:
         case_count_by_unit[c.module] += 1
     unit_stats = [{"name": u.name, "cases_generated": case_count_by_unit.get(u.name, 0)} for u in units]
-    summary = f"AI 生成 {len(cases)} 条测试用例（覆盖正向 / 异常 / 边界 · 模型：{model_note}）"
-    details = {"total_cases": len(cases), "by_unit": unit_stats, "model": model_note}
+    summary = f"AI 生成 {len(cases)} 条测试用例（{role_note}视角 · 覆盖正向 / 异常 / 边界 · 模型：{model_note}）"
+    details = {"total_cases": len(cases), "by_unit": unit_stats,
+               "model": model_note, "roles": role_list}
     return cases, summary, json.dumps(details, ensure_ascii=False)

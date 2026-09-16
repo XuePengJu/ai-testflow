@@ -19,6 +19,7 @@ class Task(Base):
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="file")
     input_ref: Mapped[str | None] = mapped_column(Text, default="")
     formats: Mapped[str | None] = mapped_column(String(64), default="xlsx,json")
+    roles: Mapped[str | None] = mapped_column(Text, default='["qa"]')  # 多角色协作（V3.1）：pm/qa/dev JSON 数组
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     is_sample: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

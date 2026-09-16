@@ -36,6 +36,13 @@ const SAMPLE_DBERP =
 /** 「深度思考」开关的本地记忆键（默认开） */
 const THINK_KEY = "aitf_deep_think";
 
+/** 多角色协作（V3.1）：参与生成用例的视角（与后端 src/generator.case_generator 对齐） */
+const ROLE_OPTIONS: { id: string; label: string; title: string }[] = [
+  { id: "pm", label: "产品", title: "产品视角：业务价值/需求覆盖/验收标准" },
+  { id: "qa", label: "测试", title: "测试视角：正向/异常/边界/场景组合" },
+  { id: "dev", label: "开发", title: "开发视角：契约/幂等/并发/数据一致性" },
+];
+
 export default function ChatPanel() {
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
@@ -56,6 +63,8 @@ export default function ChatPanel() {
   const [file, setFile] = useState<File | null>(null);
   const [kind] = useState("business");
   const [formats] = useState<string[]>(["xlsx", "json", "xmind"]);
+  /** 多角色协作（V3.1）：参与生成用例的视角（pm/qa/dev），默认仅测试 */
+  const [roles, setRoles] = useState<string[]>(["qa"]);
   /** 深度思考开关：默认开，本地记忆（关掉则不请求模型思考，也不显示思考面板） */
   const [deepThink, setDeepThink] = useState<boolean>(() => {
     try {
@@ -113,7 +122,7 @@ export default function ChatPanel() {
     const txt = text.trim();
     if (!txt && !file) return;
     if (streaming) return;
-    const draft: ChatDraft = { text: txt, file, kind, formats, thinking: deepThink };
+    const draft: ChatDraft = { text: txt, file, kind, formats, thinking: deepThink, roles };
     // 只传附件不打字时正文保持为空（气泡显示 📎 文件名徽标），不再写「(仅附加文档)」占位符
     void send(txt, draft);
     setText("");
@@ -142,6 +151,14 @@ export default function ChatPanel() {
     } catch {
       /* 隐私模式 / 存储禁用：仅本次会话生效 */
     }
+  }
+
+  /** 多角色协作：切换某角色参与生成（至少保留一个角色） */
+  function toggleRole(id: string): void {
+    setRoles((prev) => {
+      const next = prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id];
+      return next.length ? next : ["qa"];
+    });
   }
 
   return (
@@ -255,6 +272,20 @@ export default function ChatPanel() {
               <Lightbulb size={16} />
               <span className="tt-text">深度思考</span>
             </button>
+            <span className="role-picker" title="多角色协作：以多个视角分别生成用例后合并去重">
+              {ROLE_OPTIONS.map((r) => (
+                <button
+                  key={r.id}
+                  className={`role-chip ${roles.includes(r.id) ? "active" : ""}`}
+                  type="button"
+                  title={r.title}
+                  disabled={streaming}
+                  onClick={() => toggleRole(r.id)}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </span>
           </div>
           <div className="input-body">
             <textarea
