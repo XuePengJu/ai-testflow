@@ -86,7 +86,7 @@
 
 - 厂商自定义参数走 `extra_body` 透传（`enable_thinking` 深度思考开关）；思考字段恢复补丁（ChatOpenAI 默认丢弃 `reasoning_content` 等第三方字段）
 
-- `AITF_LLM_BACKEND=langchain`（默认）/ `httpx`（旧直连）双实现一键回退；`langsmith` 已入依赖，LangSmith 可观测接入规划中
+- `AITF_LLM_BACKEND=langchain`（默认）/ `httpx`（旧直连）双实现一键回退；**LangSmith 可观测已接入**（`.env` 配 Key 自动打点，每次调用可在 smith.langchain.com 查看 trace）
 
 ### 生成用例实时进度（V3）
 

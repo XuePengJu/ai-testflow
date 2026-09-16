@@ -476,14 +476,14 @@
 - **状态同步修复**：步骤卡数据源优先取列表轮询（5s 永不停）的最新任务，修复活跃任务轮询 TTL 到期后卡片停在旧 running 状态；活跃/迭代轮询 TTL 放宽至 20 分钟（覆盖真实模型慢任务）
 - **节奏说明**：生成节点耗时 ≈ 测试点数 × 单次模型耗时（免费模型 30-90s/次），多测试点任务 5-10 分钟属正常，进度提示让用户明确知道"在干活"
 
-### FR-V LLM 可观测性（LangSmith）【V3 规划】
+### FR-V LLM 可观测性（LangSmith）【V3 已接入】
 
 > 解决「自己调 API 看不到里面发了什么」：直连 httpx 只有返回文本，请求构造、重试、耗时、Token 用量全部不可见。
 
-- **目标**：接入 LangSmith 后，每次 LLM 调用自动产出 trace（模型/请求参数/流式耗时/Token 用量/错误重试），可视化排查"调用发了什么、为什么慢、为什么错"
-- **接入点**：适配层 `LangChainClient._build_model` 已统一收敛模型构造，Trace 可在该层无侵入开启（LangChain 默认环境变量自动打点，无需改调用方）
-- **前置条件**：注册 LangSmith 获取 `LANGSMITH_API_KEY`，写入 `.env`（当前为空，阶段 3 待 Key 启动）
-- **落地项**：`.env` 配 Key + 本地验证 trace 链路 + 前端/文档补充观测入口说明
+- **落地**：`.env` 配置 `LANGSMITH_API_KEY` / `LANGSMITH_TRACING=true` / `LANGSMITH_PROJECT=ai-testflow`；适配层统一收敛模型构造，LangChain 自动打点，无需改调用方代码
+- **验证**：真实调用（魔搭）后经 LangSmith Client 查询到 `ChatOpenAI` run，status=success，trace 正常入库（smith.langchain.com → ai-testflow 项目）
+- **说明**：上报依赖 smith.langchain.com 网络可达（本地直连或走代理）；上报失败时 LangSmith 静默重试/丢弃，不影响业务功能
+- **使用**：登录 smith.langchain.com 查看 ai-testflow 项目的每次调用 trace（模型/请求参数/流式耗时/Token/错误重试）
 
 ### FR-W 多角色协作（产品 / 测试 / 开发）【V3 规划】
 
@@ -530,8 +530,8 @@
 | **V2.11**  | **版本链聚合（FR-R）：`utils/taskChain.ts` 解析迭代链 + 抽屉标题行版本切换器 + 会话流旧版本卡折叠 + 任务列表同链聚合（版本徽章展开历史）** | ✅ 已上线 |
 | **V2.12**  | **导图控件迁出画布（FR-S）：导出 XMind / 全屏 / 缩放 / 百分比 / 居中 迁入详情抽屉底栏，与「继续优化」融合一行；保留左上方向切换栏** | ✅ 已上线 |
 | **V2.13**  | **顶栏新增 GitHub 仓库入口**                                                                                               | ✅ 已上线 |
-| **V3**     | **LLM 接入层 LangChain 化（FR-T）：`init_chat_model` 统一入口 + 全链路统一 `stream()` + `enable_thinking` extra_body 透传 + 思考字段恢复补丁 + `AITF_LLM_BACKEND` 双实现回退；生成用例实时子进度（FR-U）：`StepLog.progress` 逐测试点回调 + 步骤卡状态同步修复** | ✅ 已上线 |
-| **V3.1（规划）** | **LangSmith 可观测性（FR-V，需 `LANGSMITH_API_KEY`）+ 多角色协作（产品/测试/开发）（FR-W，轻量版角色化提示词路由）** | 📋 规划 |
+| **V3**     | **LLM 接入层 LangChain 化（FR-T）：`init_chat_model` 统一入口 + 全链路统一 `stream()` + `enable_thinking` extra_body 透传 + 思考字段恢复补丁 + `AITF_LLM_BACKEND` 双实现回退；生成用例实时子进度（FR-U）：`StepLog.progress` 逐测试点回调 + 步骤卡状态同步修复；LangSmith 可观测（FR-V）：`.env` 配 Key 自动打点，trace 已验证入库** | ✅ 已上线 |
+| **V3.1（规划）** | **多角色协作（产品/测试/开发）（FR-W，轻量版角色化提示词路由）** | 📋 规划 |
 | V3.2（规划）   | 定时执行 + Allure 报告集成                                                                                                            | 📋 规划 |
 | V3.3（规划）   | 接真实 DBERP 后端做端到端接口自动化闭环                                                                                                       | 📋 规划 |
 
