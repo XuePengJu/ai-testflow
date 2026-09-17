@@ -113,7 +113,8 @@ def run_task(task_id: str) -> None:
             except llm_service.LLMError:
                 llm_client = None
         model_desc = (
-            f'{text_cfg["model"]} · {text_cfg["provider_label"]}' if text_cfg else "mock 兜底"
+            f'{text_cfg["model"]} · {text_cfg["provider_label"]}' if text_cfg
+            else "未配置可用模型（模拟生成）"
         )
 
         # ---- V2.4：两段式视觉理解（business 输入里的图片引用） ----

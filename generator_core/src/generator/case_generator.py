@@ -7,7 +7,6 @@ import json
 import re
 from config import settings
 from src.models.testcase import TestCase, RequirementUnit, align_step_expectations
-from src.generator.llm_client import BailianClient
 from src.generator.mock_generator import mock_generate
 
 # 角色标识 → 展示名（进度回调/汇总用）
@@ -34,11 +33,10 @@ def parse_roles(raw) -> list[str]:
 class CaseGenerator:
     def __init__(self, client=None, roles=None):
         """client：平台注入的 LLM 客户端（OpenAI 兼容）。
-        注入时优先使用；否则回退旧逻辑（dashscope SDK / mock）。
+        注入时优先使用；未注入（无可用模型）一律 mock 兜底，绝不自动
+        调用环境里的百炼 Key（避免无效 Key 直接 401 报错）。
         roles：参与生成的角色列表（pm/qa/dev），默认 ["qa"]。"""
         self.injected = client
-        self.use_mock = settings.is_mock()
-        self.client = None if self.use_mock else BailianClient()
         self.roles = parse_roles(roles)
 
     def _load_template(self, kind: str, role: str = "qa") -> str:
@@ -107,11 +105,8 @@ class CaseGenerator:
             prompt = self._build_prompt(unit, role)
             text = self.injected.generate(prompt)
             return self._parse_llm(text)
-        if self.use_mock or self.client is None:
-            return mock_generate(unit)
-        prompt = self._build_prompt(unit, role)
-        text = self.client.generate(prompt)
-        return self._parse_llm(text)
+        # 未注入模型（未配置可用模型）→ mock 兜底，不碰无效的百炼 Key
+        return mock_generate(unit)
 
     def generate(self, units: list[RequirementUnit], progress_cb=None, roles=None) -> list[TestCase]:
         """为全部测试点按角色生成用例（unit × role 双层循环）。

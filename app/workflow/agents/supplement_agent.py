@@ -190,12 +190,12 @@ def run_supplement(
             new_cases = _parse_llm(raw)
         except Exception:  # noqa: BLE001
             new_cases = _mock_supplement(instruction, existing_cases)
-            model_note = "LLM 调用失败，mock 兜底"
+            model_note = "模型调用失败，已降级为模拟生成"
         else:
             model_note = model_desc or "真实模型"
     else:
         new_cases = _mock_supplement(instruction, existing_cases)
-        model_note = "mock 兜底"
+        model_note = "未配置可用模型，当前为模拟生成，请到【模型设置】配置真实模型"
 
     # 过滤掉与已有用例标题完全重复的（已有用例标题已是 `动作 -> 预期` 复合形式，比较时剥掉预期片段）
     existing_titles = {

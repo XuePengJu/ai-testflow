@@ -18,7 +18,7 @@ def run_generator(units: list[RequirementUnit], client=None, model_desc: str = "
     role_note = "、".join(ROLE_LABELS.get(r, r) for r in role_list)
     cases: list[TestCase] = lib_generate(units, client=client, progress_cb=progress_cb,
                                          roles=role_list)
-    model_note = model_desc or "mock 兜底"
+    model_note = model_desc or "未配置可用模型，当前为模拟生成，请到【模型设置】配置真实模型"
     # 统计每个测试点生成多少条用例
     case_count_by_unit = Counter()
     for c in cases:

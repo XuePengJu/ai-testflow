@@ -174,6 +174,8 @@ def run_parser(input_path: str, kind: str, client=None):
     req_summary = ai_req_summary or fallback_req_summary
 
     summary = f"{mode}得到 {len(units)} 个测试点"
+    if client is None:
+        summary += "（未配置可用模型，当前为规则解析，请到【模型设置】配置真实模型）"
     details = {
         "units": [{"name": u.name, "description": u.description} for u in units],
         "title": title,

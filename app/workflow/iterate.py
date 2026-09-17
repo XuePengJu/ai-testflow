@@ -155,7 +155,7 @@ def run_iterate(
                     text_cfg["base_url"], text_cfg["api_key"], text_cfg["model"])
             except llm_service.LLMError:
                 llm_client = None
-        model_desc = f'{text_cfg["model"]} · {text_cfg["provider_label"]}' if text_cfg else "mock 兜底"
+        model_desc = f'{text_cfg["model"]} · {text_cfg["provider_label"]}' if text_cfg else "未配置可用模型（模拟生成）"
 
         # ---- 准备输出目录 + 更新版本号 ----
         data_dir = parent.user_data_dir(db)

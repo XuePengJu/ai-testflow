@@ -67,6 +67,11 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
 
   const toggle = (title: string) => setExpanded((prev) => ({ ...prev, [title]: !prev[title] }));
 
+  // 未配置可用模型：解析/生成步骤的摘要会带「未配置可用模型」提示 → 卡片顶部展示醒目提示条
+  const mockNotice = (live.steps || []).some((s) =>
+    `${s.output_summary || ""}${s.input_summary || ""}${s.error || ""}`.includes("未配置可用模型")
+  );
+
   // 旧版本折叠态：一行细条，点击直接开抽屉看该版本（抽屉内可切回最新版）
   if (stale) {
     return (
@@ -98,6 +103,9 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
         <span className={`pill pill-${badge.cls}`}>{badge.text}</span>
         {live.status === "completed" && <span className="tsc-cnt">共 {live.cases_count || 0} 个用例</span>}
       </div>
+      {mockNotice && (
+        <div className="tsc-mock-tip">⚠️ 未配置可用模型，当前为模拟生成。请到「模型设置」配置真实模型后重新生成。</div>
+      )}
       <div className="tsc-steps">
         {STEP_TITLES.map((title) => {
           const s = stepMap[title];
