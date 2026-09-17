@@ -9,6 +9,9 @@ app.db
 outputs/
 uploads/
 
+# 前端构建产物（不入库，本地构建后打包上传服务器部署）
+frontend/dist/
+
 # Python 缓存
 __pycache__/
 *.pyc
