@@ -65,6 +65,7 @@ export interface StepLog {
   status: string;
   /** running 期间实时子进度（如"正在为第 2/5 个测试点生成用例…"） */
   progress?: string | null;
+  started_at?: string | null;
   duration_ms?: number | null;
   input_summary?: string | null;
   output_summary?: string | null;

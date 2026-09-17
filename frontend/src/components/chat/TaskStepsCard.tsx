@@ -3,10 +3,20 @@
  * 数据源：chatStore 消息上的 task（taskStore 轮询回写）。
  * 方案 B：每个步骤可折叠，默认展开，展开区显示该步思考详情（输入/输出/错误）。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Task } from "../../types";
 import { useTaskStore } from "../../store/taskStore";
 import { isLatestOfChain } from "../../utils/taskChain";
+
+/** 毫秒 → 人类可读：<1s 显示 ms，<60s 显示 Xs，否则 mm:ss */
+function fmtDuration(ms: number): string {
+  if (ms <= 0) return "";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}:${(s % 60).toString().padStart(2, "0")}`;
+}
 
 const STEP_TITLES = ["解析规格", "AI 生成用例", "质量校验", "导出文件"];
 const STEP_ICONS: Record<string, string> = {
@@ -33,6 +43,8 @@ interface StepInfo {
   status: string;
   /** running 期间实时子进度（后端 StepLog.progress，轮询回写） */
   progress?: string | null;
+  started_at?: string | null;
+  duration_ms?: number | null;
   input_summary?: string | null;
   output_summary?: string | null;
   error?: string | null;
@@ -52,13 +64,22 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
   // 活跃任务轮询（pollTask）有 TTL，到期后卡片不能停在旧 running 状态。
   const latest = tasks.find((t) => t.id === task.id);
   const live = latest && latest.steps && latest.steps.length > 0 ? latest : task;
+  // 实时计时：进行中的任务/步骤每秒刷新一次时间戳，刷新页面后从 started_at 继续计时
+  const [now, setNow] = useState(Date.now());
+  const isLive = live.status === "running" || live.status === "pending";
+  useEffect(() => {
+    if (!isLive) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [isLive]);
   const badge = statusBadge(live.status);
-  const stepMap: Record<string, StepInfo> = {};
+  const stepMap: Record<string, StepInfo & { started_at?: string | null }> = {};
   (live.steps || []).forEach((s) => {
     if (STEP_TITLES.includes(s.title))
       stepMap[s.title] = {
         status: s.status,
         progress: s.progress,
+        started_at: s.started_at,
         input_summary: s.input_summary,
         output_summary: s.output_summary,
         error: s.error,
@@ -100,6 +121,12 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
     <div className="task-steps-card" data-task-card={task.id}>
       <div className="tsc-head">
         <span className="tsc-name">{live.name}</span>
+        {live.status === "running" && live.created_at && (
+          <span className="tsc-timer">⏱ {fmtDuration(now - new Date(live.created_at).getTime())}</span>
+        )}
+        {live.status === "completed" && live.duration_ms > 0 && (
+          <span className="tsc-timer">⏱ {fmtDuration(live.duration_ms)}</span>
+        )}
         <span className={`pill pill-${badge.cls}`}>{badge.text}</span>
         {live.status === "completed" && <span className="tsc-cnt">共 {live.cases_count || 0} 个用例</span>}
       </div>
@@ -118,6 +145,12 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
               <button type="button" className="tsc-step-head" onClick={() => toggle(title)}>
                 <span className="tsc-ring">{ring}</span>
                 <span className="tsc-title">{title}</span>
+                {st === "running" && s?.started_at && (
+                  <span className="tsc-step-time">{fmtDuration(now - new Date(s.started_at).getTime())}</span>
+                )}
+                {st === "completed" && s?.duration_ms != null && s.duration_ms > 0 && (
+                  <span className="tsc-step-time">{fmtDuration(s.duration_ms)}</span>
+                )}
                 <span className="tsc-hint">
                   {st === "running"
                     ? (s?.progress || RUNNING_HINTS[title])

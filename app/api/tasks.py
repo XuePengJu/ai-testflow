@@ -10,6 +10,7 @@ from sqlalchemy import select, func, delete, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core import task_queue
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR, GUEST_MAX_TASKS
 from app.core.db import get_db
 from app.models.conversation import Conversation, Message
@@ -17,7 +18,6 @@ from app.models.task import Task, StepLog
 from app.models.user import User
 from app.schemas.task import TaskOut, StepLogOut
 from app.services.doc_extract import SUPPORTED_EXTS
-from app.workflow.engine import run_task
 from app.workflow.iterate import run_iterate
 from src.models.testcase import ensure_case_ids, ensure_compound_titles
 from src.generator.case_generator import parse_roles
@@ -126,7 +126,6 @@ def _own_task(db: Session, task_id: str, user: User) -> Task:
 
 @router.post("/tasks", response_model=TaskOut, status_code=201)
 async def create_task(
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
     file: UploadFile | None = File(None),
@@ -203,7 +202,7 @@ async def create_task(
             last_msg.task_id = task_id
             db.commit()
 
-    background_tasks.add_task(run_task, task_id)
+    task_queue.enqueue(task_id)
     return _to_out(db, task)
 
 

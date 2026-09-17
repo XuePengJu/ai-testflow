@@ -10,6 +10,7 @@ class StepLogOut(BaseModel):
     title: str
     status: str
     progress: Optional[str] = None
+    started_at: Optional[datetime] = None
     duration_ms: Optional[float] = None
     input_summary: Optional[str] = None
     output_summary: Optional[str] = None

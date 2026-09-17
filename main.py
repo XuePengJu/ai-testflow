@@ -49,7 +49,15 @@ async def lifespan(app: FastAPI):
     from app.jobs.guest_cleaner import start_scheduler
     start_scheduler()
 
+    # 任务队列：启动恢复（running→pending）+ 启动 Worker 池
+    from app.core import task_queue
+    task_queue.recover_pending_tasks()
+    task_queue.start_workers()
+
     yield
+
+    # 优雅关闭：等待队列中任务执行完毕（systemd TimeoutStopSec 兜底）
+    task_queue.wait_for_drain()
 
 
 app = FastAPI(title="AI 测试工作流平台", version="0.2.0", lifespan=lifespan)
