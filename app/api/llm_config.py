@@ -235,16 +235,16 @@ def test_llm(body: LLMTestIn,
         for oid in owner_ids:
             for slot in ("vision", "text"):
                 row = _get_row(db, oid, slot)
-                if row and row.api_key_enc:
-                    try:
-                        api_key = llm_service.decrypt_key(row.api_key_enc, oid)
+                if row:
+                    # 复用 _row_to_cfg：解密失败自动置空 + 免费厂商由服务端环境变量 Key 兜底
+                    cfg = llm_service._row_to_cfg(row, oid)
+                    if cfg.get("api_key"):
+                        api_key = cfg["api_key"]
                         break
-                    except ValueError:
-                        continue
             if api_key:
                 break
     if not api_key:
-        raise HTTPException(400, detail="请填写 API Key（或先保存配置后再测试）")
+        raise HTTPException(400, detail="未找到可用的 API Key（免费厂商请确认服务端已配置对应环境变量 Key，或在表单中手动输入）")
     if not body.base_url.strip() or not body.model.strip():
         raise HTTPException(400, detail="base_url 与 model 不能为空")
     return llm_service.test_connectivity(body.base_url.strip(), api_key, body.model.strip())
