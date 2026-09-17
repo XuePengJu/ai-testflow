@@ -198,7 +198,7 @@ async def create_task(
                    Message.role == "assistant",
                    Message.task_id.is_(None))
             .order_by(Message.id.desc())
-        ).scalar_one_or_none()
+        ).scalars().first()
         if last_msg:
             last_msg.task_id = task_id
             db.commit()
