@@ -180,6 +180,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : null,
         state: "done",
       }));
+      // 历史消息恢复：最后一条无任务的 assistant 消息补 draft，触发「✨ 生成测试用例」按钮
+      // （confirmCreateTask 会自动拼接所有用户消息作为任务文本，draft 本身无需带 text）
+      const lastAiNoTask = [...messages].reverse().find((m) => m.role === "assistant" && !m.task);
+      if (lastAiNoTask) {
+        const idx = messages.indexOf(lastAiNoTask);
+        messages[idx] = {
+          ...lastAiNoTask,
+          draft: { text: "", kind: "business", formats: ["xlsx", "json", "xmind"], roles: ["qa"] },
+        };
+      }
       set({ messages });
     } catch {
       /* 加载失败保持空消息，用户可重试切换 */
