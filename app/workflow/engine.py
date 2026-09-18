@@ -3,12 +3,15 @@
 在后台线程运行（FastAPI BackgroundTasks），前端轮询任务状态即可看到实时进度。
 """
 import json
+import logging
 import time
 from pathlib import Path
 
 from sqlalchemy import select, func
 
 from app.core.utils import utcnow
+
+logger = logging.getLogger("workflow.engine")
 
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR
 from app.core.db import SessionLocal
@@ -17,7 +20,7 @@ from app.models.task import Task, StepLog
 from app.models.user import User
 from app.services import llm_service
 from app.services.pipeline_lib import cases_to_json
-from src.models.testcase import ensure_case_ids, ensure_compound_titles
+from src.models.testcase import ensure_case_ids, ensure_compound_titles, RequirementUnit
 from app.workflow.agents import (
     parser_agent, generator_agent, reviewer_agent, exporter_agent,
 )
@@ -140,7 +143,29 @@ def run_task(task_id: str) -> None:
 
         data: dict = {}
 
+        # 断点续跑：retry 时只保留 parser 的 completed StepLog，从中恢复 units 后跳过
+        completed_steps = {
+            s.name: s for s in db.execute(
+                select(StepLog).where(StepLog.task_id == task_id, StepLog.status == "completed")
+            ).scalars().all()
+        }
+
         for name, title, fn, key in STEPS:
+            # 断点续跑：parser 已完成 → 从 StepLog.input_summary 恢复 units，跳过执行
+            if name == "parser" and name in completed_steps:
+                try:
+                    meta = json.loads(completed_steps[name].input_summary or "{}")
+                    raw_units = meta.get("units", [])
+                    # JSON 反序列化后是 dict 列表，需转回 RequirementUnit 对象
+                    data["units"] = [
+                        RequirementUnit(**u) if isinstance(u, dict) else u
+                        for u in raw_units
+                    ]
+                    logger.info("断点续跑：跳过 parser，恢复 %d 个测试点", len(data.get("units", [])))
+                    continue
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    logger.warning("断点续跑：parser input_summary 解析失败，重新执行 parser")
+
             step = StepLog(
                 task_id=task_id, name=name, title=title,
                 status="running", started_at=utcnow(),

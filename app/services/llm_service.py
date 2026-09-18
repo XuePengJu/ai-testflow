@@ -160,7 +160,18 @@ def public_view(cfg: dict | None) -> dict | None:
 
 # ============ 对话流式 chat_stream（前端打字机体验） ============
 
-_SYSTEM_PROMPT = """你是 Buddy，资深软件测试工程师，专精测试用例设计。
+# 角色身份映射：决定 AI 回复时的专业视角
+_ROLE_IDENTITY = {
+    "qa": "资深软件测试工程师，专精测试用例设计",
+    "pm": "资深产品经理，专精需求分析与产品设计",
+    "dev": "资深开发工程师，专精技术方案与代码实现",
+}
+
+def _system_prompt_for(role: str, want_thinking: bool) -> str:
+    """根据角色返回对应的系统提示词。role 非法或空时默认 qa（测试工程师）。"""
+    identity = _ROLE_IDENTITY.get(role, _ROLE_IDENTITY["qa"])
+    if want_thinking:
+        return f"""你是 Buddy，{identity}。
 
 【输出格式要求】严格按下述结构：
 <think>
@@ -174,9 +185,7 @@ _SYSTEM_PROMPT = """你是 Buddy，资深软件测试工程师，专精测试用
 1. 思考过程用 <think>...</think> 包裹，可折叠不打扰用户阅读正式回复
 2. 正式回复要可直接生成测试用例，澄清问题要具体（如"主要覆盖正面/反面/边界？"）
 3. 简洁专业，避免客套；用 markdown 列表"""
-
-# 关闭「深度思考」时使用：不要求模型输出思考过程，直接给正式回复
-_SYSTEM_PROMPT_NO_THINK = """你是 Buddy，资深软件测试工程师，专精测试用例设计。
+    return f"""你是 Buddy，{identity}。
 
 【输出格式要求】直接给出正式回复，先复述需求理解，再列出覆盖维度，每条简短解释，最后给 1-3 个澄清问题。
 
@@ -187,14 +196,15 @@ _SYSTEM_PROMPT_NO_THINK = """你是 Buddy，资深软件测试工程师，专精
 
 
 def _build_messages(user_text: str, history: list | None, attached_text: str,
-                    want_thinking: bool = True) -> list:
+                    want_thinking: bool = True, role: str = "qa") -> list:
     """组装 messages：system + history + 当前用户消息（附加上下文拼在消息里）。
 
     attached_text 承载两类内容：迭代任务摘要、用户上传文档的正文。
     上限 6000 字与解析链路（_ai_parse_business）保持一致，避免长文档把上下文打爆。
     want_thinking=False 时换用不含思考要求的系统提示词（光靠参数关不掉标签输出）。
+    role：AI 回复身份（qa/pm/dev），默认 qa。
     """
-    msgs = [{"role": "system", "content": _SYSTEM_PROMPT if want_thinking else _SYSTEM_PROMPT_NO_THINK}]
+    msgs = [{"role": "system", "content": _system_prompt_for(role, want_thinking)}]
     if history:
         msgs.extend(history[-10:])  # 截断最多 10 轮避免超 token
     user_content = user_text or "（用户仅发送了附件，请结合下方的文档内容作答）"
@@ -302,6 +312,7 @@ async def chat_stream(
     attached_text: str = "",
     attach_name: str = "",
     enable_thinking: bool = True,
+    roles: list[str] | None = None,
 ):
     """对话流式生成器（async）。
 
@@ -314,12 +325,15 @@ async def chat_stream(
     enable_thinking：前端「深度思考」开关。True→注入 enable_thinking 并让 think 事件透传；
                      False→换用无思考要求的系统提示词、不注入参数，且丢弃 think 事件
                      （个别模型不认参数仍会吐推理，丢掉才符合"关了就不显示面板"的预期）。
+    roles：参与角色列表（pm/qa/dev），取第一个合法角色作为 AI 回复身份；空则默认 qa。
     """
     eff = resolve_effective(db, user)
     # 平台默认模型（source=platform，免费厂商由服务端 Key 兜底）同样算"已配好模型"。
     # 旧逻辑只认 user，导致平台默认配置被判为未配置、聊天恒走 mock 模板。
     use_real = eff.get("source") in ("user", "platform") and eff.get("text") is not None
-    messages = _build_messages(user_text or "", history, attached_text, enable_thinking)
+    # 角色选择：取列表中第一个合法角色，空则默认 qa（测试工程师）
+    role = next((r for r in (roles or []) if r in _ROLE_IDENTITY), "qa")
+    messages = _build_messages(user_text or "", history, attached_text, enable_thinking, role=role)
     if not use_real:
         async for ev in _mock_stream_chunks(user_text or "", attach_name, enable_thinking):
             yield ev

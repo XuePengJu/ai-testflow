@@ -32,6 +32,7 @@ interface TaskState {
   startPolling: (taskId: string) => void;
   stopPolling: (taskId: string) => void;
   deleteTask: (taskId: string) => Promise<void>;
+  retryTask: (taskId: string) => Promise<void>;
   openDetail: (taskId: string) => Promise<void>;
   closeDetail: () => void;
   /** 抽屉内活跃任务轮询（running 状态时 2s 刷新详情直至终态） */
@@ -129,6 +130,22 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     await get().refresh();
     const { useChatStore } = await import("./chatStore");
     useChatStore.getState().refreshConversations();
+  },
+
+  async retryTask(taskId) {
+    const r = await api(API + "/tasks/" + taskId + "/retry", { method: "POST" }).catch(() => null);
+    if (!r || !r.ok) {
+      toast("重试失败，请稍后再试");
+      return;
+    }
+    const t = (await r.json()) as Task;
+    // 更新本地任务状态为 pending，触发轮询
+    set({
+      tasks: get().tasks.map((x) => (x.id === taskId ? t : x)),
+    });
+    get().startPolling(taskId);
+    toast("已重新排队，从断点继续执行");
+    await get().refresh();
   },
 
   async openDetail(taskId) {

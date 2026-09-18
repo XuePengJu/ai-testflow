@@ -56,3 +56,4 @@ class ChatIn(BaseModel):
     task_id: str | None = None       # 迭代补充模式：关联的任务 id，AI 回复时附该任务用例摘要
     file_id: str | None = None       # 对话附件 id（POST /api/files 返回），AI 读取文档内容后作答
     thinking: bool = True            # 「深度思考」开关：关掉则不请求思考、也不显示思考面板
+    roles: list[str] | None = None   # 参与角色（pm/qa/dev），决定 AI 回复身份；空则默认测试工程师

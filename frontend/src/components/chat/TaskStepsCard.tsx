@@ -54,6 +54,7 @@ interface StepInfo {
 export default function TaskStepsCard({ task, showIterate = false }: { task: Task; showIterate?: boolean }) {
   const tasks = useTaskStore((s) => s.tasks);
   const openDetail = useTaskStore((s) => s.openDetail);
+  const retryTask = useTaskStore((s) => s.retryTask);
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(STEP_TITLES.map((t) => [t, true]))
   );
@@ -129,6 +130,19 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
         )}
         <span className={`pill pill-${badge.cls}`}>{badge.text}</span>
         {live.status === "completed" && <span className="tsc-cnt">共 {live.cases_count || 0} 个用例</span>}
+        {live.status === "failed" && (
+          <button
+            type="button"
+            className="tsc-retry-btn"
+            title="从断点重试（保留已完成的解析步骤）"
+            onClick={(e) => {
+              e.stopPropagation();
+              void retryTask(live.id);
+            }}
+          >
+            🔄 重试
+          </button>
+        )}
       </div>
       {mockNotice && (
         <div className="tsc-mock-tip">⚠️ 未配置可用模型，当前为模拟生成。请到「模型设置」配置真实模型后重新生成。</div>
@@ -153,15 +167,18 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
                 )}
                 <span className="tsc-hint">
                   {st === "running"
-                    ? (s?.progress || RUNNING_HINTS[title])
+                    ? (live.status === "failed" ? "已中断" : (s?.progress || RUNNING_HINTS[title]))
                     : s?.error ? "失败" : ""}
                 </span>
                 <span className={`tsc-toggle ${open ? "open" : ""}`}>{open ? "▾" : "▸"}</span>
               </button>
               {open && (
                 <div className="tsc-step-detail">
-                  {st === "running" && (
+                  {st === "running" && live.status !== "failed" && (
                     <div className="tsc-io-text tsc-muted">{s?.progress || RUNNING_HINTS[title]}</div>
+                  )}
+                  {st === "running" && live.status === "failed" && (
+                    <div className="tsc-io-text tsc-muted">任务已中断，可点击上方「🔄 重试」从断点继续</div>
                   )}
                   {s?.input_summary && (
                     <div className="tsc-io">
@@ -181,7 +198,7 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
                       <div className="tsc-io-text">{s.error}</div>
                     </div>
                   )}
-                  {st !== "running" && !hasDetail && (
+                  {st === "completed" && !hasDetail && (
                     <div className="tsc-io-text tsc-muted">（暂无思考记录）</div>
                   )}
                 </div>

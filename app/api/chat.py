@@ -179,7 +179,8 @@ async def _run(db: Session, user: User | None, body: ChatIn, source: str):
     context = "\n\n".join(x for x in (task_summary, _build_attachment_context(attached)) if x)
     try:
         async for ev, payload in llm_service.chat_stream(
-            db, user, body.message, body.history, context, attach_name, body.thinking
+            db, user, body.message, body.history, context, attach_name, body.thinking,
+            roles=body.roles,
         ):
             if ev == "delta":
                 full_text += payload

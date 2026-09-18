@@ -29,6 +29,8 @@ export interface ChatMsg {
   notice?: string;
   /** LLM 来源：mock / deepseek 等 */
   source?: string;
+  /** AI 回复身份（qa测试/pm产品/dev开发），决定消息头部标签显示 */
+  persona?: string;
 }
 
 export interface HistoryItem {
@@ -88,7 +90,8 @@ interface ChatState {
   conversationId: string | null;
   conversations: Conversation[];
   messages: ChatMsg[];
-  streaming: boolean;
+  /** 按会话隔离的流式状态：一个会话输出中不影响其他会话发消息 */
+  streamingByConversation: Record<string, boolean>;
   /** 消息流滚动定位：递增序号触发 ChatPanel scrollIntoView */
   focusSeq: number;
   focusTaskId: string | null;
@@ -127,7 +130,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversationId: null,
   conversations: [],
   messages: [],
-  streaming: false,
+  streamingByConversation: {},
   focusSeq: 0,
   focusTaskId: null,
   iterTaskId: null,
@@ -231,7 +234,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async requestIterate() {
     const iterId = get().iterTaskId;
     if (!iterId) return;
-    if (get().iterGenerating || get().streaming) {
+    if (get().iterGenerating || get().streamingByConversation[get().conversationId || ""]) {
       toast("请等待当前生成结束");
       return;
     }
@@ -316,7 +319,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       toast("请先登录或使用游客体验");
       return;
     }
-    if (get().streaming) {
+    if (get().streamingByConversation[get().conversationId || ""]) {
       toast("请先停止当前生成");
       return;
     }
@@ -332,6 +335,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (r.ok) {
           const c = (await r.json()) as Conversation;
           set({ conversationId: c.id });
+          // 立即刷新左侧会话列表：发消息就建会话，不等 AI 回复完成，避免切换会话后"丢失"
+          void get().refreshConversations();
         }
       } catch {
         /* 会话创建失败不阻断发送（消息不落会话，仍可生成） */
@@ -351,8 +356,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       id: nextId(), role: "user", content: text, thinking: "", state: "done",
       fileName: draft.file?.name,
     };
-    const aiMsg: ChatMsg = { id: nextId(), role: "assistant", content: "", thinking: "", state: "streaming" };
-    set({ messages: [...get().messages, userMsg, aiMsg], streaming: true });
+    const aiMsg: ChatMsg = {
+      id: nextId(), role: "assistant", content: "", thinking: "", state: "streaming",
+      // 取第一个选中的角色作为 AI 回复身份（多选时第一个生效，生成用例时才多视角并行）
+      persona: draft.roles?.[0] || "qa",
+    };
+    const convId = get().conversationId || "";
+    set({
+      messages: [...get().messages, userMsg, aiMsg],
+      streamingByConversation: { ...get().streamingByConversation, [convId]: true },
+    });
 
     // history：done 消息去掉刚追加的 user（与旧版 chatMessages.slice(0,-1) 对齐；
     // streaming 的 aiMsg 因 state 未 done 被 filter 排除）；只传附件没打字的消息正文为空，
@@ -364,7 +377,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       .map((m) => ({ role: m.role, content: m.content }));
 
     const aborter = new AbortController();
-    (get as unknown as { _aborter?: AbortController | null })._aborter = aborter;
+    const aborters = (get as unknown as { _aborters?: Record<string, AbortController> })._aborters || {};
+    aborters[convId] = aborter;
+    (get as unknown as { _aborters?: Record<string, AbortController> })._aborters = aborters;
 
     const patchAi = (patch: Partial<ChatMsg>) => {
       const msgs = get().messages;
@@ -404,6 +419,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           task_id: get().iterTaskId || undefined,
           file_id: fileId,
           thinking: draft.thinking !== false,
+          // 角色选择：决定 AI 回复身份（qa测试/pm产品/dev开发），取第一个选中的角色
+          roles: draft.roles?.length ? draft.roles : undefined,
         },
         aborter.signal,
         {
@@ -423,8 +440,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
               patchAi({ state: "error", error: String(ev.data.message || "未知错误") });
             } else if (ev.event === "done") {
               const full = typeof ev.data.full === "string" ? ev.data.full : "";
-              // 后端自动创建的会话 id（新会话首轮）：保存后切走/刷新可回到同一会话
-              if (ev.data.conversation_id) {
+              // 后端自动创建的会话 id（新会话首轮）：仅在当前无会话时兜底设置，
+              // 避免用户在输出中切换会话后被 done 事件强制切回原会话
+              if (ev.data.conversation_id && !get().conversationId) {
                 set({ conversationId: String(ev.data.conversation_id) });
               }
               // done 里的 thinking 与流式 think 事件同源，取其一避免重复拼接
@@ -457,14 +475,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         patchAi({ state: "error", error: e instanceof Error ? e.message : String(e) });
       }
     } finally {
-      (get as unknown as { _aborter?: AbortController | null })._aborter = null;
-      set({ streaming: false });
+      const aborters = (get as unknown as { _aborters?: Record<string, AbortController> })._aborters || {};
+      delete aborters[convId];
+      const nextStreaming = { ...get().streamingByConversation };
+      delete nextStreaming[convId];
+      set({ streamingByConversation: nextStreaming });
       get().refreshConversations(); // 后端已落库，刷新 message_count/排序
     }
   },
 
   stop() {
-    const aborter = (get as unknown as { _aborter?: AbortController | null })._aborter;
+    const convId = get().conversationId || "";
+    const aborters = (get as unknown as { _aborters?: Record<string, AbortController> })._aborters || {};
+    const aborter = aborters[convId];
     if (aborter) aborter.abort();
   },
 

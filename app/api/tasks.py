@@ -243,6 +243,52 @@ def delete_task(task_id: str,
     return {"ok": True, "deleted_task_id": task_id, "deleted_files": deleted_files}
 
 
+@router.post("/tasks/{task_id}/retry", response_model=TaskOut)
+def retry_task(task_id: str,
+                user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """重试失败任务（断点续跑）：只保留已完成的 parser 步骤，删除其余步骤后重新入队。
+
+    - 仅允许 failed 状态的任务重试
+    - parser 步骤已完成 → 保留其 StepLog（含 units 数据），run_task 会自动跳过并恢复
+    - 其余步骤（generator/reviewer/exporter）全部删除，重新执行
+    - 复用原任务的输入、配置（kind/formats/roles）、会话关联
+    """
+    t = _own_task(db, task_id, user)
+    if t.status != "failed":
+        raise HTTPException(status_code=400, detail=f"只有失败状态的任务可以重试（当前状态: {t.status}）")
+
+    # 只保留 parser 的 completed StepLog，删除其余所有步骤
+    db.execute(
+        delete(StepLog).where(
+            StepLog.task_id == t.id,
+            StepLog.name != "parser",
+        )
+    )
+    # parser 步骤如果不是 completed 也删掉（重新执行）
+    db.execute(
+        delete(StepLog).where(
+            StepLog.task_id == t.id,
+            StepLog.name == "parser",
+            StepLog.status != "completed",
+        )
+    )
+
+    # 重置任务状态与结果
+    t.status = "pending"
+    t.cases_count = 0
+    t.cases_json = None
+    t.report_json = None
+    t.duration_ms = 0
+    t.finished_at = None
+    t.created_at = datetime.utcnow()  # 重置创建时间，前端计时器从重试时刻开始计算
+    db.commit()
+
+    # 重新入全局任务队列
+    task_queue.enqueue(t.id)
+    return _to_out(db, t)
+
+
 def _delete_task_cascade(db: Session, t: Task) -> int:
     """删除任务的级联副作用：StepLog + 导出文件 + 清除 messages.task_id。
     返回删除的导出文件数。调用方负责 db.commit() 和 db.delete(t)。"""

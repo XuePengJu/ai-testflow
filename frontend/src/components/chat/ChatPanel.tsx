@@ -45,7 +45,10 @@ const ROLE_OPTIONS: { id: string; label: string; title: string }[] = [
 
 export default function ChatPanel() {
   const messages = useChatStore((s) => s.messages);
-  const streaming = useChatStore((s) => s.streaming);
+  const conversationId = useChatStore((s) => s.conversationId);
+  const streamingByConversation = useChatStore((s) => s.streamingByConversation);
+  // 按会话隔离的流式状态：当前会话在输出中才禁用输入框，其他会话不受影响
+  const streaming = conversationId ? (streamingByConversation[conversationId] ?? false) : false;
   const send = useChatStore((s) => s.send);
   const stop = useChatStore((s) => s.stop);
   const focusSeq = useChatStore((s) => s.focusSeq);

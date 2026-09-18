@@ -111,13 +111,17 @@ export default function MessageView({ msg }: { msg: ChatMsg }) {
   // ---- AI 消息 ----
   // 演示/未配模型时在标题行给一枚显式徽标（放头像里会被 34px 圆形裁掉，看不出来）
   const mockTag = msg.source === "mock" ? <span className="mock-tag">演示模式</span> : null;
+  // AI 身份标签：根据参与角色动态显示（qa测试/pm产品/dev开发），默认测试工程师
+  const personaLabel = msg.persona === "pm" ? "AI 产品经理"
+    : msg.persona === "dev" ? "AI 开发工程师"
+    : "AI 测试工程师";
 
   return (
     <div className="msg msg-ai">
       <div className="avatar">AI</div>
       <div className="bubble chat-bubble">
         <div className="bubble-title">
-          AI 测试工程师
+          {personaLabel}
           {mockTag}
         </div>
 
