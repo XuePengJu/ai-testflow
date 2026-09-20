@@ -56,6 +56,18 @@ export interface Conversation {
   message_count: number;
   task_count: number;
   messages?: ConvMessage[];
+  mode?: string;            // V4.1：workflow=首页工作流；kb_qa=知识库问答
+  kb_id?: string | null;    // V4.1：知识库问答绑定的库
+}
+
+/** V4.1 引用溯源（SSE citations 事件 items 元素，与后端 _build_rag_context 对齐） */
+export interface CitationItem {
+  chunk_id: string;
+  knowledge_id: string;
+  doc_title: string;
+  context_header: string;
+  snippet: string;
+  score: number | null;
 }
 
 /** 与 app/schemas/task.py:StepLogOut 对齐 */
@@ -151,6 +163,8 @@ export interface LLMEffective {
   source: string;
   text: { provider: string; provider_label: string; base_url: string; model: string } | null;
   vision: { provider: string; provider_label: string; base_url: string; model: string } | null;
+  embedding?: { provider: string; provider_label: string; base_url: string; model: string } | null;
+  embedding_source?: string;
 }
 
 /** /api/llm/test-default/{slot} 响应 */

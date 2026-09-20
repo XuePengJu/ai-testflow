@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { Task } from "../../types";
 import { useTaskStore } from "../../store/taskStore";
 import { isLatestOfChain } from "../../utils/taskChain";
+import { parseServerTime } from "../../utils/time";
 
 /** 毫秒 → 人类可读：<1s 显示 ms，<60s 显示 Xs，否则 mm:ss */
 function fmtDuration(ms: number): string {
@@ -123,7 +124,9 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
       <div className="tsc-head">
         <span className="tsc-name">{live.name}</span>
         {live.status === "running" && live.created_at && (
-          <span className="tsc-timer">⏱ {fmtDuration(now - new Date(live.created_at).getTime())}</span>
+          <span className="tsc-timer">
+            ⏱ {fmtDuration(now - (parseServerTime(live.created_at)?.getTime() ?? now))}
+          </span>
         )}
         {live.status === "completed" && live.duration_ms > 0 && (
           <span className="tsc-timer">⏱ {fmtDuration(live.duration_ms)}</span>
@@ -160,7 +163,9 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
                 <span className="tsc-ring">{ring}</span>
                 <span className="tsc-title">{title}</span>
                 {st === "running" && s?.started_at && (
-                  <span className="tsc-step-time">{fmtDuration(now - new Date(s.started_at).getTime())}</span>
+                  <span className="tsc-step-time">
+                    {fmtDuration(now - (parseServerTime(s.started_at)?.getTime() ?? now))}
+                  </span>
                 )}
                 {st === "completed" && s?.duration_ms != null && s.duration_ms > 0 && (
                   <span className="tsc-step-time">{fmtDuration(s.duration_ms)}</span>

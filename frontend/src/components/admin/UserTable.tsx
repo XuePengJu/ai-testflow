@@ -8,6 +8,7 @@ import { useState } from "react";
 import { Shield, User, UserX, Ban, Check, Broom, Trash2 } from "lucide-react";
 import { api, API, toast } from "../../api/client";
 import type { AdminUserRow } from "../../types";
+import { parseServerTime } from "../../utils/time";
 
 interface Props {
   users: AdminUserRow[];
@@ -18,9 +19,8 @@ interface Props {
 const ROLE_LABEL: Record<string, string> = { guest: "访客", user: "用户", admin: "管理员" };
 
 function fmtDate(s?: string | null): string {
-  if (!s) return "—";
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return "—";
+  const d = parseServerTime(s);
+  if (!d) return "—";
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
@@ -41,7 +41,7 @@ export default function UserTable({ users, myId, onChanged }: Props) {
 
   const patchUser = async (u: AdminUserRow, is_active: boolean) => {
     const msg = u.role === "guest"
-      ? `禁用访客「${u.username}」将立即清理其全部数据（${u.tasks} 个任务），确定？`
+      ? `清空共享访客「${u.username}」的全部数据（${u.tasks} 个任务），确定？`
       : `确定${is_active ? "启用" : "禁用"}用户「${u.username}」？`;
     if (!window.confirm(msg)) return;
     setBusyId(u.id);
@@ -51,7 +51,7 @@ export default function UserTable({ users, myId, onChanged }: Props) {
         body: JSON.stringify({ is_active }),
       });
       if (r.ok) {
-        toast(u.role === "guest" && !is_active ? "访客已清理" : "已更新");
+        toast(u.role === "guest" && !is_active ? "共享访客数据已清空" : "已更新");
         onChanged();
       } else {
         const d = (await r.json().catch(() => null)) as { detail?: string } | null;
@@ -124,8 +124,8 @@ export default function UserTable({ users, myId, onChanged }: Props) {
                       <button
                         className="icon-btn"
                         disabled={busyId === u.id}
-                        title={u.role === "guest" ? "清理访客" : u.is_active ? "禁用" : "启用"}
-                        aria-label={u.role === "guest" ? "清理访客" : u.is_active ? "禁用" : "启用"}
+                        title={u.role === "guest" ? "清空共享访客数据" : u.is_active ? "禁用" : "启用"}
+                        aria-label={u.role === "guest" ? "清空共享访客数据" : u.is_active ? "禁用" : "启用"}
                         onClick={() => void patchUser(u, !u.is_active)}
                       >
                         {u.role === "guest" ? <Broom size={15} /> : u.is_active ? <Ban size={15} /> : <Check size={15} />}

@@ -8,6 +8,7 @@ import type { ChatMsg } from "../../store/chatStore";
 import { useChatStore } from "../../store/chatStore";
 import { toast } from "../../api/client";
 import TaskStepsCard from "./TaskStepsCard";
+import Citations from "./Citations";
 
 // GFM：表格 / 任务列表 / 删除线；breaks：单个换行也换行（保持旧版 <br> 的观感，行距不变）
 marked.setOptions({ gfm: true, breaks: true });
@@ -91,7 +92,15 @@ function renderInline(text: string): string {
     .replace(/\n/g, "<br>");
 }
 
-export default function MessageView({ msg }: { msg: ChatMsg }) {
+export default function MessageView({
+  msg,
+  showCitations = false,
+  onCiteClick,
+}: {
+  msg: ChatMsg;
+  showCitations?: boolean;
+  onCiteClick?: (knowledgeId: string) => void;
+}) {
   const streaming = msg.state === "streaming";
   const confirmCreateTask = useChatStore((s) => s.confirmCreateTask);
 
@@ -111,8 +120,9 @@ export default function MessageView({ msg }: { msg: ChatMsg }) {
   // ---- AI 消息 ----
   // 演示/未配模型时在标题行给一枚显式徽标（放头像里会被 34px 圆形裁掉，看不出来）
   const mockTag = msg.source === "mock" ? <span className="mock-tag">演示模式</span> : null;
-  // AI 身份标签：根据参与角色动态显示（qa测试/pm产品/dev开发），默认测试工程师
-  const personaLabel = msg.persona === "pm" ? "AI 产品经理"
+  // AI 身份标签：根据参与角色动态显示（kb知识库助手/qa测试/pm产品/dev开发），默认测试工程师
+  const personaLabel = msg.persona === "kb" ? "知识库助手"
+    : msg.persona === "pm" ? "AI 产品经理"
     : msg.persona === "dev" ? "AI 开发工程师"
     : "AI 测试工程师";
 
@@ -150,6 +160,11 @@ export default function MessageView({ msg }: { msg: ChatMsg }) {
             {msg.state === "stopped" && <div className="msg-stopped">（已停止生成）</div>}
           </>
         )}
+
+        {/* V4.1 引用溯源：showCitations 开启且消息带 citations 时渲染（知识库问答） */}
+        {showCitations && msg.citations?.length ? (
+          <Citations items={msg.citations} onCiteClick={onCiteClick} />
+        ) : null}
 
         {/* 任务卡（消息升级后） */}
         {msg.task && <TaskStepsCard task={msg.task} showIterate />}

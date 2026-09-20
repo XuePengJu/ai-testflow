@@ -16,11 +16,11 @@ import CategoryTree from "./CategoryTree";
 import { useAuth } from "../../hooks/useAuth";
 import { toast } from "../../api/client";
 import type { Task } from "../../types";
+import { parseServerTime } from "../../utils/time";
 
 function fmtTime(s?: string | null): string {
-  if (!s) return "";
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return "";
+  const d = parseServerTime(s);
+  if (!d) return "";
   const p = (n: number) => String(n).padStart(2, "0");
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
