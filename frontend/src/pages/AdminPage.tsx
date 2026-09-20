@@ -4,7 +4,7 @@
  * V4：统计卡加图标 + 左对齐；访客治理按钮规范化（secondary / outline-danger）。
  */
 import { useCallback, useEffect, useState } from "react";
-import { Users, UserX, Clock, ClipboardList, Broom, Trash2 } from "lucide-react";
+import { Users, UserX, ClipboardList, Trash2 } from "lucide-react";
 import { apiJson, API, toast } from "../api/client";
 import { useAuth } from "../hooks/useAuth";
 import { useSettingsStore } from "../store/settingsStore";
@@ -38,18 +38,18 @@ export default function AdminPage() {
     }
   }, [ready, role, loadAll, loadEffective]);
 
-  const cleanGuests = async (mode: "expired" | "all") => {
+  const resetSharedGuest = async () => {
     const msg =
-      mode === "all"
-        ? "⚠️ 强制清理全部活跃访客（无论是否到期，数据不可恢复），确定？"
-        : "清理全部已到期访客数据，确定？";
+      "⚠️ 将清空共享访客账号下的全部任务与文件（账号本身保留，所有人仍可继续使用），确定？";
     if (!window.confirm(msg)) return;
-    setCleaning(mode);
+    setCleaning("reset");
     try {
-      const path = mode === "all" ? "/admin/guests/clean-all" : "/admin/guests/clean";
-      const r = await apiJson<{ cleaned: number }>(API + path, { method: "POST" });
+      const r = await apiJson<{ deleted_tasks: number; deleted_files: number }>(
+        API + "/admin/guest/shared/reset",
+        { method: "POST" },
+      );
       if (r) {
-        toast(`已清理 ${r.cleaned} 个访客`);
+        toast(`已清空共享访客数据（${r.deleted_tasks} 个任务 / ${r.deleted_files} 个文件）`);
         void loadAll();
       }
     } finally {
@@ -76,14 +76,7 @@ export default function AdminPage() {
           <div className="stat-icon orange"><UserX size={22} /></div>
           <div className="stat-body">
             <div className="s-num">{stats?.active_guests ?? "—"}</div>
-            <div className="s-label">活跃访客</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon purple"><Clock size={22} /></div>
-          <div className="stat-body">
-            <div className="s-num">{stats?.cleaned_24h ?? "—"}</div>
-            <div className="s-label">24h 内清理</div>
+            <div className="s-label">共享访客</div>
           </div>
         </div>
         <div className="stat-card">
@@ -96,25 +89,17 @@ export default function AdminPage() {
       </section>
 
       <section className="set-card guest-clean-bar">
-        <h3>访客治理</h3>
+        <h3>访客数据</h3>
+        <div className="sub">访客为全站唯一共享账号（免注册共用），不会过期，仅管理员可清空其数据。</div>
         <div className="llm-btnrow">
-          <button
-            className="btn-secondary btn-md"
-            disabled={!!cleaning}
-            onClick={() => void cleanGuests("expired")}
-            data-testid="clean-expired"
-          >
-            <Broom size={14} />
-            {cleaning === "expired" ? "清理中…" : "清理已到期访客"}
-          </button>
           <button
             className="btn-outline-danger btn-md"
             disabled={!!cleaning}
-            onClick={() => void cleanGuests("all")}
-            data-testid="clean-all"
+            onClick={() => void resetSharedGuest()}
+            data-testid="clean-expired"
           >
             <Trash2 size={14} />
-            {cleaning === "all" ? "清理中…" : "强制清理全部访客"}
+            {cleaning === "reset" ? "清空中…" : "清空共享访客数据"}
           </button>
         </div>
       </section>
@@ -137,6 +122,12 @@ export default function AdminPage() {
             slot="vision"
             mode="platform"
             saved={platform.find((c) => c.slot === "vision")}
+            onSaved={() => void loadAll()}
+          />
+          <LLMConfigCard
+            slot="embedding"
+            mode="platform"
+            saved={platform.find((c) => c.slot === "embedding")}
             onSaved={() => void loadAll()}
           />
         </div>

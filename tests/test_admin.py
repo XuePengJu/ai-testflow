@@ -131,34 +131,30 @@ def test_admin_stats(client, accounts):
     assert r.status_code == 200
     j = r.json()
     assert j["registered_users"] >= 2
-    assert j["active_guests"] >= 0
-    assert "cleaned_24h" in j
+    # 共享 guest 恒存在且全站唯一 → 活跃访客只能是 1
+    assert j["active_guests"] == 1
+    assert "total_tasks" in j
+    # 「24h 内清理」随动态访客机制一起移除
+    assert "cleaned_24h" not in j
 
 
-def test_admin_manual_clean(client, accounts):
-    r = client.post("/api/admin/guests/clean", headers=_hdr(accounts["admin"]["token"]))
-    assert r.status_code == 200
-    assert "cleaned" in r.json()
-
-
-def test_admin_clean_all_guests(client, accounts):
-    """清空全部访客：未到期访客也被强制清理，且仅 admin 可调用。"""
-    # 建 2 个访客
-    g1 = client.post("/api/guest/token").json()
-    g2 = client.post("/api/guest/token").json()   # 同 IP 复用同一访客，但另一 IP 场景已由 test_guest 覆盖
-    # user 无权限
-    assert client.post("/api/admin/guests/clean-all",
+def test_admin_reset_shared_guest_data(client, accounts):
+    """清空共享访客数据：仅 admin 可调，返回清理统计。"""
+    assert client.post("/api/admin/guest/shared/reset",
                        headers=_hdr(accounts["user"]["token"])).status_code == 403
-    # admin 强制清理（无论是否到期）
-    r = client.post("/api/admin/guests/clean-all", headers=_hdr(accounts["admin"]["token"]))
+    r = client.post("/api/admin/guest/shared/reset", headers=_hdr(accounts["admin"]["token"]))
     assert r.status_code == 200
-    assert r.json()["cleaned"] >= 1
-    # 清理后访客 token 立即失效
-    assert client.get("/api/auth/me", headers=_hdr(g1["access_token"])).status_code == 401
-    assert client.get("/api/auth/me", headers=_hdr(g2["access_token"])).status_code == 401
-    # 列表中不再有 guest
+    assert "deleted_tasks" in r.json()
+
+
+def test_shared_guest_survives_reset(client, accounts):
+    """清空只删任务/文件，账号本身保留 → 访客仍可继续使用，且全站仍只有一个 guest。"""
+    token = client.post("/api/guest/token").json()["access_token"]
+    assert client.post("/api/admin/guest/shared/reset",
+                       headers=_hdr(accounts["admin"]["token"])).status_code == 200
+    assert client.get("/api/auth/me", headers=_hdr(token)).status_code == 200
     users = client.get("/api/users", headers=_hdr(accounts["admin"]["token"])).json()
-    assert all(u["role"] != "guest" for u in users)
+    assert sum(1 for u in users if u["role"] == "guest") == 1, "共享 guest 账号应保留且唯一"
 
 
 def test_admin_tasks_all(client, accounts):
@@ -170,7 +166,7 @@ def test_admin_tasks_all(client, accounts):
 
 
 def test_guest_disable_equals_clean(client, accounts, fresh_guest):
-    """禁用 guest = 立即清理其数据。"""
+    """禁用共享 guest = 清空其体验数据（账号本身保留，所有人仍可继续使用）。"""
     token, _ = fresh_guest
     me = client.get("/api/auth/me", headers=_hdr(token)).json()
     uname = me["username"]
@@ -179,8 +175,10 @@ def test_guest_disable_equals_clean(client, accounts, fresh_guest):
     users = client.get("/api/users", headers=_hdr(admin_token)).json()
     gid = [u["id"] for u in users if u["username"] == uname][0]
     r = client.patch(f"/api/users/{gid}", headers=_hdr(admin_token), json={"is_active": False})
-    assert r.status_code == 200
-    assert client.get("/api/auth/me", headers=_hdr(token)).status_code == 401
+    assert r.status_code == 200, r.text
+    assert "cleaned" in r.json(), "应返回清理统计"
+    # 共享账号不被删除：访客仍可继续使用
+    assert client.get("/api/auth/me", headers=_hdr(token)).status_code == 200
 
 
 # ---------------- 角色权限矩阵（24 断言） ----------------
@@ -189,12 +187,11 @@ def test_guest_disable_equals_clean(client, accounts, fresh_guest):
 MATRIX = [
     # path, method, guest, user, admin
     ("/api/auth/me", "GET", 200, 200, 200),
-    ("/api/guest/token", "POST", 200, 200, 200),          # 任意角色可按 IP 拿访客身份
+    ("/api/guest/token", "POST", 200, 200, 200),          # 任意角色可拿共享访客身份
     ("/api/tasks", "GET", 200, 200, 200),
     ("/api/users", "GET", 403, 403, 200),
     ("/api/admin/stats", "GET", 403, 403, 200),
-    ("/api/admin/guests/clean", "POST", 403, 403, 200),
-    ("/api/guest/upgrade", "POST", 422, 403, 403),        # guest 缺参 422；非 guest 403
+    ("/api/admin/guest/shared/reset", "POST", 403, 403, 200),
     ("/api/tasks", "POST", 400, 400, 400),                # 空参 400（鉴权均放行）
 ]
 
@@ -222,4 +219,3 @@ def test_role_matrix_unauth(client, accounts):
     assert client.post("/api/tasks").status_code == 401
     assert client.get("/api/tasks/whatever").status_code == 401
     assert client.get("/api/tasks/whatever/download").status_code == 401
-    assert client.post("/api/guest/upgrade").status_code == 401

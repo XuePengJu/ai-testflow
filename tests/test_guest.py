@@ -1,4 +1,12 @@
-"""访客测试：生命周期 / 防滥用 / 懒清理 / 转正。对应方案 9.7 访客相关两张表。"""
+"""访客测试（V2 简化后）：全站唯一固定共享 guest 账号。
+
+旧版「按 IP 动态建访客 / 24h TTL 过期 / 懒清理 / 单 IP 限频 / 访客转正」已整体移除，
+对应旧用例（生命周期、防滥用、转正、同 IP 复用）不再适用，此处按新模型重写：
+
+- 只有一个固定账号（username='guest'，data_dir='guest_shared'），所有人共用、不过期
+- 启动/取 token 时会清掉历史遗留的动态 guest_* 账号
+- 管理员可清空共享访客的数据，但账号本身保留
+"""
 import time
 
 SPEC_TEXT = "# 登录模块\n- 用户输入正确账号密码，点击登录，登录成功跳转首页"
@@ -22,165 +30,92 @@ def _wait_done(client, token, tid, timeout=30):
     raise AssertionError(f"任务 {tid} 未在 {timeout}s 内完成")
 
 
-def _delete_guest_record(username: str):
-    """物理删除 guest 记录（模拟清理），验证创建日志计数仍在。"""
-    from app.core.db import SessionLocal
-    from app.models.user import User
-    db = SessionLocal()
-    try:
-        g = db.query(User).filter(User.username == username).first()
-        if g:
-            db.delete(g)
-            db.commit()
-    finally:
-        db.close()
+# ---------------- 固定共享账号 ----------------
 
-
-# ---------------- 生命周期 ----------------
-
-def test_guest_token_issue(client, fresh_guest):
-    token, _ = fresh_guest
-    r = client.get("/api/auth/me", headers=_hdr(token))
-    j = r.json()
-    assert r.status_code == 200
-    assert j["role"] == "guest"
-    assert j["username"].startswith("guest_")
-    assert 20 < j["remaining_hours"] <= 24, "剩余时长应约为 24h"
-
-
-def test_same_ip_reuse(client, fresh_guest, monkeypatch):
-    """同 IP 未过期二访 → 复用同一 guest（数据续用）。"""
-    from app.api import guest as guest_mod
-    token, ip = fresh_guest
-    me1 = client.get("/api/auth/me", headers=_hdr(token)).json()
-    monkeypatch.setattr(guest_mod, "_client_ip", lambda req: ip)
-    r2 = client.post("/api/guest/token")
-    assert r2.status_code == 200
-    assert r2.json()["username"] == me1["username"]
-
-
-def test_guest_files_isolated(client, fresh_guest):
-    token, _ = fresh_guest
-    me = client.get("/api/auth/me", headers=_hdr(token)).json()
-    r = _mk_task(client, token)
-    assert r.status_code == 201
-    from app.core.config import OUTPUT_DIR
-    assert (OUTPUT_DIR / me["username"]).exists(), "访客文件应隔离在自己的临时目录"
-
-
-# ---------------- 防滥用 ----------------
-
-def test_guest_task_limit(client, fresh_guest):
-    """访客任务上限（测试环境 GUEST_MAX_TASKS=3）→ 第 4 个 429。"""
-    token, _ = fresh_guest
-    for _ in range(3):
-        assert _mk_task(client, token).status_code == 201
-    assert _mk_task(client, token).status_code == 429
-
-
-def test_guest_daily_limit_survives_record_delete(client, monkeypatch):
-    """单 IP 24h 上限（测试环境=3）：guest 记录物理删除后计数仍在 → 第 4 次 429。"""
-    from app.api import guest as guest_mod
-    monkeypatch.setattr(guest_mod, "_client_ip", lambda req: "172.31.99.9")
-    for _ in range(3):
-        r = client.post("/api/guest/token")
-        assert r.status_code == 200
-        _delete_guest_record(r.json()["username"])  # 模拟到期物理删
+def test_guest_token_returns_fixed_account(client):
     r = client.post("/api/guest/token")
-    assert r.status_code == 429, "计数走独立表，不随 guest 记录删除失效"
-
-
-# ---------------- 过期与懒清理 ----------------
-
-def test_expired_guest_lazy_clean(client, fresh_guest, expire_guest):
-    token, _ = fresh_guest
-    me = client.get("/api/auth/me", headers=_hdr(token)).json()
-    uname = me["username"]
-
-    r = _mk_task(client, token)
-    assert r.status_code == 201
-    _wait_done(client, token, r.json()["id"])  # 等后台任务跑完再清理，避免并发写
-
-    expire_guest(uname)
-    r = client.get("/api/auth/me", headers=_hdr(token))
-    assert r.status_code == 401
-    assert "到期" in r.text
-
-    # 懒清理：用户记录物理删 + 任务级联删 + 临时目录删
-    from app.core.db import SessionLocal
-    from app.models.user import User
-    from app.models.task import Task
-    from app.core.config import OUTPUT_DIR
-    db = SessionLocal()
-    try:
-        assert db.query(User).filter(User.username == uname).first() is None, "guest 应被物理删除"
-        assert db.query(Task).filter(Task.user_id.isnot(None)).count() >= 0
-    finally:
-        db.close()
-    assert not (OUTPUT_DIR / uname).exists(), "访客临时目录应被删除"
-
-
-def test_same_ip_recreate_after_clean(client, fresh_guest, expire_guest, monkeypatch):
-    """清理后同 IP 再访 → 全新 guest（seq 递增，不撞唯一约束）。"""
-    from app.api import guest as guest_mod
-    token, ip = fresh_guest
-    me = client.get("/api/auth/me", headers=_hdr(token)).json()
-    expire_guest(me["username"])
-    client.get("/api/auth/me", headers=_hdr(token))  # 触发懒清理
-
-    monkeypatch.setattr(guest_mod, "_client_ip", lambda req: ip)
-    r = client.post("/api/guest/token")
-    assert r.status_code == 200
-    assert r.json()["username"] != me["username"]
-    assert r.json()["username"].startswith("guest_")
-
-
-# ---------------- 转正 ----------------
-
-def test_guest_upgrade(client, fresh_guest):
-    """访客转正：任务保留 + 文件迁入新目录 + 原 token 角色变化。"""
-    token, _ = fresh_guest
-    me = client.get("/api/auth/me", headers=_hdr(token)).json()
-    uname = me["username"]
-
-    r = _mk_task(client, token)
-    assert r.status_code == 201
-    tid = r.json()["id"]
-    _wait_done(client, token, tid)
-
-    r = client.post("/api/guest/upgrade", headers=_hdr(token),
-                    json={"username": "upgraded_user", "email": "up@test.com",
-                          "password": "Upwd1234"})
     assert r.status_code == 200, r.text
-    new_token = r.json()["access_token"]
-    assert r.json()["role"] == "user"
+    assert r.json()["role"] == "guest"
+    assert r.json()["username"] == "guest"
 
-    # me 角色变为 user
-    me2 = client.get("/api/auth/me", headers=_hdr(new_token)).json()
-    assert me2["role"] == "user" and me2["username"] == "upgraded_user"
 
-    # 任务保留（迁移不丢）
-    tasks = client.get("/api/tasks", headers=_hdr(new_token)).json()
-    assert any(t["id"] == tid for t in tasks), "转正后任务应完整保留"
+def test_guest_token_is_shared_not_per_ip(client):
+    """多次取 token 都应是同一个固定账号，绝不按来源另建身份。"""
+    r1 = client.post("/api/guest/token")
+    r2 = client.post("/api/guest/token")
+    assert r1.status_code == 200 and r2.status_code == 200
+    id1 = client.get("/api/auth/me", headers=_hdr(r1.json()["access_token"])).json()["id"]
+    id2 = client.get("/api/auth/me", headers=_hdr(r2.json()["access_token"])).json()["id"]
+    assert id1 == id2, "所有人必须共用同一个访客账号"
 
-    # 目录迁移 + 下载可用
+
+def test_shared_guest_never_expires(client):
+    """共享 guest 不过期：不应有 remaining_hours 倒计时。"""
+    token = client.post("/api/guest/token").json()["access_token"]
+    me = client.get("/api/auth/me", headers=_hdr(token)).json()
+    assert me["role"] == "guest"
+    assert me.get("remaining_hours") is None, "共享访客不应有过期倒计时"
+
+
+def test_shared_guest_files_in_own_dir(client):
+    token = client.post("/api/guest/token").json()["access_token"]
+    r = _mk_task(client, token)
+    assert r.status_code == 201, r.text
     from app.core.config import OUTPUT_DIR
-    assert (OUTPUT_DIR / f"u_{me2['id']}").exists()
-    assert not (OUTPUT_DIR / uname).exists(), "旧 guest 目录应被迁走"
-    assert client.get(f"/api/tasks/{tid}/download?fmt=json",
-                      headers=_hdr(new_token)).status_code == 200
-
-    # 转正后不能再调转正接口
-    r = client.post("/api/guest/upgrade", headers=_hdr(new_token),
-                    json={"username": "x_again", "email": "x@test.com",
-                          "password": "Upwd1234"})
-    assert r.status_code == 403
+    assert (OUTPUT_DIR / "guest_shared").exists(), "共享访客文件应在 guest_shared 目录"
 
 
-def test_registered_user_cannot_guest_token_flow(client, accounts):
-    """注册用户走 /api/guest/token 会按 IP 另建身份（与自身账号无关）——行为符合设计，
-    此处断言不会污染已有账号。"""
-    before = client.get("/api/auth/me", headers=_hdr(accounts["user"]["token"])).json()
-    client.post("/api/guest/token")
-    after = client.get("/api/auth/me", headers=_hdr(accounts["user"]["token"])).json()
-    assert before["id"] == after["id"]
+# ---------------- 已移除的能力 ----------------
+
+def test_upgrade_endpoint_removed(client):
+    """转正接口随动态访客一起删除 → 404。"""
+    token = client.post("/api/guest/token").json()["access_token"]
+    r = client.post("/api/guest/upgrade", headers=_hdr(token),
+                    json={"username": "up_u", "email": "u@t.com", "password": "Upwd1234"})
+    assert r.status_code == 404, "访客转正接口应已删除"
+
+
+def test_legacy_dynamic_guests_purged(client):
+    """历史遗留的动态 guest_* 账号会在 ensure_shared_guest 时被清掉，只留一个共享 guest。"""
+    from app.core.db import SessionLocal
+    from app.models.user import User
+
+    db = SessionLocal()
+    try:
+        legacy = User(username="guest_deadbeef_0", role="guest", data_dir="guest_deadbeef_0")
+        db.add(legacy)
+        db.commit()
+        legacy_id = legacy.id
+    finally:
+        db.close()
+
+    client.post("/api/guest/token")  # 触发 ensure_shared_guest → purge_legacy_guests
+
+    db = SessionLocal()
+    try:
+        assert db.get(User, legacy_id) is None, "旧动态 guest 账号应被清除"
+        assert db.query(User).filter(User.role == "guest").count() == 1, "只应剩一个共享 guest"
+    finally:
+        db.close()
+
+
+# ---------------- 管理员清空共享访客数据 ----------------
+
+def test_admin_reset_shared_guest_data(client, accounts):
+    """清空共享访客数据：任务被清掉，但账号保留、仍可继续使用。"""
+    token = client.post("/api/guest/token").json()["access_token"]
+    r = _mk_task(client, token)
+    assert r.status_code == 201, r.text
+    _wait_done(client, token, r.json()["id"])
+
+    admin = accounts["admin"]["token"]
+    rr = client.post("/api/admin/guest/shared/reset", headers=_hdr(admin))
+    assert rr.status_code == 200, rr.text
+    assert rr.json().get("deleted_tasks", 0) >= 1
+
+    tasks = client.get("/api/tasks", headers=_hdr(token)).json()
+    assert tasks == [], "共享访客的任务应被清空"
+
+    # 账号本身保留，仍可继续使用
+    assert client.post("/api/guest/token").status_code == 200
+    assert client.get("/api/auth/me", headers=_hdr(token)).json()["role"] == "guest"

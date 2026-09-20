@@ -68,8 +68,8 @@ def test_guest_decrypt_roundtrip(client, fresh_guest, enc_on):
     r = client.get("/api/auth/me", headers=_hdr(token))
     obj = crypto.decrypt_obj(r.json()["enc"], key)
     assert obj["role"] == "guest"
-    assert obj["username"].startswith("guest_")
-    assert obj["remaining_hours"] > 20
+    assert obj["username"] == "guest", "共享访客账号名固定为 guest"
+    assert obj.get("remaining_hours") is None, "共享访客不过期，不应有倒计时"
 
 
 # ---------------- 请求体加密 ----------------
@@ -144,12 +144,13 @@ def test_plaintext_when_flag_off(client, accounts):
 
 # ---------------- 密钥派生稳定性 ----------------
 
-def test_guest_upgrade_keeps_key(client, fresh_guest, enc_on):
-    """访客转正后 user_id 不变 → 派生密钥不变，前端无需换密钥。"""
-    token, _ = fresh_guest
-    gid = security.decode_token(token)["sub"]
-    r = client.post("/api/guest/upgrade", headers=_hdr(token),
-                    json={"username": "enc_upg", "email": "enc_upg@test.com",
-                          "password": "Upwd1234"})
-    assert r.status_code == 200, r.text
-    assert r.json()["enc_key"] == crypto.derive_key(gid)
+def test_shared_guest_key_is_stable(client, enc_on):
+    """共享 guest 是固定账号：多次取 token 的 user_id 与派生密钥恒定（所有人共用同一身份）。"""
+    r1 = client.post("/api/guest/token")
+    r2 = client.post("/api/guest/token")
+    assert r1.status_code == 200 and r2.status_code == 200, r1.text
+    assert r1.json()["username"] == "guest"
+    gid = security.decode_token(r1.json()["access_token"])["sub"]
+    gid2 = security.decode_token(r2.json()["access_token"])["sub"]
+    assert gid == gid2, "共享 guest 必须始终是同一个账号"
+    assert r1.json()["enc_key"] == crypto.derive_key(gid)

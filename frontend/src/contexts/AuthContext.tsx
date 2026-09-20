@@ -4,8 +4,11 @@
  * 行为对齐旧前端（frontend-legacy）：
  * - 首次打开（无 token 且非手动退出）→ 静默进访客模式
  * - 手动退出 → sessionStorage 标记 atf_manual_logout，重载后弹登录框、不再自动进访客
- * - /auth/me 刷新用户信息（guest 剩余时长倒计时）
- * - 登录/注册/访客/转正均走明文通道，成功后整页 reload（与旧版一致，状态从 localStorage 重建）
+ * - /auth/me 刷新用户信息
+ * - 登录/注册/访客均走明文通道，成功后由各视图自行响应 me 变化
+ *
+ * V2 简化：访客是**全站唯一固定共享账号**（后端 username='guest'），
+ * 所有人共用、不过期、不转正，因此没有 remaining_hours 倒计时与「转正」入口。
  */
 import {
   createContext,
@@ -24,12 +27,11 @@ import {
   persist,
   readPersisted,
   setAuthSnapshot,
-  TOKEN_KEY,
   type AuthSnapshot,
 } from "./authState";
 import { api } from "../api/client";
 
-type AuthMode = "login" | "register" | "upgrade";
+type AuthMode = "login" | "register";
 
 /** 后端错误 detail 提取：字符串直取；422 校验数组取首条 msg（避免显示 [object Object]） */
 function detailOf(d: { detail?: unknown } | null | undefined): string {
@@ -52,7 +54,6 @@ interface AuthContextValue {
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
   guest: () => Promise<void>;
-  upgrade: (username: string, email: string, password: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -81,7 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState(s);
   }, []);
 
-  /** 登录/注册/转正成功后补拉 /auth/me：登录响应无 id（-1 占位），靠这里补齐真实 id/邮箱等 */
+  /** 登录/注册成功后补拉 /auth/me：登录响应无 id（-1 占位），靠这里补齐真实 id/邮箱等 */
   const refreshMe = useCallback(async () => {
     const snap = getAuthSnapshot();
     if (!snap.token) return;
@@ -114,7 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setReady(true);
           return;
         }
-        // 静默进访客
+        // 静默进访客（固定共享账号）
         try {
           const r = await fetch("/api/guest/token", { method: "POST" });
           const d = (await r.json().catch(() => ({}))) as Partial<AuthResponse>;
@@ -128,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 email: null,
                 role: "guest",
                 is_active: true,
-                remaining_hours: d.remaining_hours ?? null,
+                remaining_hours: null, // 共享访客不过期，无倒计时
               },
             });
             setReady(true);
@@ -236,38 +237,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email: null,
         role: "guest",
         is_active: true,
-        remaining_hours: d.remaining_hours ?? null,
+        remaining_hours: null, // 共享访客不过期
       },
     });
     setLoginModal({ open: false, mode: "login" });
   }, [apply]);
-
-  const upgrade = useCallback(
-    async (username: string, email: string, password: string) => {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      const t = localStorage.getItem(TOKEN_KEY) || "";
-      if (t) headers["Authorization"] = "Bearer " + t;
-      const r = await fetch("/api/guest/upgrade", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ username, email, password }),
-      });
-      const d = (await r.json().catch(() => ({}))) as Partial<AuthResponse> & { detail?: string };
-    if (!r.ok) throw new Error(detailOf(d) || "失败：" + r.status);
-    const me: Me & { enc_key?: string } = {
-      id: -1, // 登录响应无 id，refreshMe 补齐
-      username: d.username || username,
-      email: email || null,
-      role: d.role || "user",
-      is_active: true,
-      enc_key: d.enc_key,
-    };
-    apply({ token: d.access_token || "", encKey: d.enc_key || "", me });
-    void refreshMe();
-    setLoginModal({ open: false, mode: "login" });
-  },
-    [apply, refreshMe],
-  );
 
   const logout = useCallback(() => {
     try {
@@ -285,7 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoginModal({ open: true, mode });
   }, []);
 
-  /* 登录态变化（login/register/guest/upgrade 成功）→ reload 一次，让各页面拿到干净初始态（旧版行为） */
+  /* 登录态变化（login/register/guest 成功）→ 由各视图自行响应 me 变化 */
   const authJustChanged = useRef(false);
   useEffect(() => {
     if (!ready) return;
@@ -293,7 +267,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authJustChanged.current = false;
       return;
     }
-    // noop：React 版不再无脑 reload，由各视图自行响应 me 变化
+    // noop：React 版不再无脑 reload
   }, [state.token, ready]);
 
   const value = useMemo<AuthContextValue>(
@@ -315,13 +289,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authJustChanged.current = true;
         await guest(...args);
       },
-      upgrade: async (...args) => {
-        authJustChanged.current = true;
-        await upgrade(...args);
-      },
       logout,
     }),
-    [state, ready, showLogin, login, register, guest, upgrade, logout],
+    [state, ready, showLogin, login, register, guest, logout],
   );
 
   return (
@@ -330,7 +300,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       {loginModal.open && (
         <LoginModal
           mode={loginModal.mode}
-          isGuest={state.me?.role === "guest"}
           onClose={() => setLoginModal({ open: false, mode: "login" })}
         />
       )}
@@ -338,18 +307,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/* 登录弹窗（M1 简版：登录/注册/访客三入口 + 访客转正） */
-function LoginModal({
-  mode,
-  isGuest,
-  onClose,
-}: {
-  mode: AuthMode;
-  isGuest: boolean;
-  onClose: () => void;
-}) {
+/* 登录弹窗（登录 / 注册 / 游客体验 三入口；共享访客无「转正」入口） */
+function LoginModal({ mode, onClose }: { mode: AuthMode; onClose: () => void }) {
   const ctx = useContext(AuthContext)!;
-  const [tab, setTab] = useState<AuthMode>(mode === "upgrade" ? "upgrade" : mode);
+  const [tab, setTab] = useState<AuthMode>(mode === "register" ? "register" : "login");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -369,8 +330,7 @@ function LoginModal({
     setError("");
     try {
       if (tab === "login") await ctx.login(username, password);
-      else if (tab === "register") await ctx.register(username, email, password);
-      else await ctx.upgrade(username, email, password);
+      else await ctx.register(username, email, password);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -386,26 +346,22 @@ function LoginModal({
       }}
     >
       <div className="auth-modal">
-        <h2>
-          {tab === "upgrade" ? "注册并保留访客数据" : tab === "register" ? "注册账号" : "登录"}
-        </h2>
-        {tab !== "upgrade" && (
-          <div className="auth-tabs">
-            <button className={tab === "login" ? "on" : ""} onClick={() => setTab("login")}>
-              登录
-            </button>
-            <button className={tab === "register" ? "on" : ""} onClick={() => setTab("register")}>
-              注册
-            </button>
-          </div>
-        )}
+        <h2>{tab === "register" ? "注册账号" : "登录"}</h2>
+        <div className="auth-tabs">
+          <button className={tab === "login" ? "on" : ""} onClick={() => setTab("login")}>
+            登录
+          </button>
+          <button className={tab === "register" ? "on" : ""} onClick={() => setTab("register")}>
+            注册
+          </button>
+        </div>
         <input
           placeholder="用户名"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           autoFocus
         />
-        {tab !== "login" && (
+        {tab === "register" && (
           <input
             placeholder="邮箱"
             type="email"
@@ -422,31 +378,24 @@ function LoginModal({
         />
         {error && <div className="auth-error">{error}</div>}
         <button className="auth-btn" disabled={busy} onClick={submit}>
-          {busy ? "请稍候…" : tab === "upgrade" ? "转正并保留数据" : tab === "register" ? "注册" : "登录"}
+          {busy ? "请稍候…" : tab === "register" ? "注册" : "登录"}
         </button>
-        {tab !== "upgrade" && (
-          <button
-            className="guest-btn"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await ctx.guest();
-              } catch (e) {
-                setError(e instanceof Error ? e.message : String(e));
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            👤 游客体验（免注册 · 数据保留 24 小时）
-          </button>
-        )}
-        {isGuest && tab !== "upgrade" && (
-          <button className="upgrade-link" onClick={() => setTab("upgrade")}>
-            注册保留访客数据 →
-          </button>
-        )}
+        <button
+          className="guest-btn"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await ctx.guest();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          👤 游客体验（免注册 · 共享演示账号）
+        </button>
       </div>
     </div>
   );

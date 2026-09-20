@@ -1,6 +1,4 @@
 """鉴权依赖：get_current_user（解码后回查 DB）+ require_admin。"""
-from app.core.utils import utcnow
-
 import jwt as pyjwt
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
@@ -9,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.core import security
 from app.core.db import get_db
 from app.models.user import User
-from app.jobs.guest_cleaner import clean_guest
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
@@ -32,10 +29,7 @@ async def get_current_user(
         # 禁用/删除即时生效：无状态 JWT 的吊销用轻量回查折中
         raise HTTPException(status_code=401, detail="账号不可用")
 
-    if user.role == "guest" and user.expires_at and user.expires_at < utcnow():
-        clean_guest(db, user, trigger="lazy")  # 懒清理：过期即清
-        raise HTTPException(status_code=401, detail="体验已到期，数据已清理，注册后可长期保留")
-
+    # 共享 guest 账号无过期（expires_at 恒空），无需懒清理
     return user
 
 
