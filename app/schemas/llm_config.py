@@ -13,8 +13,8 @@ class LLMConfigIn(BaseModel):
     @field_validator("slot")
     @classmethod
     def _slot(cls, v: str) -> str:
-        if v not in ("text", "vision"):
-            raise ValueError("slot 只能是 text 或 vision")
+        if v not in ("text", "vision", "embedding"):
+            raise ValueError("slot 只能是 text / vision / embedding")
         return v
 
     @field_validator("model", "base_url")
@@ -40,6 +40,7 @@ class LLMTestIn(BaseModel):
     base_url: str = ""
     model: str = ""
     api_key: str = ""
+    kind: str = "chat"              # chat | embedding（V4.0：向量模型走 /embeddings）
 
 
 class LLMEffectiveOut(BaseModel):
@@ -57,3 +58,5 @@ class ChatIn(BaseModel):
     file_id: str | None = None       # 对话附件 id（POST /api/files 返回），AI 读取文档内容后作答
     thinking: bool = True            # 「深度思考」开关：关掉则不请求思考、也不显示思考面板
     roles: list[str] | None = None   # 参与角色（pm/qa/dev），决定 AI 回复身份；空则默认测试工程师
+    kb_id: str | None = None         # V4.0 RAG：限定知识库检索；空则检索当前用户全部可见库
+    mode: str | None = None          # V4.1 会话模式：workflow(默认)/kb_qa，标记会话归属

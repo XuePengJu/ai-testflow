@@ -101,11 +101,50 @@ PROVIDERS: dict[str, dict] = {
 # （modelscope → MODELSCOPE_API_KEY；zhipu/zhipu_coding → ZHIPU_API_KEY）
 FREE_PROVIDERS = {"modelscope", "zhipu", "zhipu_coding"}
 
+# Embedding 模型厂商预设（V4.0 RAG）：统一走 OpenAI 兼容 /embeddings 端点。
+# 与文本预设分开维护，避免污染对话/视觉模型下拉。
+EMBEDDING_PROVIDERS: dict[str, dict] = {
+    "bailian": {
+        "label": "阿里百炼 · 通义文本向量",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "note": "text-embedding-v3 中文效果好；v4 更强但较新",
+        "models": [
+            {"id": "text-embedding-v3", "label": "text-embedding-v3 · 1024 维（推荐）"},
+            {"id": "text-embedding-v4", "label": "text-embedding-v4 · 新模型"},
+        ],
+    },
+    "siliconflow": {
+        "label": "硅基流动 · SiliconCloud",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "note": "BGE-M3 免费额度，中文好；需注册获取 Key",
+        "models": [
+            {"id": "BAAI/bge-m3", "label": "BAAI/bge-m3 · 1024 维（免费额度）"},
+            {"id": "BAAI/bge-large-zh-v1.5", "label": "BAAI/bge-large-zh-v1.5 · 1024 维"},
+        ],
+    },
+    "custom": {
+        "label": "自定义（OpenAI 兼容 /embeddings）",
+        "base_url": "",
+        "note": "填写任意支持 /embeddings 的 OpenAI 兼容端点",
+        "models": [],
+    },
+    "ollama": {
+        "label": "Ollama · 本地部署",
+        "base_url": "http://localhost:11434/v1",
+        "note": "本地跑 embedding 模型，零 API 费用；先 ollama pull <模型>，远端部署时把地址换成 http://<服务器IP>:11434/v1",
+        "models": [
+            {"id": "nomic-embed-text", "label": "nomic-embed-text · 768 维（轻量推荐）"},
+            {"id": "bge-m3", "label": "bge-m3 · 1024 维（中文好）"},
+            {"id": "mxbai-embed-large", "label": "mxbai-embed-large · 1024 维"},
+        ],
+    },
+}
+
 
 def provider_label(provider: str) -> str:
-    p = PROVIDERS.get(provider)
+    p = PROVIDERS.get(provider) or EMBEDDING_PROVIDERS.get(provider)
     return p["label"] if p else (provider or "自定义")
 
 
 def is_provider(provider: str) -> bool:
-    return provider in PROVIDERS
+    return provider in PROVIDERS or provider in EMBEDDING_PROVIDERS
