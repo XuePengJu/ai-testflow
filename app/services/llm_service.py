@@ -151,6 +151,45 @@ def resolve_effective(db: Session, user: User | None) -> dict:
     }
 
 
+def resolve_embedding(db: Session, user_id: int | None = None) -> dict:
+    """解析生效的 Embedding 配置（V4.0 RAG）。
+
+    返回 {"source", "cfg"}：
+        source: personal（用户自配，设置页可配）/ platform（admin 平台默认）
+              / env（环境变量 EMBEDDING_API_KEY） / mock
+    优先级：用户配置(slot=embedding) > 平台配置 > 环境变量 > mock。
+    注意：向量维度由模型决定，不同用户配置不同模型时跨用户检索（global 库）
+    可能失效；同一用户自己的库入库/检索同模型，正常匹配。
+    """
+    if user_id is not None:
+        row = db.execute(
+            select(LLMConfig).where(LLMConfig.user_id == user_id, LLMConfig.slot == "embedding")
+        ).scalar_one_or_none()
+        if row:
+            cfg = _row_to_cfg(row, user_id)
+            if cfg.get("api_key"):
+                return {"source": "personal", "cfg": cfg}
+    row = db.execute(
+        select(LLMConfig).where(LLMConfig.user_id == 0, LLMConfig.slot == "embedding")
+    ).scalar_one_or_none()
+    if row:
+        cfg = _row_to_cfg(row, 0)
+        if cfg.get("api_key"):
+            return {"source": "platform", "cfg": cfg}
+    if getattr(config, "EMBEDDING_API_KEY", ""):
+        return {
+            "source": "env",
+            "cfg": {
+                "provider": "bailian",
+                "provider_label": provider_label("bailian"),
+                "base_url": getattr(config, "EMBEDDING_BASE_URL", _BAILIAN_COMPAT),
+                "model": getattr(config, "EMBEDDING_MODEL", "text-embedding-v3"),
+                "api_key": config.EMBEDDING_API_KEY,
+            },
+        }
+    return {"source": "mock", "cfg": None}
+
+
 def public_view(cfg: dict | None) -> dict | None:
     """对外展示形态（不含 Key）。"""
     if not cfg:
@@ -165,10 +204,34 @@ _ROLE_IDENTITY = {
     "qa": "资深软件测试工程师，专精测试用例设计",
     "pm": "资深产品经理，专精需求分析与产品设计",
     "dev": "资深开发工程师，专精技术方案与代码实现",
+    "kb": "知识库问答助手，严格基于提供的知识库检索内容回答问题",  # V4.2.2：RAG 问答专用中性人设
 }
 
 def _system_prompt_for(role: str, want_thinking: bool) -> str:
-    """根据角色返回对应的系统提示词。role 非法或空时默认 qa（测试工程师）。"""
+    """根据角色返回对应的系统提示词。role 非法或空时默认 qa（测试工程师）；kb 走 RAG 问答专用模板（V4.2.2）。"""
+    if role == "kb":
+        if want_thinking:
+            return """你是 Buddy，知识库问答助手。严格基于用户消息中提供的知识库检索内容回答问题。
+
+【输出格式要求】
+<think>
+- 检索相关性：...
+- 答案要点：...
+</think>
+（正式回复，直接针对问题归纳作答）
+
+要求：
+1. 思考过程用 <think>...</think> 包裹，可折叠不打扰用户阅读正式回复
+2. 只依据知识库内容作答，检索内容未覆盖的就如实说明，不要编造
+3. 简洁清晰，用 markdown 列表；不要输出需求理解/覆盖维度/澄清问题等用例生成话术"""
+        return """你是 Buddy，知识库问答助手。严格基于用户消息中提供的知识库检索内容回答问题。
+
+【输出格式要求】直接给出正式回复，针对问题归纳作答。
+
+要求：
+1. 不要输出 <think>...</think> 等思考过程标记，也不要写「让我想想」这类元话语
+2. 只依据知识库内容作答，检索内容未覆盖的就如实说明，不要编造
+3. 简洁清晰，用 markdown 列表；不要输出需求理解/覆盖维度/澄清问题等用例生成话术"""
     identity = _ROLE_IDENTITY.get(role, _ROLE_IDENTITY["qa"])
     if want_thinking:
         return f"""你是 Buddy，{identity}。
@@ -313,6 +376,7 @@ async def chat_stream(
     attach_name: str = "",
     enable_thinking: bool = True,
     roles: list[str] | None = None,
+    kb_mode: bool = False,
 ):
     """对话流式生成器（async）。
 
@@ -331,12 +395,21 @@ async def chat_stream(
     # 平台默认模型（source=platform，免费厂商由服务端 Key 兜底）同样算"已配好模型"。
     # 旧逻辑只认 user，导致平台默认配置被判为未配置、聊天恒走 mock 模板。
     use_real = eff.get("source") in ("user", "platform") and eff.get("text") is not None
-    # 角色选择：取列表中第一个合法角色，空则默认 qa（测试工程师）
-    role = next((r for r in (roles or []) if r in _ROLE_IDENTITY), "qa")
+    # 角色选择：kb_qa 模式强制走「知识库助手」中性人设（V4.2.2，避免 qa 模板污染 RAG 回答）；
+    # 其余取列表中第一个合法角色，空则默认 qa（测试工程师）
+    if kb_mode:
+        role = "kb"
+    else:
+        role = next((r for r in (roles or []) if r in _ROLE_IDENTITY), "qa")
     messages = _build_messages(user_text or "", history, attached_text, enable_thinking, role=role)
     if not use_real:
-        async for ev in _mock_stream_chunks(user_text or "", attach_name, enable_thinking):
-            yield ev
+        # 演示模式（AITF_ALLOW_DEMO=1）才走旧演示话术；默认不静默兜底
+        if config.AITF_ALLOW_DEMO:
+            async for ev in _mock_stream_chunks(user_text or "", attach_name, enable_thinking):
+                yield ev
+            return
+        yield ("notice", "未配置可用的文本模型，无法生成回复。请先在「设置 → 模型配置」中配置模型。")
+        yield ("done", {"full": "", "degraded": True})
         return
     cfg = eff["text"]
     client = OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
@@ -374,10 +447,15 @@ async def chat_stream(
         yield ("notice", f"生成中断：{err[:120]}")
         yield ("done", {"full": "", "degraded": True})
         return
-    # 一个字都没产出：提示已降级，再继续输出演示内容，用户至少能看到兜底回复
-    yield ("notice", f"真实模型调用失败，已切换演示模式：{err[:120]}")
-    async for ev in _mock_stream_chunks(user_text or "", attach_name, enable_thinking):
-        yield ev
+    if config.AITF_ALLOW_DEMO:
+        # 演示模式：提示已降级，再继续输出演示内容，用户至少能看到兜底回复
+        yield ("notice", f"真实模型调用失败，已切换演示模式：{err[:120]}")
+        async for ev in _mock_stream_chunks(user_text or "", attach_name, enable_thinking):
+            yield ev
+        return
+    # 默认不静默兜底：明确告知失败原因，不返回演示话术（避免假内容混入）
+    yield ("notice", f"真实模型调用失败：{err[:120]}")
+    yield ("done", {"full": "", "degraded": True})
 
 
 # ============ 视觉增强（两段式第一步） ============
@@ -418,11 +496,33 @@ def vision_enrich(text: str, vision_client: OpenAICompatClient) -> tuple[str, in
 
 # ============ 连通测试 ============
 
-def test_connectivity(base_url: str, api_key: str, model: str) -> dict:
-    """发一条最小请求验证 Key / 端点 / 模型可用。"""
+def test_connectivity(base_url: str, api_key: str, model: str, kind: str = "chat") -> dict:
+    """发一条最小请求验证 Key / 端点 / 模型可用。
+
+    kind="chat"：POST {base_url}/chat/completions；kind="embedding"：POST {base_url}/embeddings。
+    """
     import time
     t0 = time.time()
     try:
+        if kind == "embedding":
+            import httpx
+            url = base_url.rstrip("/") + "/embeddings"
+            resp = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"model": model, "input": "测试"},
+                timeout=20.0,
+            )
+            if resp.status_code != 200:
+                raise LLMError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            data = resp.json()
+            dims = len(data["data"][0]["embedding"]) if data.get("data") else None
+            return {
+                "ok": True,
+                "latency_ms": round((time.time() - t0) * 1000),
+                "reply": f"向量维度 {dims}",
+                "dimensions": dims,
+            }
         reply = OpenAICompatClient(base_url, api_key, model).chat(
             [{"role": "user", "content": "回复「ok」两个字即可。"}],
             temperature=0, max_tokens=16,

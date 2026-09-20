@@ -17,6 +17,7 @@ from app.models.llm_config import LLMConfig
 from app.models.user import User
 from app.schemas.llm_config import ChatIn, LLMConfigIn, LLMConfigOut, LLMTestIn
 from app.services import llm_service
+from app.core.config import AITF_ALLOW_DEMO
 
 router = APIRouter()
 
@@ -84,10 +85,13 @@ def list_providers(user: User = Depends(get_current_user)):
 def get_effective(db: Session = Depends(get_db),
                   user: User = Depends(get_current_user)):
     eff = llm_service.resolve_effective(db, user)
+    emb = llm_service.resolve_embedding(db, user.id)
     return {
         "source": eff["source"],
         "text": llm_service.public_view(eff["text"]),
         "vision": llm_service.public_view(eff["vision"]),
+        "embedding": llm_service.public_view(emb["cfg"]),
+        "embedding_source": emb["source"],
     }
 
 
@@ -111,6 +115,8 @@ def put_config(body: LLMConfigIn,
         # 免费厂商且服务端已配 Key → 允许不填 Key（平台提供）
         if not (body.provider in FREE_PROVIDERS and llm_service._server_key(body.provider)):
             raise HTTPException(400, detail="默认文本模型必须配置 API Key（免费模型由平台提供时可不填）")
+    if body.slot == "embedding" and not row.api_key_enc:
+        raise HTTPException(400, detail="Embedding 配置必须填写 API Key")
     return _to_out(row)
 
 
@@ -118,8 +124,8 @@ def put_config(body: LLMConfigIn,
 def delete_config(slot: str,
                   db: Session = Depends(get_db),
                   user: User = Depends(require_user)):
-    if slot not in ("text", "vision"):
-        raise HTTPException(400, detail="slot 只能是 text 或 vision")
+    if slot not in ("text", "vision", "embedding"):
+        raise HTTPException(400, detail="slot 只能是 text / vision / embedding")
     row = _get_row(db, user.id, slot)
     if row:
         db.delete(row)
@@ -131,7 +137,7 @@ def delete_config(slot: str,
 
 @router.get("/llm/platform-config", response_model=list[LLMConfigOut])
 def get_platform(db: Session = Depends(get_db),
-                 admin: User = Depends(require_admin)):
+                 user: User = Depends(get_current_user)):
     rows = db.execute(
         select(LLMConfig).where(LLMConfig.user_id == 0)
     ).scalars().all()
@@ -147,6 +153,8 @@ def put_platform(body: LLMConfigIn,
         # 免费厂商且服务端已配 Key → 允许不填 Key（平台提供）
         if not (body.provider in FREE_PROVIDERS and llm_service._server_key(body.provider)):
             raise HTTPException(400, detail="平台默认文本模型必须配置 API Key（免费模型由平台提供时可不填）")
+    if body.slot == "embedding" and not row.api_key_enc:
+        raise HTTPException(400, detail="Embedding 配置必须填写 API Key")
     return _to_out(row)
 
 
@@ -154,8 +162,8 @@ def put_platform(body: LLMConfigIn,
 def delete_platform(slot: str,
                     db: Session = Depends(get_db),
                     admin: User = Depends(require_admin)):
-    if slot not in ("text", "vision"):
-        raise HTTPException(400, detail="slot 只能是 text 或 vision")
+    if slot not in ("text", "vision", "embedding"):
+        raise HTTPException(400, detail="slot 只能是 text / vision / embedding")
     row = _get_row(db, 0, slot)
     if row:
         db.delete(row)
@@ -205,15 +213,23 @@ def test_default_slot(slot: str,
     - 所有登录角色可用（含访客）：解析优先级与 resolve_effective 一致（我的配置 > 平台默认）
     - 错误归类：auth / rate_limit / quota / network / server / not_configured / other
     """
-    if slot not in ("text", "vision"):
-        raise HTTPException(400, detail="slot 只能是 text 或 vision")
-    eff = llm_service.resolve_effective(db, user)
-    cfg = eff["text"] if slot == "text" else eff["vision"]
+    if slot not in ("text", "vision", "embedding"):
+        raise HTTPException(400, detail="slot 只能是 text / vision / embedding")
+    if slot == "embedding":
+        # 向量模型走独立解析链（用户配置 > 平台 > env > mock），mock/未配置明确报 not_configured
+        emb = llm_service.resolve_embedding(db, user.id)
+        cfg = emb["cfg"]
+    else:
+        eff = llm_service.resolve_effective(db, user)
+        cfg = eff["text"] if slot == "text" else eff["vision"]
     if not cfg:
         return {"ok": False, "err_type": "not_configured",
                 "error_label": _ERR_LABEL["not_configured"],
                 "error": "该槽位未配置或未生效（服务器未配对应厂商 Key）", "model": None}
-    result = llm_service.test_connectivity(cfg["base_url"], cfg["api_key"], cfg["model"])
+    result = llm_service.test_connectivity(
+        cfg["base_url"], cfg["api_key"], cfg["model"],
+        kind="embedding" if slot == "embedding" else "chat",
+    )
     out = {**result, "model": cfg["model"], "provider_label": cfg["provider_label"]}
     if not out.get("ok"):
         et = _classify_error(out.get("error", ""))
@@ -228,26 +244,37 @@ def test_default_slot(slot: str,
 def test_llm(body: LLMTestIn,
              db: Session = Depends(get_db),
              user: User = Depends(get_current_user)):
-    """测试连通（不落库）。api_key 留空 → 复用已保存的 Key（个人两槽 → admin 平台两槽）。"""
+    """测试连通（不落库）。api_key 留空 → 复用已保存的 Key（先当前用户，后平台）。"""
     api_key = body.api_key.strip()
     if not api_key:
-        owner_ids = [user.id] + ([0] if user.role == "admin" else [])
-        for oid in owner_ids:
-            for slot in ("vision", "text"):
-                row = _get_row(db, oid, slot)
-                if row:
-                    # 复用 _row_to_cfg：解密失败自动置空 + 免费厂商由服务端环境变量 Key 兜底
-                    cfg = llm_service._row_to_cfg(row, oid)
-                    if cfg.get("api_key"):
-                        api_key = cfg["api_key"]
+        if body.provider == "ollama":
+            # 本地端点不校验 Key：任意占位即可触发连通测试
+            api_key = "ollama"
+        else:
+            server_k = llm_service._server_key(body.provider)
+            if server_k:
+                # 免费厂商：Key 由服务端环境变量提供，直接兜底；
+                # 不复用个人已存 Key（否则会拿个人百炼 Key 去打 ModelScope 端点 → 401）
+                api_key = server_k
+            else:
+                owner_ids = [user.id] + ([0] if user.role == "admin" else [])
+                slots = ("embedding",) if body.kind == "embedding" else ("vision", "text")
+                for oid in owner_ids:
+                    for slot in slots:
+                        row = _get_row(db, oid, slot)
+                        if row:
+                            # 复用 _row_to_cfg：解密失败自动置空 + 免费厂商由服务端环境变量 Key 兜底
+                            cfg = llm_service._row_to_cfg(row, oid)
+                            if cfg.get("api_key"):
+                                api_key = cfg["api_key"]
+                                break
+                    if api_key:
                         break
-            if api_key:
-                break
     if not api_key:
         raise HTTPException(400, detail="未找到可用的 API Key（免费厂商请确认服务端已配置对应环境变量 Key，或在表单中手动输入）")
     if not body.base_url.strip() or not body.model.strip():
         raise HTTPException(400, detail="base_url 与 model 不能为空")
-    return llm_service.test_connectivity(body.base_url.strip(), api_key, body.model.strip())
+    return llm_service.test_connectivity(body.base_url.strip(), api_key, body.model.strip(), kind=body.kind)
 
 
 # ---------- 首页对话流（AI 测试工程师对话） ----------
@@ -281,16 +308,22 @@ def chat(body: ChatIn,
     messages.append({"role": "user", "content": body.message})
 
     if not cfg or not cfg.get("api_key"):
-        # mock 兜底：给出结构化回复
-        reply = (
-            f"收到你的需求：「{body.message[:60]}{'…' if len(body.message) > 60 else ''}」。\n\n"
-            "从测试设计角度，我建议先明确以下几个维度：\n"
-            "1. **功能路径**：正常流程与异常流程分别是什么？\n"
-            "2. **边界条件**：有无长度、次数、金额、时间等限制？\n"
-            "3. **权限与状态**：不同角色/状态下行为是否一致？\n\n"
-            "如果你已经考虑清楚，可以直接点击下方的「生成测试用例」按钮，我会调用 4 个 Agent 开始生成。"
+        if AITF_ALLOW_DEMO:
+            # 演示模式（AITF_ALLOW_DEMO=1）才给模板回复，明确标注 used_mock
+            reply = (
+                f"收到你的需求：「{body.message[:60]}{'…' if len(body.message) > 60 else ''}」。\n\n"
+                "从测试设计角度，我建议先明确以下几个维度：\n"
+                "1. **功能路径**：正常流程与异常流程分别是什么？\n"
+                "2. **边界条件**：有无长度、次数、金额、时间等限制？\n"
+                "3. **权限与状态**：不同角色/状态下行为是否一致？\n\n"
+                "如果你已经考虑清楚，可以直接点击下方的「生成测试用例」按钮，我会调用 4 个 Agent 开始生成。"
+            )
+            return {"reply": reply, "source": eff.get("source", "mock"), "model": None, "used_mock": True}
+        # 默认不静默兜底：明确告诉用户没配模型
+        raise HTTPException(
+            status_code=400,
+            detail="未配置可用的文本模型，无法生成回复。请先在「设置 → 模型配置」中配置模型。",
         )
-        return {"reply": reply, "source": eff.get("source", "mock"), "model": None, "used_mock": True}
 
     try:
         client = llm_service.OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
@@ -303,10 +336,13 @@ def chat(body: ChatIn,
             "used_mock": False,
         }
     except llm_service.LLMError as e:
-        # 真实模型调用失败时回退到 mock，保证前端不挂
-        reply = (
-            f"收到你的需求：「{body.message[:60]}{'…' if len(body.message) > 60 else ''}」。\n\n"
-            f"（真实模型暂时不可用：{str(e)[:80]}，已切换为兜底回复）\n\n"
-            "建议先明确：功能路径、边界条件、权限与状态。确认后点击下方「生成测试用例」开始生成。"
-        )
-        return {"reply": reply, "source": eff.get("source"), "model": cfg.get("model"), "used_mock": True}
+        if AITF_ALLOW_DEMO:
+            # 演示模式：真实失败时回退模板，保证前端不挂
+            reply = (
+                f"收到你的需求：「{body.message[:60]}{'…' if len(body.message) > 60 else ''}」。\n\n"
+                f"（真实模型暂时不可用：{str(e)[:80]}，已切换为兜底回复）\n\n"
+                "建议先明确：功能路径、边界条件、权限与状态。确认后点击下方「生成测试用例」开始生成。"
+            )
+            return {"reply": reply, "source": eff.get("source"), "model": cfg.get("model"), "used_mock": True}
+        # 默认不静默兜底：真实失败原样暴露
+        raise HTTPException(status_code=502, detail=f"真实模型调用失败：{str(e)[:200]}")

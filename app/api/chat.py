@@ -14,6 +14,10 @@ SSE 协议：
   event: notice
   data: {"message": "..."}         非终态提示（降级/中断），流会继续
 
+  event: citations
+  data: {"items": [...], "kb_id": "...", "top_k": n}   V4.1 引用溯源：正文前发送，
+                                                       items 为命中的知识库分块元数据
+
   event: done
   data: {"full": "...", "source": "user|platform|env|mock", "thinking": "..."}
 
@@ -32,6 +36,7 @@ import uuid
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -39,12 +44,16 @@ from app.api.files import load_chat_file
 from app.core.db import get_db
 from app.core.utils import utcnow
 from app.models.conversation import Conversation, Message
+from app.models.knowledge import Knowledge
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.llm_config import ChatIn
 from app.services import llm_service
 
 router = APIRouter()
+
+# V4.1 会话模式：workflow=首页工作流对话；kb_qa=知识库问答
+_VALID_MODES = ("workflow", "kb_qa")
 
 
 def _sse(event: str, data: dict) -> bytes:
@@ -81,6 +90,8 @@ def _ensure_conversation(db: Session, user: User | None, body: ChatIn) -> None:
     修复「新会话发送消息不落库」：前端新会话 conversation_id 为空，原先直接跳过
     持久化，切换会话/刷新后聊天记录丢失。此处统一由后端兜底创建会话，
     并在 SSE done 事件把 conversation_id 回传给前端保存。
+
+    V4.1：创建会话时落库 mode / kb_id，用于会话列表按模式隔离。
     """
     if user is None:
         return  # 游客（未登录）保持原行为：不落库
@@ -92,6 +103,8 @@ def _ensure_conversation(db: Session, user: User | None, body: ChatIn) -> None:
         id=uuid.uuid4().hex[:12],
         user_id=user.id,
         title=(body.message or "新会话")[:40],
+        mode=body.mode if body.mode in _VALID_MODES else "workflow",
+        kb_id=(body.kb_id or None),
     )
     db.add(conv)
     db.commit()
@@ -162,12 +175,73 @@ def _build_attachment_context(loaded: tuple[str, str] | None) -> str:
     return f"【附件《{name}》内容】\n{text}"
 
 
+def _build_rag_context(db: Session, user: User | None, body: ChatIn) -> tuple[str, list[dict]]:
+    """V4.0 RAG：按用户可见知识库检索问题相关分块，拼成参考上下文。
+
+    V4.1 变更：额外返回引用溯源元数据列表（citations），供 SSE citations
+    事件回传前端；返回值从 str 改为 (context, citations) 元组——调用点仅
+    _run 一处，无其他波及。
+
+    限长 4000 字符（attached_text 总上限 6000，给任务摘要/附件留空间）；
+    mock 向量时检索质量差，真实 Embedding Key 配置后自然增强。
+    """
+    if not user:
+        return "", []
+    from app.services import llm_service
+    from app.services.knowledge import vectorstore
+    from app.services.knowledge.ingest import visible_kb_ids
+
+    # 注入 embedding 配置（当前用户个人配置 > 平台 > env > mock；与入库同模型才可匹配）
+    vectorstore.configure_embedding(llm_service.resolve_embedding(db, user.id).get("cfg"))
+
+    vids = visible_kb_ids(db, user.id, admin=user.role == "admin")
+    if not vids:
+        return "", []
+    kb_filter = body.kb_id if body.kb_id and body.kb_id in vids else None
+    hits = vectorstore.search(
+        body.message, [kb_filter] if kb_filter else vids,
+        top_k=6 if not body.file_id else 4,  # 有附件时少检索几块，给附件正文留空间
+    )
+    if not hits:
+        return "", []
+    parts, cites = [], []
+    for h in hits:
+        meta = h.get("metadata") or {}
+        header = (meta.get("context_header") or "").strip()
+        src = (meta.get("file_name") or "").strip()
+        loc = f"{src} | {header}" if header else src
+        parts.append(f"【{loc}】\n{h.get('document', '')}")
+        cites.append({
+            "chunk_id": meta.get("chunk_id") or h.get("id") or "",
+            "knowledge_id": (meta.get("knowledge_id") or "").strip(),
+            "doc_title": src,
+            "context_header": header,
+            "snippet": (h.get("document") or "")[:120],
+            "score": h.get("score"),
+        })
+    # 批量补 Wiki/文档条目标题（引用跳转定位用），一次查询避免 N+1
+    kids = {c["knowledge_id"] for c in cites if c["knowledge_id"]}
+    if kids:
+        rows = db.execute(
+            select(Knowledge.id, Knowledge.title).where(Knowledge.id.in_(kids))
+        ).all()
+        titles = dict(rows)
+        for c in cites:
+            t = titles.get(c["knowledge_id"])
+            if t:
+                c["doc_title"] = t
+    out = "【知识库检索参考（用于回答，未命中业务规则时如实说明）】\n" + "\n\n---\n\n".join(parts)
+    return out[:4000], cites
+
+
 async def _run(db: Session, user: User | None, body: ChatIn, source: str):
     """异步 SSE 事件流 generator。
 
     上游 llm_service.chat_stream 输出 delta / think / notice / done / error，
     本函数做翻译转发（think 单独走 think 事件，与正文分开，避免思考混进正文）。
     流式结束后（finally）把 user + assistant 消息落库到会话，实现对话持久化。
+
+    V4.1：正文开始前若 RAG 命中知识库，先发 citations 事件（引用溯源）。
     """
     full_text = ""
     think_text = ""
@@ -175,12 +249,24 @@ async def _run(db: Session, user: User | None, body: ChatIn, source: str):
     # 附件文本由 POST /api/files 预先抽取落盘，这里按 file_id 读回
     attached = load_chat_file(body.file_id) if body.file_id else None
     attach_name = attached[0] if attached else ""
-    # 任务摘要 + 上传附件统一走 attached_text 注入（_build_messages 里拼到用户消息之后）
-    context = "\n\n".join(x for x in (task_summary, _build_attachment_context(attached)) if x)
+    # 任务摘要 + 上传附件 + 知识库检索统一走 attached_text 注入
+    rag_ctx, citations = _build_rag_context(db, user, body)
+    context = "\n\n".join(
+        x for x in (task_summary, rag_ctx, _build_attachment_context(attached)) if x
+    )
+    # V4.1 引用溯源：正文 delta 之前发送，前端可先显示「引用 N 篇」。
+    # 对所有对话生效（首页/知识库页），是否渲染由前端 showCitations 决定。
+    if citations:
+        yield _sse("citations", {
+            "items": citations,
+            "kb_id": body.kb_id or "",
+            "top_k": len(citations),
+        })
     try:
         async for ev, payload in llm_service.chat_stream(
             db, user, body.message, body.history, context, attach_name, body.thinking,
             roles=body.roles,
+            kb_mode=(body.mode == "kb_qa"),  # V4.2.2：知识库问答走中性 RAG 人设
         ):
             if ev == "delta":
                 full_text += payload

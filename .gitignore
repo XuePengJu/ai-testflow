@@ -1,5 +1,6 @@
 # 环境变量（含密钥，切勿提交）
 .env
+.env.server
 
 # 本地部署脚本（含服务器 IP / SSH 密钥路径，不入库）
 scripts/deploy_frontend.sh
@@ -31,4 +32,6 @@ venv/
 .DS_Store
 .idea/
 .vscode/
-.trae/docs/项目1-RAG知识库执行方案-V4.0.md
+.trae/
+# 本地向量库数据（Chroma 持久化，不入库）
+vectors/

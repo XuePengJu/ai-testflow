@@ -20,3 +20,7 @@ pymysql>=1.1.0
 langchain==1.4.0
 langchain-openai==1.6.2
 langsmith==0.12.5
+
+# ===== V4.0 RAG 知识库 =====
+chromadb>=0.5.5
+rank_bm25>=0.2.2

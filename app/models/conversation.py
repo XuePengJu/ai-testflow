@@ -23,6 +23,9 @@ class Conversation(Base):
     title: Mapped[str | None] = mapped_column(String(255), default="新会话")
     created_at: Mapped[datetime | None] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    # V4.1：会话模式与知识库归属——kb_qa 会话只在知识库页显示，与首页工作流隔离
+    mode: Mapped[str | None] = mapped_column(String(16), default="workflow")
+    kb_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class Message(Base):

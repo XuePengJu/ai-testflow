@@ -2,6 +2,8 @@
 
 - 每个用户独立会话（user_id 隔离）
 - 会话详情按 task_id 回填关联任务的节点步骤（StepLog）与用例（cases_json）
+- V4.1：会话带 mode（workflow/kb_qa）与 kb_id，列表支持 ?mode= 过滤，
+  知识库问答会话与首页工作流会话互不污染
 """
 import uuid
 
@@ -25,6 +27,8 @@ router = APIRouter(prefix="/conversations", tags=["会话"])
 
 class ConversationIn(BaseModel):
     title: str = Field(default="新会话", max_length=80)
+    mode: str = Field(default="workflow", pattern="^(workflow|kb_qa)$")  # V4.1 会话模式
+    kb_id: str | None = None                                             # V4.1 知识库归属
 
 
 class MessageIn(BaseModel):
@@ -79,6 +83,7 @@ def _to_out(db: Session, c: Conversation, include_messages: bool = False) -> Con
     out = ConversationOut(
         id=c.id, title=c.title, created_at=c.created_at, updated_at=c.updated_at,
         message_count=count, task_count=task_count, messages=[],
+        mode=c.mode or "workflow", kb_id=c.kb_id,
     )
     if include_messages:
         msgs = db.execute(
@@ -100,7 +105,8 @@ def create_conversation(body: ConversationIn,
                         user: User = Depends(get_current_user),
                         db: Session = Depends(get_db)):
     c = Conversation(id=uuid.uuid4().hex[:12], user_id=user.id,
-                     title=body.title.strip() or "新会话")
+                     title=body.title.strip() or "新会话",
+                     mode=body.mode, kb_id=body.kb_id or None)
     db.add(c)
     db.commit()
     db.refresh(c)
@@ -108,13 +114,13 @@ def create_conversation(body: ConversationIn,
 
 
 @router.get("", response_model=list[ConversationOut])
-def list_conversations(user: User = Depends(get_current_user),
+def list_conversations(mode: str | None = None,
+                       user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)):
-    rows = db.execute(
-        select(Conversation)
-        .where(Conversation.user_id == user.id)
-        .order_by(Conversation.updated_at.desc())
-    ).scalars().all()
+    stmt = select(Conversation).where(Conversation.user_id == user.id)
+    if mode in ("workflow", "kb_qa"):  # V4.1：按模式过滤，非法值返回全部（兼容老前端）
+        stmt = stmt.where(Conversation.mode == mode)
+    rows = db.execute(stmt.order_by(Conversation.updated_at.desc())).scalars().all()
     return [_to_out(db, c) for c in rows]
 
 

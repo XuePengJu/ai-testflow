@@ -28,7 +28,7 @@ class NoCacheStaticFiles(StaticFiles):
         response.headers["Cache-Control"] = "no-cache"
         return response
 
-from app.api import auth, categories, chat, conversations, files, guest, llm_config, tasks, users
+from app.api import auth, categories, chat, conversations, files, guest, knowledge, llm_config, tasks, users
 from app.core.config import STATIC_DIR, jwt_secret_is_placeholder, ENV
 from app.core.db import init_db, engine
 
@@ -45,9 +45,14 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("生产环境必须设置 JWT_SECRET 环境变量")
         logger.warning("JWT_SECRET 为默认占位值，仅限本地演示使用")
 
-    # 访客清理调度器（每小时 + 启动兜底）
-    from app.jobs.guest_cleaner import start_scheduler
-    start_scheduler()
+    # 单一固定共享 guest（幂等建账号 + 清旧动态 guest 遗留）
+    from app.core.db import SessionLocal
+    from app.jobs.guest_cleaner import ensure_shared_guest
+    _bootstrap_db = SessionLocal()
+    try:
+        ensure_shared_guest(_bootstrap_db)
+    finally:
+        _bootstrap_db.close()
 
     # 任务队列：启动恢复（running→pending）+ 启动 Worker 池
     from app.core import task_queue
@@ -86,6 +91,7 @@ app.include_router(llm_config.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
+app.include_router(knowledge.router, prefix="/api")
 
 
 @app.get("/health")

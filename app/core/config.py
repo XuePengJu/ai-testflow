@@ -5,7 +5,9 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # ai-testflow/
 
 # 加载 .env（仅当环境变量未设置时填充，避免覆盖系统环境）
-_ENV_PATH = BASE_DIR / ".env"
+# 多环境隔离：默认 .env（本地开发）；线上可设 AITF_ENV_FILE=/path/.env.server 指向另一份，
+# 线上线下用不同的 MySQL 与 embedding 模型，配置必须分开（不设时行为与原来一致）
+_ENV_PATH = Path(os.getenv("AITF_ENV_FILE") or (BASE_DIR / ".env"))
 if _ENV_PATH.exists():
     for _line in _ENV_PATH.read_text(encoding="utf-8").splitlines():
         _line = _line.strip()
@@ -27,11 +29,25 @@ MODELSCOPE_MODEL = os.getenv("MODELSCOPE_MODEL", "Qwen/Qwen3.8-27B")
 # 平台默认选 GLM 免费模型时，由本环境变量兜底，无需在界面填写 Key
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY", "")
 
+# ============ Embedding（V4.0 RAG 知识库）============
+# 默认百炼 text-embedding-v3（OpenAI 兼容），可用环境变量切换任意 OpenAI 兼容 embedding
+EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", DASHSCOPE_API_KEY)
+EMBEDDING_BASE_URL = os.getenv(
+    "EMBEDDING_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
+
 # 路径支持环境变量覆盖（测试隔离：AITF_ROOT_DIR 指向临时目录，避免污染真实数据）
 _ROOT = Path(os.getenv("AITF_ROOT_DIR", str(BASE_DIR)))
 UPLOAD_DIR = _ROOT / "uploads"
 OUTPUT_DIR = _ROOT / "outputs"
 DB_PATH = _ROOT / "app.db"
+
+# ============ 向量库（V4.0 RAG 知识库）============
+# 向量库目录（Chroma 持久化路径；AITF_ROOT_DIR 切换时随根目录走）
+VECTOR_DIR = _ROOT / "vectors"
+# 向量库 collection 名（单 collection + metadata 过滤，迁移 Qdrant 时换连接即可）
+VECTOR_COLLECTION = os.getenv("VECTOR_COLLECTION", "ai-testflow-kb")
 
 # ============ 认证与多用户（V2） ============
 ENV = os.getenv("ENV", "dev")                       # dev / production
@@ -46,6 +62,12 @@ ADMIN_BOOTSTRAP_PASSWORD = os.getenv("ADMIN_BOOTSTRAP", "")  # 迁移脚本预�
 # ============ API 分级加密（V2.1） ============
 # admin 明文（方便 Swagger 调试），user/guest 走 AES-256-GCM；设 0 可整体关闭（本地调试用）
 API_ENCRYPT = os.getenv("API_ENCRYPT", "1") == "1"
+
+# ============ 演示内容开关 ============
+# 默认关闭（0）：未配置模型 / 模型调用失败时，一律明确报错或提示，
+#   绝不静默返回 mock 假用例 / 演示话术 / 哈希向量（避免假内容被误当真实结果）。
+# 设为 1：恢复旧「演示模式」，用于本地或现场演示开箱即跑。
+AITF_ALLOW_DEMO = os.getenv("AITF_ALLOW_DEMO", "0") == "1"
 
 def jwt_secret_is_placeholder() -> bool:
     return JWT_SECRET == "change-me-in-production"

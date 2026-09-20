@@ -24,6 +24,8 @@ class ConversationOut(BaseModel):
     message_count: int = 0
     task_count: int = 0
     messages: list[MessageOut] = []
+    mode: Optional[str] = "workflow"   # V4.1：workflow=首页工作流；kb_qa=知识库问答
+    kb_id: Optional[str] = None        # V4.1：知识库问答绑定的库
 
     class Config:
         from_attributes = True
