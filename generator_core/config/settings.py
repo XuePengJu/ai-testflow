@@ -16,5 +16,10 @@ def is_mock() -> bool:
     return not bool(DASHSCOPE_API_KEY)
 
 
+# 演示内容开关：默认关（0）。关闭时未注入模型 → 报错，不静默出假用例。
+# 设为 1 恢复旧演示行为（本地/现场演示用）。
+ALLOW_DEMO = os.getenv("AITF_ALLOW_DEMO", "0") == "1"
+
+
 # Prompt 模板目录
 PROMPTS_DIR = BASE_DIR / "config" / "prompts"

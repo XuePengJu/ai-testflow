@@ -16,9 +16,8 @@ os.environ["DB_TYPE"] = "sqlite"                 # 测试强制本地 SQLite，�
 os.environ["DATABASE_URL"] = ""                  # 清掉任何直填 URL（.env 可能配了远程库）
 os.environ["JWT_SECRET"] = "test-secret-for-pytest"
 os.environ["ENV"] = "dev"
-os.environ["DASHSCOPE_API_KEY"] = ""             # 强制 mock 兜底
-os.environ["GUEST_MAX_TASKS"] = "3"              # 调小上限加速用例
-os.environ["GUEST_DAILY_LIMIT"] = "3"
+os.environ["DASHSCOPE_API_KEY"] = ""             # 无真实模型配置
+os.environ["AITF_ALLOW_DEMO"] = "1"              # 存量用例覆盖「演示模式」路径（新默认=0 不静默兜底）
 os.environ["API_ENCRYPT"] = "0"                  # 存量用例走明文；加密场景由 test_crypto 用 monkeypatch 开启
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,12 +27,23 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from main import app  # noqa: E402  此时 config 已锁定到临时目录
 from app.core.db import SessionLocal  # noqa: E402
-from app.models.user import User, GuestCreationLog  # noqa: E402
+from app.models.user import User  # noqa: E402
+
+# 以下 4 个是「脚本式 e2e」（自带独立 DB + TestClient，作者注明 pytest 不收集，用
+# `python tests/xxx.py` 手动跑）。文件名虽是 test_*.py，但 pytest 会在**导入期**执行
+# 其模块级断言，并把 app.dependency_overrides[get_current_user] 全局替换成 SimpleNamespace
+# 且不还原 → 全量跑时污染其余所有用例（约 40 个连锁失败）。这里显式排除。
+collect_ignore = [
+    "test_chat_rag.py",
+    "test_embedding_config.py",
+    "test_knowledge_api.py",
+    "test_v41_kb_qa.py",
+]
 
 
 @pytest.fixture(scope="session")
 def client():
-    """with 语法触发 lifespan（init_db + 清理调度器启动）。"""
+    """with 语法触发 lifespan（init_db + 共享 guest 播种 + worker 池）。"""
     with TestClient(app) as c:
         yield c
 
@@ -64,14 +74,14 @@ def accounts(client):
 
 
 @pytest.fixture()
-def fresh_guest(client, monkeypatch):
-    """唯一 IP 的干净访客（避免用例间串扰）。返回 (token, ip)。"""
-    from app.api import guest as guest_mod
-    ip = f"10.{uuid.uuid4().int % 200}.{uuid.uuid4().int % 200}.{uuid.uuid4().int % 200}"
-    monkeypatch.setattr(guest_mod, "_client_ip", lambda req: ip)
+def fresh_guest(client):
+    """共享访客 token（V2 简化后全站只有一个固定 guest 账号，无需按 IP 隔离）。
+
+    返回 (token, None)：第二位是历史遗留的 ip 占位，仅为兼容存量用例的解包写法。
+    """
     r = client.post("/api/guest/token")
     assert r.status_code == 200, r.text
-    return r.json()["access_token"], ip
+    return r.json()["access_token"], None
 
 
 @pytest.fixture()

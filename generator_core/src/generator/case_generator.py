@@ -1,7 +1,11 @@
-"""生成核心编排：解析单元 →（mock 或 真实模型，支持多角色）→ 合并去重 → 编号。
+"""生成核心编排：解析单元 →（真实模型，支持多角色）→ 合并去重 → 编号。
 
 V3.1 多角色协作（轻量版）：每个测试点可按角色（产品 pm / 测试 qa / 开发 dev）
 分别以各自视角生成用例，再合并去重。默认仅测试（qa），行为与旧版完全一致。
+
+演示模式开关（AITF_ALLOW_DEMO）：默认关闭（0）。
+- 关闭：未注入模型 / 模型调用失败 → 直接抛错，绝不静默返回假用例。
+- 开启：恢复旧行为（mock_generate 出规则化演示用例），仅用于本地或现场演示。
 """
 import json
 import re
@@ -15,6 +19,18 @@ ROLE_LABELS = {"pm": "产品", "qa": "测试", "dev": "开发"}
 
 # 角色 → 模板后缀（qa 用现有模板，无后缀）
 _ROLE_TPL_SUFFIX = {"pm": "_pm", "dev": "_dev", "qa": ""}
+
+
+class NoModelError(RuntimeError):
+    """未注入真实模型、且未开启演示模式时抛出（调用方据此向用户暴露失败原因）。"""
+
+
+def _no_model_hint(role: str) -> str:
+    return (
+        f"未配置可用的文本模型，无法生成真实用例（角色 {role}）。"
+        "请先在「设置 → 模型配置」配置模型；"
+        "如需本地演示可设环境变量 AITF_ALLOW_DEMO=1。"
+    )
 
 
 def parse_roles(raw) -> list[str]:
@@ -33,8 +49,9 @@ def parse_roles(raw) -> list[str]:
 class CaseGenerator:
     def __init__(self, client=None, roles=None):
         """client：平台注入的 LLM 客户端（OpenAI 兼容）。
-        注入时优先使用；未注入（无可用模型）一律 mock 兜底，绝不自动
-        调用环境里的百炼 Key（避免无效 Key 直接 401 报错）。
+
+        未注入（无可用模型）时：AITF_ALLOW_DEMO=1 → mock 演示兜底；
+        否则抛 NoModelError，绝不自动调用环境里的百炼 Key（避免无效 Key 直接 401 报错）。
         roles：参与生成的角色列表（pm/qa/dev），默认 ["qa"]。"""
         self.injected = client
         self.roles = parse_roles(roles)
@@ -95,18 +112,23 @@ class CaseGenerator:
     def generate_for_unit(self, unit: RequirementUnit, role: str = "qa") -> list[TestCase]:
         try:
             return self._generate_inner(unit, role)
-        except Exception:  # noqa: BLE001
-            # 单点失败回退 mock
-            return mock_generate(unit)
+        except NoModelError:
+            raise  # 未配模型：必须向上暴露，不用假用例掩盖
+        except Exception:
+            if settings.ALLOW_DEMO:
+                return mock_generate(unit)  # 仅演示模式兜底
+            raise
 
     def _generate_inner(self, unit: RequirementUnit, role: str = "qa") -> list[TestCase]:
-        if self.injected is not None:
-            # 平台注入的真实模型：OpenAI 兼容调用
-            prompt = self._build_prompt(unit, role)
-            text = self.injected.generate(prompt)
-            return self._parse_llm(text)
-        # 未注入模型（未配置可用模型）→ mock 兜底，不碰无效的百炼 Key
-        return mock_generate(unit)
+        if self.injected is None:
+            # 未注入模型：仅演示模式允许假的规则用例兜底
+            if settings.ALLOW_DEMO:
+                return mock_generate(unit)
+            raise NoModelError(_no_model_hint(role))
+        # 平台注入的真实模型：OpenAI 兼容调用
+        prompt = self._build_prompt(unit, role)
+        text = self.injected.generate(prompt)
+        return self._parse_llm(text)
 
     def generate(self, units: list[RequirementUnit], progress_cb=None, roles=None) -> list[TestCase]:
         """为全部测试点按角色生成用例（unit × role 双层循环）。
