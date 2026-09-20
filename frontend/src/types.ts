@@ -30,6 +30,8 @@ export interface ConvMessage {
   role: string;
   content: string;
   thinking: string;
+  /** V4.5.2：持久化的 RAG 引用溯源（assistant 消息），与 CitationItem 对齐 */
+  citations?: CitationItem[] | null;
   task_id?: string | null;
   created_at?: string | null;
   task?: TaskSummary | null;

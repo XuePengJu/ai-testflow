@@ -37,5 +37,8 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str | None] = mapped_column(Text, default="")
     thinking: Mapped[str | None] = mapped_column(Text, default="")
+    # V4.5.2：RAG 引用溯源持久化（SSE citations 事件 items 的 JSON 文本），
+    # 切换会话/刷新后历史消息仍可展示引用来源
+    citations: Mapped[str | None] = mapped_column(Text, nullable=True)
     task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, default=utcnow)

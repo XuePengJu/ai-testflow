@@ -188,6 +188,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         id: "h" + m.id,
         role: m.role === "user" ? "user" : "assistant",
         content: m.content || m.task?.report?.summary || "",        thinking: m.thinking || "",
+        // V4.5.2：恢复持久化的引用溯源，切会话/刷新后引用不丢
+        citations: m.citations?.length ? m.citations : undefined,
         // 历史消息带任务摘要时直接挂轻量任务对象（步骤卡渲染 cases_count/status）
         task: m.task
           ? ({

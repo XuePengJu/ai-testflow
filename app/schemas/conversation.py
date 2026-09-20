@@ -10,6 +10,8 @@ class MessageOut(BaseModel):
     role: str
     content: str = ""
     thinking: str = ""
+    # V4.5.2：RAG 引用溯源（assistant 消息持久化的 citations 列表，JSON 解析后返回）
+    citations: Optional[list[dict[str, Any]]] = None
     task_id: Optional[str] = None
     created_at: Optional[datetime] = None
     # 关联任务摘要（仅详情接口填充）：含节点步骤 steps + 用例 cases
