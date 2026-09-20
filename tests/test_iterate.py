@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -193,8 +194,14 @@ def _create_completed_task(client, token, name="测试任务"):
     })
     assert r.status_code == 201, r.text
     tid = r.json()["id"]
-    # TestClient 同步执行后台任务，直接查详情
-    t = client.get(f"/api/tasks/{tid}", headers={"Authorization": f"Bearer {token}"}).json()
+    # V3.3 任务队列异步化（Worker 池）：轮询等待终态，不再假设 TestClient 同步执行
+    deadline = time.time() + 15
+    t = {"status": "pending"}
+    while time.time() < deadline:
+        t = client.get(f"/api/tasks/{tid}", headers={"Authorization": f"Bearer {token}"}).json()
+        if t["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.2)
     assert t["status"] == "completed", t.get("steps")
     return tid
 
@@ -211,9 +218,15 @@ class TestIterateAPI:
         new_task = r.json()
         assert new_task["parent_task_id"] == parent_id
         assert new_task["status"] in ("pending", "running", "completed")
-        # 等待后台完成后查详情
-        t = client.get(f"/api/tasks/{new_task['id']}",
-                       headers={"Authorization": f"Bearer {token}"}).json()
+        # 等待后台 Worker 完成后查详情（异步队列轮询）
+        deadline = time.time() + 15
+        t = {"status": "pending"}
+        while time.time() < deadline:
+            t = client.get(f"/api/tasks/{new_task['id']}",
+                           headers={"Authorization": f"Bearer {token}"}).json()
+            if t["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.2)
         assert t["status"] == "completed", t.get("steps")
         assert t["cases_count"] > 0
         assert t["parent_task_id"] == parent_id

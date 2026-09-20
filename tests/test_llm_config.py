@@ -2,6 +2,8 @@
 
 外部 LLM 调用统一 mock `LangChainClient.chat`（V3 迁移后适配层），离线可跑。
 """
+import time
+
 import pytest
 
 from app.core import config
@@ -213,13 +215,18 @@ def test_effective_priority(client, accounts, monkeypatch):
     assert eff4["text"]["model"] == config.MODELSCOPE_MODEL
 
 
-def test_platform_config_admin_only(client, accounts):
-    # 普通用户 403
-    assert client.get("/api/llm/platform-config",
-                      headers=_h(accounts["user"]["token"])).status_code == 403
+def test_platform_config_read_open_write_admin(client, accounts):
+    """V4.2：平台配置 GET 开放给所有登录用户（设置页需回显平台默认）；写入仍仅 admin。"""
+    # 普通用户可读
+    r = client.get("/api/llm/platform-config", headers=_h(accounts["user"]["token"]))
+    assert r.status_code == 200 and isinstance(r.json(), list)
     # admin 可读
     r = client.get("/api/llm/platform-config", headers=_h(accounts["admin"]["token"]))
     assert r.status_code == 200 and isinstance(r.json(), list)
+    # 普通用户写入仍 403
+    assert client.put("/api/llm/platform-config", headers=_h(accounts["user"]["token"]),
+                      json={"slot": "text", "provider": "bailian", "base_url": _URL,
+                            "model": "qwen-plus", "api_key": "sk-x"}).status_code in (401, 403)
 
 
 def test_delete_slot(client, accounts, db_session):
@@ -324,7 +331,14 @@ def test_full_task_with_real_llm_path(client, accounts, monkeypatch):
     assert r.status_code == 201, r.text
     task_id = r.json()["id"]
 
-    t = client.get(f"/api/tasks/{task_id}", headers=_h(tok)).json()
+    # 异步队列：轮询等待终态
+    deadline = time.time() + 15
+    t = {"status": "pending"}
+    while time.time() < deadline:
+        t = client.get(f"/api/tasks/{task_id}", headers=_h(tok)).json()
+        if t["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.2)
     assert t["status"] == "completed", t["steps"]
     gen = [s for s in t["steps"] if s["name"] == "generator"][0]
     # 摘要里标注真实模型（非 mock）
@@ -361,7 +375,13 @@ def test_vision_note_without_vision_model(client, accounts, monkeypatch):
         "text": "登录功能\n![登录页](https://x.com/login.png)\n功能点：登录、找回密码。",
         "kind": "business", "formats": "json", "name": "含图任务"})
     assert r.status_code == 201
-    t = client.get(f"/api/tasks/{r.json()['id']}", headers=_h(tok)).json()
+    deadline = time.time() + 15
+    t = {"status": "pending"}
+    while time.time() < deadline:
+        t = client.get(f"/api/tasks/{r.json()['id']}", headers=_h(tok)).json()
+        if t["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.2)
     assert t["status"] == "completed"
     parser = [s for s in t["steps"] if s["name"] == "parser"][0]
     assert "图片" in parser["output_summary"] and "忽略" in parser["output_summary"]

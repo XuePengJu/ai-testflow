@@ -77,8 +77,9 @@ def test_supported_exts():
     assert is_supported("notes.md")
     assert is_supported("readme.markdown")
     assert is_supported("plain.txt")
-    assert not is_supported("报表.xlsx")
-    assert not is_supported("data.json")
+    assert is_supported("报表.xlsx")        # V4.0 支持 Excel（openpyxl）
+    assert is_supported("库存表.xls")
+    assert not is_supported("data.csv")
     assert not is_supported("无扩展名")
 
 
@@ -126,7 +127,7 @@ def test_extract_pdf(tmp_path):
 
 
 def test_extract_unsupported_raises(tmp_path):
-    p = tmp_path / "报表.xlsx"
+    p = tmp_path / "数据.csv"
     p.write_bytes(b"PK\x03\x04")
     with pytest.raises(UnsupportedFormatError):
         extract_text(p)
@@ -214,7 +215,7 @@ def test_upload_rejects_unsupported(client, accounts):
     tok = accounts["user"]["token"]
     r = client.post(
         "/api/files",
-        files={"file": ("报表.xlsx", b"PK\x03\x04", "application/octet-stream")},
+        files={"file": ("数据.csv", b"a,b\n1,2", "text/csv")},
         headers={"Authorization": "Bearer " + tok},
     )
     assert r.status_code == 400
@@ -247,7 +248,7 @@ def test_create_task_rejects_unsupported_file(client, accounts):
     tok = accounts["user"]["token"]
     r = client.post(
         "/api/tasks",
-        files={"file": ("报表.xlsx", b"PK\x03\x04", "application/octet-stream")},
+        files={"file": ("数据.csv", b"a,b\n1,2", "text/csv")},
         data={"text": "", "kind": "business"},
         headers={"Authorization": "Bearer " + tok},
     )
