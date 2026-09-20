@@ -130,11 +130,16 @@ def create_conversation(body: ConversationIn,
 
 @router.get("", response_model=list[ConversationOut])
 def list_conversations(mode: str | None = None,
+                       kb_id: str | None = None,
                        user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)):
     stmt = select(Conversation).where(Conversation.user_id == user.id)
     if mode in ("workflow", "kb_qa"):  # V4.1：按模式过滤，非法值返回全部（兼容老前端）
         stmt = stmt.where(Conversation.mode == mode)
+    # V4.5.2：知识库问答页按库过滤会话，避免切库后看到别的库的问答历史
+    # kb_id 为空的老问答会话不回落——它们本就无法按正确库检索，严格隔离
+    if kb_id:
+        stmt = stmt.where(Conversation.kb_id == kb_id)
     rows = db.execute(stmt.order_by(Conversation.updated_at.desc())).scalars().all()
     return [_to_out(db, c) for c in rows]
 

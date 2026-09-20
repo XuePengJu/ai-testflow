@@ -163,14 +163,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return;
     }
     try {
+      // V4.5.2：知识库问答页按当前库取会话（后端 kb_id 过滤），避免 50 条截断漏历史
+      const kbId = get().kbId;
       const r = await api(API + "/conversations");
       if (!r.ok) return;
       const list = (await r.json()) as Conversation[];
       const all = Array.isArray(list) ? list : [];
+      let kbList: Conversation[] = all.filter((c) => c.mode === "kb_qa").slice(0, 50);
+      if (kbId) {
+        const rk = await api(`${API}/conversations?mode=kb_qa&kb_id=${encodeURIComponent(kbId)}`);
+        if (rk.ok) {
+          const kl = (await rk.json()) as Conversation[];
+          kbList = Array.isArray(kl) ? kl.slice(0, 50) : [];
+        }
+      }
       // V4.1 会话按 mode 分组隔离：kb_qa 只在知识库页显示，不串首页
       set({
         conversations: all.filter((c) => (c.mode || "workflow") !== "kb_qa").slice(0, 50),
-        kbConversations: all.filter((c) => c.mode === "kb_qa").slice(0, 50),
+        kbConversations: kbList,
       });
     } catch {
       /* 网络异常静默，侧栏下次轮询再刷 */
