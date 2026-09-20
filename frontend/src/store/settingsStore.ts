@@ -25,8 +25,8 @@ interface SettingsState {
   ) => Promise<boolean>;
   /** 删除配置槽 */
   deleteConfig: (mode: "personal" | "platform", slot: string) => Promise<boolean>;
-  /** 连通测试（表单值，不落库） */
-  testConfig: (body: { provider: string; base_url: string; model: string; api_key: string }) => Promise<{
+  /** 连通测试（表单值，不落库）；kind=chat|embedding（V4.0 向量模型走 /embeddings） */
+  testConfig: (body: { provider: string; base_url: string; model: string; api_key: string; kind?: string }) => Promise<{
     ok: boolean;
     error?: string;
     latency_ms?: number;

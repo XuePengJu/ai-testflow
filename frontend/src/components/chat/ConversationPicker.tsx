@@ -5,11 +5,11 @@
 import { useChatStore } from "../../store/chatStore";
 import { useAuth } from "../../hooks/useAuth";
 import { Trash2, Plus } from "lucide-react";
+import { parseServerTime } from "../../utils/time";
 
 function fmtTime(s?: string | null): string {
-  if (!s) return "";
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return "";
+  const d = parseServerTime(s);
+  if (!d) return "";
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
@@ -31,8 +31,9 @@ function groupByDate(list: Conv[]): Record<Group, Conv[]> {
   yest.setDate(today.getDate() - 1);
   const out: Record<Group, Conv[]> = { 今天: [], 昨天: [], 更早: [] };
   list.forEach((c) => {
-    const d = new Date(c.updated_at || c.created_at || 0);
-    if (isNaN(d.getTime())) {
+    const d = parseServerTime(c.updated_at || c.created_at);
+    // parseServerTime 返回 Date | null：空值直接归到「更早」
+    if (!d || isNaN(d.getTime())) {
       out["更早"].push(c);
       return;
     }

@@ -31,18 +31,20 @@ export default function SettingsPage() {
         <section className="set-card">
           <h3>我的模型配置</h3>
           <div className="sub">
-            个人配置优先于平台默认；文本槽为必配项（免费厂商可不填 Key，由平台提供）。
+            个人配置优先于平台默认；文本槽为必配项（免费厂商可不填 Key，由平台提供）；
+            Embedding 向量模型用于知识库入库与检索，不配置时走 mock（流程可用、检索质量差）。
           </div>
           <div className="llm-grid">
             <LLMConfigCard slot="text" mode="personal" saved={myConfigs.find((c) => c.slot === "text")} />
             <LLMConfigCard slot="vision" mode="personal" saved={myConfigs.find((c) => c.slot === "vision")} />
+            <LLMConfigCard slot="embedding" mode="personal" saved={myConfigs.find((c) => c.slot === "embedding")} />
           </div>
         </section>
       ) : (
         <section className="set-card">
           <h3>我的模型配置</h3>
           <div className="hint-line">
-            访客模式使用平台默认模型。注册账号后可自定义模型配置（登录框 → 注册保留访客数据）。
+            共享访客使用平台默认模型。注册账号后可自定义模型配置并长期保留数据。
           </div>
         </section>
       )}

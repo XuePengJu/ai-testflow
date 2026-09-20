@@ -17,10 +17,49 @@ import type { LLMConfigRow } from "../../types";
 const SLOT_TITLE: Record<string, { title: string; sub: string }> = {
   text: { title: "默认文本模型", sub: "需求拆解 / 用例生成 / 对话" },
   vision: { title: "图像识别模型", sub: "原型图 / 截图转用例（可选）" },
+  embedding: { title: "Embedding 向量模型", sub: "知识库入库与检索（向量化）" },
+};
+
+// Embedding 专用厂商预设（V4.0）：与文本厂商分开维护，走 /embeddings 端点
+const EMBED_PROVIDERS: Record<string, { label: string; base_url: string; note: string; models: { id: string; label: string }[] }> = {
+  bailian: {
+    label: "阿里百炼 · 通义文本向量",
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    note: "text-embedding-v3 中文效果好（1024 维）；需在百炼控制台开通模型服务",
+    models: [
+      { id: "text-embedding-v3", label: "text-embedding-v3 · 1024 维（推荐）" },
+      { id: "text-embedding-v4", label: "text-embedding-v4 · 新模型" },
+    ],
+  },
+  siliconflow: {
+    label: "硅基流动 · SiliconCloud",
+    base_url: "https://api.siliconflow.cn/v1",
+    note: "BGE-M3 有免费额度，中文好；注册后到控制台创建 API Key",
+    models: [
+      { id: "BAAI/bge-m3", label: "BAAI/bge-m3 · 1024 维（免费额度）" },
+      { id: "BAAI/bge-large-zh-v1.5", label: "BAAI/bge-large-zh-v1.5 · 1024 维" },
+    ],
+  },
+  custom: {
+    label: "自定义（OpenAI 兼容 /embeddings）",
+    base_url: "",
+    note: "填写任意支持 /embeddings 的 OpenAI 兼容端点",
+    models: [],
+  },
+  ollama: {
+    label: "Ollama · 本地部署",
+    base_url: "http://localhost:11434/v1",
+    note: "本地跑 embedding 模型，零 API 费用；先 ollama pull <模型>，远端部署时把地址换成 http://<服务器IP>:11434/v1",
+    models: [
+      { id: "nomic-embed-text", label: "nomic-embed-text · 768 维（轻量推荐）" },
+      { id: "bge-m3", label: "bge-m3 · 1024 维（中文好）" },
+      { id: "mxbai-embed-large", label: "mxbai-embed-large · 1024 维" },
+    ],
+  },
 };
 
 interface Props {
-  slot: "text" | "vision";
+  slot: "text" | "vision" | "embedding";
   mode: "personal" | "platform";
   /** 该槽当前已保存配置（personal 用 store；platform 由 AdminPage 传入） */
   saved: LLMConfigRow | undefined;
@@ -47,25 +86,27 @@ export default function LLMConfigCard({ slot, mode, saved, onSaved }: Props) {
     void loadProviders();
   }, [loadProviders]);
   // saved 数据晚于组件挂载到达（如 personal 从 store 拉取）→ 未被用户编辑过时回填一次
-  const [touched, setTouched] = useState(false);
+  const [, setTouched] = useState(false);  // touched 不再读，仅标记用户是否手动编辑
   const [prevSaved, setPrevSaved] = useState<LLMConfigRow | undefined>(undefined);
   if (saved !== prevSaved) {
     setPrevSaved(saved);
-    if (!touched) {
-      if (saved) {
-        setProvider(saved.provider);
-        setBaseUrl(saved.base_url);
-        setModel(saved.model);
-      }
+    // 以服务端数据为准：saved 每次到达都回填（即便 touched=true 也覆盖，
+    // 防止浏览器自动填充把 admin/密码写进业务字段后卡死在错误态）
+    if (saved) {
+      setProvider(saved.provider);
+      setBaseUrl(saved.base_url);
+      setModel(saved.model);
     }
   }
 
-  const preset = providers[provider];
+  // embedding 槽用内置厂商列表（不污染文本/视觉的 store.providers）
+  const source = slot === "embedding" ? EMBED_PROVIDERS : providers;
+  const preset = source[provider];
   const models = useMemo(() => preset?.models || [], [preset]);
 
   const onProviderChange = (p: string) => {
     setProvider(p);
-    const pre = providers[p];
+    const pre = source[p];
     if (pre) setBaseUrl(pre.base_url);
     setTestMsg(null);
     setTouched(true);
@@ -116,6 +157,7 @@ export default function LLMConfigCard({ slot, mode, saved, onSaved }: Props) {
       base_url: baseUrl.trim(),
       model: model.trim(),
       api_key: apiKey.trim(), // 留空 → 服务端复用已保存 Key
+      kind: slot === "embedding" ? "embedding" : "chat",
     });
     if (!r) {
       setTestMsg({ ok: false, text: "请求失败" });
@@ -145,7 +187,7 @@ export default function LLMConfigCard({ slot, mode, saved, onSaved }: Props) {
       <label className="f-label">厂商预设</label>
       <div className="select-wrap">
         <select value={provider} onChange={(e) => onProviderChange(e.target.value)} data-testid={`provider-${mode}-${slot}`}>
-          {Object.entries(providers).map(([id, p]) => (
+          {Object.entries(source).map(([id, p]) => (
             <option key={id} value={id}>{p.label}</option>
           ))}
         </select>
@@ -156,6 +198,7 @@ export default function LLMConfigCard({ slot, mode, saved, onSaved }: Props) {
       <input
         value={baseUrl}
         onChange={(e) => { setBaseUrl(e.target.value); setTouched(true); }}
+        autoComplete="off"
         placeholder="https://…（选预设自动带出，可改）"
         data-testid={`baseurl-${mode}-${slot}`}
       />
@@ -164,7 +207,11 @@ export default function LLMConfigCard({ slot, mode, saved, onSaved }: Props) {
       <input
         value={model}
         onChange={(e) => { setModel(e.target.value); setTouched(true); }}
-        placeholder={slot === "vision" ? "如 qwen-vl-plus（需支持图像）" : "如 qwen-plus / ep-xxx"}
+        autoComplete="off"
+        placeholder={
+          slot === "embedding" ? "如 text-embedding-v3 / BAAI/bge-m3"
+            : slot === "vision" ? "如 qwen-vl-plus（需支持图像）" : "如 qwen-plus / ep-xxx"
+        }
         list={`model-suggest-${mode}-${slot}`}
         data-testid={`model-${mode}-${slot}`}
       />
@@ -182,6 +229,7 @@ export default function LLMConfigCard({ slot, mode, saved, onSaved }: Props) {
         type="password"
         value={apiKey}
         onChange={(e) => { setApiKey(e.target.value); setTouched(true); }}
+        autoComplete="new-password"
         placeholder={saved?.api_key_masked ? "留空保留已存 Key，输入新值覆盖" : "sk-…（免费厂商可留空，由平台提供）"}
         data-testid={`apikey-${mode}-${slot}`}
       />

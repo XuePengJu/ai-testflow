@@ -82,10 +82,10 @@ export default function ProfileCard() {
           </span>
         </div>
         {me.email && <div className="p-row"><span className="p-label">邮箱</span><span>{me.email}</span></div>}
-        {me.role === "guest" && me.remaining_hours != null && (
+        {me.role === "guest" && (
           <div className="p-row">
-            <span className="p-label">剩余时长</span>
-            <span>约 {Math.max(0, Math.round(me.remaining_hours))} 小时</span>
+            <span className="p-label">账号类型</span>
+            <span>全站共享演示账号（不过期）</span>
           </div>
         )}
       </div>
@@ -120,7 +120,7 @@ export default function ProfileCard() {
           </button>
         </div>
       ) : (
-        <div className="hint-line">访客账号无需密码，可在登录框「注册保留访客数据」转正。</div>
+        <div className="hint-line">当前为共享访客账号（免注册、不过期）。注册账号后可自定义模型配置并长期保留数据。</div>
       )}
     </section>
   );
