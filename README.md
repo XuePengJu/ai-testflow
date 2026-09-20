@@ -1,7 +1,7 @@
 # AI 测试工作流平台
 
-> 作品集「门面担当」全栈产品，当前版本 **V3.1**（2026-09-18 已部署上线）。
-> 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端。支持多厂商大模型、**多角色协作视角（产品/测试/开发）**、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
+> 作品集「门面担当」全栈产品，当前版本 **V4.5.1**（2026-09-20）。
+> 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端；并内置 **RAG 知识库**与**知识库问答**能力——AI 对话默认自动检索私有/共享知识库并给出引用溯源。支持多厂商大模型、**多角色协作视角（产品/测试/开发）**、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
 
 在线演示：[https://ai.clickscope.in](https://ai.clickscope.in)
 
@@ -12,15 +12,17 @@
 真实部署的 **DBERP 进销存系统**（服务器上已部署）没有 Swagger、也没有现成测试用例。
 本平台以它为被测对象，把测试用例生成做成平台能力：
 
-- 输入：接口规格（OpenAPI JSON）/ 业务需求（Markdown，支持图片引用）
+- 输入：接口规格（OpenAPI JSON）/ 业务需求（Markdown，支持图片引用）/ 知识库文档（PRD、历史用例、接口定义）
 
 - 输出：结构化测试用例（xlsx / json / xmind）
 
 - 过程：四 Agent 编排，每步可观测、可重试、可定位错误
 
-- 扩展：用户级模型配置、任务分类管理、思维导图在线评审
+- 扩展：用户级模型配置、任务分类管理、思维导图在线评审、**RAG 知识库问答**
 
 ***
+
+![AI 测试工作流平台 · 首页 Dashboard](docs/screenshots/home.jpg)
 
 ## 功能一览
 
@@ -31,6 +33,8 @@
 - 任务状态机：pending → running → completed | failed
 
 - 步骤日志：每步状态 / 耗时 / 输出摘要 / 错误详情
+
+- 任务调度底座（V3.2）：全局任务队列 + 5 Worker 池，uvicorn 启动恢复未完成任务（部署不丢任务）；失败任务**断点续跑 + 重试按钮**
 
 ### 任务管理
 
@@ -55,6 +59,10 @@
 - **会话内闭环**：迭代产生的新任务卡以任务卡形式落在会话原位（后端回填 `messages.task_id`），支持「继续优化」，无需先打开详情
 
 - **会话绑定**：`TaskOut` 输出 `conversation_id`，历史任务按 `messages.task_id` 反查兜底，查不到则新建会话绑定
+
+- **多会话并发（V3.2）**：SSE 按会话隔离，多个会话同时聊天互不串流
+
+- **角色化回复身份（V3.2）**：聊天回复按当前角色动态切换语气（qa / pm / dev）
 
 详见 `docs/项目1-统一入口与会话内迭代执行方案-V2.10.md`
 
@@ -96,6 +104,8 @@
 
 - 步骤卡与任务列表状态强同步（列表轮询兜底），不再出现"任务已完成、节点还转圈"
 
+- **步骤卡实时计时器（V3.2）**：任务总耗时 + 单步耗时实时走动，刷新页面不丢（`StepLogOut` 返回 `started_at`）
+
 ### 多角色协作（V3.1）
 
 - **三种视角可选**：输入区「深度思考」旁新增 **产品 / 测试 / 开发 多选 pill**（默认仅「测试」，至少选一个）——产品视角关注业务价值/需求覆盖/验收标准，测试视角关注正向/异常/边界/场景组合，开发视角关注契约/幂等/并发/数据一致性
@@ -106,6 +116,50 @@
 
 - **全链路透传**：创建任务 `roles` 参数 → `Task.roles`（幂等迁移补列）→ engine → generator_agent → 生成核心；迭代子任务自动继承角色
 
+### RAG 知识库（V4.0）
+
+> 知识库是平台的「外部记忆」——AI 对话与用例生成可基于私有/共享文档作答，而非仅依赖模型训练参数，显著降低幻觉。
+
+- **文档入库**：上传 docx / pdf / md / markdown / txt / xlsx / xls，自动切分 chunk + Embedding 向量化（默认百炼 `text-embedding-v3`，可换任意 OpenAI 兼容 embedding）→ Chroma 向量库持久化（`vectors/`）
+
+- **知识库隔离**：每库可设「私有 / 共享」，共享库对所有登录用户可见；列表显示可见性徽标 + 文档数 / 分块数统计
+
+- **分块可审可干预**：文档详情查看 chunks，支持分块编辑、修订版本（revisions）、回滚（rollback）、重建索引（reindex）；文档类型 `document / wiki / faq`，wiki 可 LLM 自动生成摘要与分类
+
+- **混合检索**：向量召回 + 关键词，相似度打分；检索测试台展示命中来源与分值
+
+- **会话模式隔离**：`Conversation.mode` 支持 `workflow`（首页工作流对话）/ `kb_qa`（知识库问答），按库隔离作答
+
+详见 `docs/项目1-RAG知识库执行方案-V4.0.md`
+
+### 知识库问答合一（V4.1）
+
+- **合一页（pill tabs）**：AI 问答 / 文档 / 检索 / 图谱，顶栏下拉切换知识库（`KbSelector`）
+
+- **AI 问答（kb_qa 模式）**：只检索该库作答；`_build_rag_context` **对所有对话无条件调用**，命中即先发 `citations` 事件（引用溯源），再发正文
+
+- **引用溯源 chips**：回答正文前展示「引用自《文档名》第 N 段」，点击跳文档 Tab 并高亮定位（V4.3.1 起主对话也显示引用 chips）
+
+![知识库 AI 问答 · 检索范围与引用溯源 chips](docs/screenshots/kb-qa.jpg)
+
+- **推荐问题**：空库引导提问
+
+详见 `docs/项目1-知识库问答合一执行方案-V4.1.md`
+
+### 演示模式开关（demo-guard，V4.1）
+
+- `AITF_ALLOW_DEMO=0`（**默认**）：未配模型 / 调用失败 → 直接报错，**不再静默 mock**（避免"假跑"误导评审）
+
+- `AITF_ALLOW_DEMO=1`：恢复演示兜底（模板回复明确标注 `used_mock`），本地 / 现场演示开箱即跑
+
+- 测试基线同步：conftest 开演示模式，排除脚本式 e2e 防污染
+
+### Embedding 向量模型独立槽（V4.2）
+
+- 模型配置新增「**向量模型**」独立槽位，`text / vision / embedding` 三槽并存；设置页回显当前生效 Embedding 及维度，可独立测通
+
+- 厂商预设扩至含 Embedding（百炼 `text-embedding-v3` / Ollama 等 OpenAI 兼容 `/embeddings` 端点）
+
 ### 任务详情（3 Tab）
 
 - 🧠 **思维导图**：MindElixir 在线渲染，模块 → 用例层级，标签显示类型与优先级（P0/P1/P2）
@@ -114,6 +168,8 @@
 
 - ⚙️ **工作流步骤**：四步时间线，每步日志与质量报告
 
+![任务详情 · 测试用例表格（62 条，含优先级 / 前置 / 步骤→预期 / 测试数据）](docs/screenshots/task-cases.jpg)
+
 ### 对话驱动助手（V2.6）
 
 - **Buddy 测试专家助手**：对话流式输出（SSE），折叠展示思考过程
@@ -121,6 +177,10 @@
 - 会话持久化：历史会话列表，跨会话不丢
 
 - 对话内直接提交任务：需求聊清楚后点击「生成测试用例」，任务节点内联展示在对话流中，点击可展开详情
+
+- **主对话 RAG 引用（V4.3.1）**：主对话自动检索知识库，回答底部展示「引用 N 条」chips（含来源文档与相似度），点击可溯源
+
+![AI 对话 · RAG 自动检索与引用来源标注（相似度徽标）](docs/screenshots/rag-citations.jpg)
 
 ### 用例迭代与导入（V2.7）
 
@@ -134,7 +194,7 @@
 
 ### 对话附件文档解析（V2.9）
 
-- 对话输入框支持上传文档附件（docx / pdf / md / markdown / txt），后端 `app/api/files.py` 接收并 `app/services/doc_extract.py` 抽取纯文本
+- 对话输入框支持上传文档附件（docx / pdf / md / markdown / txt / xlsx / xls），后端 `app/api/files.py` 接收并 `app/services/doc_extract.py` 抽取纯文本
 - 抽取结果（附文件名）作为上下文注入对话请求（`ChatIn.file_id`），Buddy 助手基于文档内容作答——可直接把 PRD / 需求文档丢进对话让它生成用例
 - 解析分层容错：`.docx` 用 python-docx 抽正文段落 + 表格行；`.pdf` 用 pdfplumber 逐页抽取并跳过空白页；`.md/.markdown/.txt` 直接 utf-8 读取（非法字节 `errors="replace"` 容错）；超大文件截断到上限
 - 依赖缺失不崩：缺 python-docx / pdfplumber 时抛出明确错误提示，而非静默失败
@@ -162,23 +222,26 @@
 
 ### 多厂商大模型接入
 
-- **8 家厂商预设 + 自定义**（OpenAI 兼容协议，**LangChain `init_chat_model` 统一入口 + 统一 `stream()`**）：
+- **8 家厂商预设 + 自定义 + Embedding（OpenAI 兼容协议，`LangChain init_chat_model` 统一入口 + 统一 `stream()`）**：
 
   - 阿里百炼 / 魔搭社区 ModelScope（免费推理）/ 智谱 GLM（含 Coding Plan 专用端点）/ 腾讯混元 / DeepSeek / Kimi / 豆包（火山方舟）/ 自定义
+  - Embedding：百炼 `text-embedding-v3` / Ollama 等任意 OpenAI 兼容 `/embeddings` 端点
 
 - **统一模型入口**：`model_provider="openai"` 一个打遍全部兼容端点，差异只留 base_url/api_key；`AITF_LLM_BACKEND=httpx` 可回退旧直连
 
 - **深度思考开关**：`enable_thinking` 经 `extra_body` 透传；端点不认时 400 自动去参重试并记忆；思考字段（reasoning_content 等）经补丁恢复进 LangChain chunk
 
-- **双槽位配置**：文本模型 + 视觉模型（多模态）
+- **双槽位配置 → 三槽（V4.2）**：文本模型 + 视觉模型（多模态）+ **向量模型（Embedding）**
 
   - 只配文本模型：全流程用它，图片被忽略并提示
 
   - 双模型：含图片时视觉模型先解读 → 描述并入文本 → 文本模型生成用例
 
+  - 向量模型：RAG 知识库检索与入库使用
+
 - **双层配置**：用户自定义配置 > 平台默认（admin 设）> 环境变量 > mock 兜底
 
-- **连通测试**：一键验证 Key 有效性与延迟
+- **连通测试**：一键验证 Key 有效性与延迟（各槽位独立测通，支持并发）
 
 - **Key 安全**：AES-256-GCM 加密落库，接口回显脱敏（`sk-****abcd`）
 
@@ -186,9 +249,11 @@
 
 | 角色            | 来源              | 数据保留               | 能力                           |
 | ------------- | --------------- | ------------------ | ---------------------------- |
-| **guest 访客**  | 按 IP 自动建临时身份    | **24h TTL**，到期级联清理 | 体验全功能，任务上限 10，可一键转正          |
+| **guest 访客**  | 全站唯一**共享账号**（`username=guest`，免注册共用） | **不过期、不转正、不限频**；数据混用，admin 可一键清空共享数据 | 体验全功能，任务上限 10              |
 | **user 注册用户** | 邮箱 + 密码（bcrypt） | 永久                 | 只管自己的任务 / 分类 / 模型配置 / 文件     |
-| **admin 管理员** | 首个注册用户自动晋升      | 永久                 | 全量任务、用户治理、访客治理、平台统计、平台默认模型配置 |
+| **admin 管理员** | 首个注册用户自动晋升      | 永久                 | 全量任务、用户治理、访客治理、平台统计、平台默认模型配置、知识库管理 |
+
+> V4.1 起访客体系简化为单一固定共享账号（原「按 IP 动态建访客 / 24h TTL / 访客转正」已移除），降低滥用面、简化前端登录态同步。共享 guest 的任务与文件由 admin 手动清空（`reset_shared_guest_data`），无自动 TTL 清理调度。
 
 ### 分级流量加密（V2.1）
 
@@ -213,17 +278,21 @@
 
 - 登录限速：同一用户连续失败 5 次锁 10 分钟
 
-- 访客防滥用：单 IP 24h 最多 5 个访客身份，单访客最多 10 个任务
-
 - 越权统一 404（防资源枚举）
 
-- 访客清理：APScheduler 定时 + 懒清理 + 手动清理，删除动作写审计表
+- 访客防滥用：单 IP 24h 最多 5 个历史访客身份（迁移遗留清理用）；共享 guest 任务上限 10
+
+- 审计：删除 / 清空动作写审计表
 
 ### 产品包装
 
 - 右侧悬浮「需求进度」抽屉：已上线 / 开发中 / 规划中，三组进度展示
 
-- 顶栏模型状态胶囊：实时显示当前生效模型与来源
+- 顶栏模型状态胶囊：实时显示当前生效模型（文本 / 视觉 / **向量**）与来源
+
+- 顶栏知识库下拉选择器：切换当前问答知识库
+
+- 系统自检悬浮通知（V4.5.1）：右上角滑入，6s 自动消失，hover 暂停，可手动关闭，四项检查（服务连通 / 加密链路 / 登录态 / 会话有效期）
 
 ***
 
@@ -235,13 +304,14 @@
 | 数据库   | **MySQL**（生产，远程库，地址见 `.env`）+ 本地 SQLite；SQLAlchemy 2.0 ORM 双方言适配 |
 | 认证    | **bcrypt + JWT**（passlib / pyjwt）+ 每请求回查用户状态     |
 | 加密    | **AES-256-GCM**（Python cryptography + 前端纯 JS 实现） |
-| AI 模型 | **LangChain**（`init_chat_model` + 统一 `stream()`，langchain==1.4.0 / langchain-openai==1.6.2 / langsmith==0.12.5），支持 8 家厂商预设 + 自定义 + 多角色协作模板；`AITF_LLM_BACKEND=httpx` 可回退旧直连；无 Key 自动 mock 兜底 |
+| AI 模型 | **LangChain**（`init_chat_model` + 统一 `stream()`，langchain==1.4.0 / langchain-openai==1.6.2 / langsmith==0.12.5），支持 8 家厂商预设 + 自定义 + 多角色协作模板；`AITF_LLM_BACKEND=httpx` 可回退旧直连；无 Key 且开启演示模式时 mock 兜底 |
+| 向量库   | **Chroma**（持久化于 `vectors/`，默认集合 `ai-testflow-kb`）；Embedding 默认百炼 `text-embedding-v3`（可换任意 OpenAI 兼容端点） |
 | 前端    | **React 18 + TypeScript + Vite**（zustand 状态管理），构建产物纯静态、FastAPI 同源托管 |
 | 思维导图  | **MindElixir**（120KB，可编辑，原生标签支持）                 |
 | 前端渲染  | **marked**（Markdown 解析）+ **DOMPurify**（XSS 净化）          |
 | 文档解析  | **python-docx**（docx 抽取）+ **pdfplumber**（pdf 抽取）         |
-| 任务调度  | APScheduler（访客清理定时任务）                            |
-| 测试    | pytest（221 条后端自动化用例）+ Playwright（M1~M5 浏览器端到端验证脚本）          |
+| 任务调度  | 全局任务队列 + 5 Worker 池（uvicorn 启动恢复）+ APScheduler（历史访客清理） |
+| 测试    | pytest（**225 条**后端自动化用例，覆盖认证 / 分级加密 / 权限 / 对话 / RAG / 知识库 / 迭代导入 / 附件解析 / 思考 / 标题复合化 / 多角色 / Embedding / 演示模式）+ Playwright（M1~M5 浏览器端到端验证脚本） |
 
 ***
 
@@ -249,10 +319,12 @@
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env        # 可选：填 DASHSCOPE_API_KEY 接真模型；留空走 mock
+cp .env.example .env        # 可选：填 DASHSCOPE_API_KEY 接真模型；留空且不开演示模式则报错（见下）
 python scripts/migrate_v2.py  # 首次/升级时执行（幂等）：建用户表 + 预置 admin + 存量数据迁移
 python main.py              # 等价于 uvicorn main:app --port 8000
 ```
+
+> **演示模式**：默认 `AITF_ALLOW_DEMO=0`，未配置模型直接报错（不静默 mock）。本地/现场演示想开箱即跑，在 `.env` 设 `AITF_ALLOW_DEMO=1`，未配模型时走模板兜底（明确标注 `used_mock`）。
 
 数据库：`.env` 中配 `DATABASE_URL`；配 MySQL 则走 MySQL，留空默认本地 SQLite（`app/core/db.py` 双方言适配）。生产环境为 MySQL 远程库。
 
@@ -267,7 +339,7 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 
 > 前端版本切换：默认伺服 React 版（`frontend/dist`）；出问题时设 `AITF_FRONTEND=legacy` 重启即回退旧版单文件前端（`frontend-legacy/`），无需回滚代码。
 
-首次访问**无需注册**：可直接「游客体验」，或注册账号（首个注册用户自动成为管理员）。
+首次访问**无需注册**：可直接「游客体验」（共享 guest 账号），或注册账号（首个注册用户自动成为管理员）。
 
 访问：
 
@@ -279,15 +351,16 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 
 ## 演示流程（30 秒出成品）
 
-1. 首页三选一：登录 / 注册 / 游客体验（游客 24h 内数据保留，可随时转正）
+1. 首页三选一：登录 / 注册 / 游客体验（共享 guest 账号，数据混用，admin 可清空）
 2. 在会话输入框描述需求，或上传 DBERP 规格文件（`examples/` 下有现成样本）；可先多轮沟通再点「生成测试用例」（可勾选 **产品/测试/开发** 视角）
 3. 选导出格式（xlsx / json / xmind），任务提交后在会话内实时看到四 Agent 进度
 4. 点开任务看 **思维导图预览** / **测试用例表格** / **四步骤时间线**
 5. 需要补充用例：点任务卡或抽屉底部的「💬 继续优化」→ 输入框挂上迭代 chip → 沟通完点「⚡ 生成用例」→ 产出 v2（角色自动继承），抽屉标题行 `vN ▾` 可切回任一历史版本
 6. 一键下载导出的测试用例文件
+7. **知识库问答**：进入知识库页 → 新建库并上传 PRD / 历史用例 → 切到「AI 问答」→ 提问，回答自动检索该库并附**引用溯源 chips**
 
-> 无模型 Key 时自动走 **mock 兜底**，无需联网即可演示完整编排流程。
-> 配置真实模型：点顶栏模型状态胶囊 → 选厂商 → 填 Key → 测试连通 → 保存。
+> 无模型 Key 时：开 `AITF_ALLOW_DEMO=1` 走 **mock 兜底**，无需联网即可演示完整编排流程（默认关闭，未配模型直接报错）。
+> 配置真实模型：点顶栏模型状态胶囊 → 选厂商 → 填 Key → 测试连通 → 保存（文本 / 视觉 / 向量三槽独立配置）。
 
 ***
 
@@ -308,7 +381,7 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 
 | 方法   | 路径                   | 说明                 |
 | ---- | -------------------- | ------------------ |
-| POST | `/api/guest/token`   | 按 IP 签发/复用访客 token |
+| POST | `/api/guest/token`   | 签发/复用全站共享 guest token |
 | POST | `/api/guest/upgrade` | 访客转注册用户（数据迁移）      |
 
 ### 任务
@@ -326,24 +399,48 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 
 | 方法     | 路径                              | 说明                    |
 | ------ | ------------------------------- | --------------------- |
-| GET    | `/api/conversations`           | 会话列表（按更新时间倒序）          |
-| POST   | `/api/conversations`           | 新建会话                  |
+| GET    | `/api/conversations`           | 会话列表（按更新时间倒序，含 mode/kb_id） |
+| POST   | `/api/conversations`           | 新建会话（可带 `mode=workflow\|kb_qa` + `kb_id`） |
 | GET    | `/api/conversations/{id}`       | 会话详情（含全部消息，含思考过程）     |
 | POST   | `/api/conversations/{id}/messages` | 追加消息（前端断线恢复用）     |
 | DELETE | `/api/conversations/{id}`       | 删除会话                  |
 
-### 对话（V2.6）
+### 对话（V2.6 / V4.1）
 
 | 方法   | 路径                | 说明                          |
 | ---- | ----------------- | --------------------------- |
-| POST | `/api/chat/stream` | Buddy 流式对话（SSE），支持注入任务摘要上下文（`task_id`）+ 深度思考 + 文档附件（file_id） |
+| POST | `/api/chat/stream` | Buddy 流式对话（SSE）：支持注入任务摘要上下文（`task_id`）+ 深度思考 + 文档附件（`file_id`）；`kb_qa` 模式下自动检索知识库并先发 `citations` 事件（引用溯源） |
 | POST | `/api/chat`        | 非流式对话（兜底，同渲染管线）              |
 
 ### 文件（V2.9 附件）
 
 | 方法   | 路径           | 说明                                  |
 | ---- | ------------ | ----------------------------------- |
-| POST | `/api/files` | 上传对话附件（docx/pdf/md/markdown/txt），返回 file_id 供 ChatIn 引用 |
+| POST | `/api/files` | 上传对话附件（docx/pdf/md/markdown/txt/xlsx/xls），返回 file_id 供 ChatIn 引用 |
+
+### 知识库（V4.0 / V4.1）
+
+| 方法     | 路径                                       | 说明                              |
+| ------ | ---------------------------------------- | ------------------------------- |
+| GET    | `/api/knowledge/bases`                   | 知识库列表（按可见性过滤，含文档/分块统计）          |
+| POST   | `/api/knowledge/bases`                   | 新建库（`name` / `visibility` 私有或共享）    |
+| PATCH  | `/api/knowledge/bases/{id}`              | 改名 / 改可见性                      |
+| DELETE | `/api/knowledge/bases/{id}`             | 删库（级联文档）                        |
+| POST   | `/api/knowledge/bases/{id}/documents`    | 上传文档入库（docx/pdf/md/xlsx…）         |
+| POST   | `/api/knowledge/bases/{id}/documents/text` | 新建文本文档                          |
+| GET    | `/api/knowledge/bases/{id}/documents`    | 文档列表                            |
+| GET    | `/api/knowledge/documents/{id}`          | 文档详情                            |
+| PUT    | `/api/knowledge/documents/{id}`          | 改正文                             |
+| PUT    | `/api/knowledge/documents/{id}/meta`     | 改元数据                            |
+| POST   | `/api/knowledge/documents/{id}/summary`  | 重新生成 wiki 摘要                    |
+| POST   | `/api/knowledge/documents/{id}/reindex`  | 重建索引                            |
+| DELETE | `/api/knowledge/documents/{id}`          | 删文档                             |
+| GET    | `/api/knowledge/documents/{id}/chunks`   | 分块列表                            |
+| PUT    | `/api/knowledge/chunks/{id}`             | 编辑分块                            |
+| GET    | `/api/knowledge/chunks/{id}/revisions`   | 分块修订历史                          |
+| POST   | `/api/knowledge/chunks/{id}/rollback`    | 回滚分块                            |
+| GET    | `/api/knowledge/search`                  | 混合检索（`kb_id` / `query` / `top_k`） |
+| POST   | `/api/knowledge/bases/{id}/wiki/index`   | 整库 wiki 索引                       |
 
 ### 分类
 
@@ -361,15 +458,15 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 
 | 方法     | 路径                              | 说明                 |
 | ------ | --------------------------- | ------------------ |
-| GET  | `/api/llm/config`            | 获取当前用户配置（Key 脱敏）   |
+| GET  | `/api/llm/config`            | 获取当前用户配置（Key 脱敏，含 embedding 槽） |
 | PUT  | `/api/llm/config`            | 保存用户配置（Key 加密落库）   |
-| DELETE | `/api/llm/config/{slot}`   | 删除某槽位配置（text/vision） |
+| DELETE | `/api/llm/config/{slot}`   | 删除某槽位配置（text/vision/embedding） |
 | POST | `/api/llm/test`              | 测试连通（用已保存或传入的配置）   |
-| GET  | `/api/llm/providers`         | 获取厂商预设列表           |
-| GET  | `/api/llm/effective`         | 当前生效配置（用户 > 平台默认 > 环境变量 > mock） |
+| GET  | `/api/llm/providers`         | 获取厂商预设列表（含 Embedding 预设） |
+| GET  | `/api/llm/effective`         | 当前生效配置（用户 > 平台默认 > 环境变量 > mock，含 embedding） |
 | GET  | `/api/llm/platform-config`   | （admin）获取平台默认配置 |
 | PUT  | `/api/llm/platform-config`   | （admin）设置平台默认配置    |
-| POST | `/api/llm/test-default/{slot}` | （admin）测试平台默认配置 |
+| POST | `/api/llm/test-default/{slot}` | （admin）测试平台默认配置（slot 含 embedding） |
 
 ### 管理后台（admin）
 
@@ -378,9 +475,10 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 | GET    | `/api/users`                   | 用户/访客列表                |
 | PATCH  | `/api/users/{id}`              | 启用/禁用用户                |
 | DELETE | `/api/users/{id}`              | 删除并级联清理                |
-| POST   | `/api/admin/guests/clean`      | 手动清理过期访客               |
-| POST   | `/api/admin/guests/clean-all`  | 清空全部访客                 |
+| POST   | `/api/admin/guests/clean`      | 手动清理过期访客（历史动态访客遗留）     |
+| POST   | `/api/admin/guests/clean-all`  | 清空全部历史访客               |
 | POST   | `/api/admin/guests/{id}/clean` | 定向清理单个访客               |
+| POST   | `/api/admin/shared-guest/reset` | 清空共享 guest 的任务与文件（保留账号） |
 | GET    | `/api/admin/stats`             | 注册用户/活跃访客/24h 清理数/任务总数 |
 
 ### 其他
@@ -395,8 +493,8 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 ## 关于用例生成核心库
 
 本仓库已**内置** `generator_core/`（整合自 CLI 原型 `ai-testcase-generator` 的解析 / 生成 / 导出逻辑），
-不再依赖外部项目，**clone 即跑**。平台层在其上叠加：任务调度状态机、四 Agent 编排、
-步骤可观测日志、REST API 与可视化前端。`generator_core/` 内部采用 mock 兜底，无模型 Key 也能生成用例。
+不再依赖外部项目，**clone 即跑**。平台层在其上叠加：任务调度状态机（全局队列 + Worker 池）、四 Agent 编排、
+步骤可观测日志、REST API 与可视化前端。`generator_core/` 内部采用 mock 兜底（需 `AITF_ALLOW_DEMO=1` 才启用），无模型 Key 也能演示用例生成流程。
 
 ***
 
@@ -404,9 +502,9 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 
 ```
 ai-testflow/
-├── main.py                      # 入口（挂载 API + 静态页 + 启动检查 + 调度器）
+├── main.py                      # 入口（挂载 API + 静态页 + 启动检查 + 调度器 + 任务队列恢复）
 ├── requirements.txt
-├── .env.example                 # 环境变量示例
+├── .env.example                 # 环境变量示例（含 AITF_ALLOW_DEMO / Embedding / DB 配置）
 ├── generator_core/              # 内置用例生成核心（config/ + src/，自包含）
 │   ├── src/
 │   │   ├── parser/              # 规格解析（API / business）
@@ -417,12 +515,15 @@ ai-testflow/
 ├── examples/                    # DBERP 接口规格 / 业务需求样本
 ├── frontend/                    # React + TS + Vite 工程（V2.8 重构）
 │   ├── src/
-│   │   ├── api/                 # client.ts（fetch 封装 + AES 加密层）
+│   │   ├── api/                 # client.ts（fetch 封装 + AES 加密层，禁止裸 fetch）
 │   │   ├── contexts/            # AuthContext（认证/加密快照）
 │   │   ├── store/               # zustand（chat/task/settings/category）
-│   │   ├── components/          # chat/ task/ settings/ admin/ common/
+│   │   ├── pages/               # Dashboard / KnowledgePage（V4.0 知识库合一页）/ SettingsPage / AdminPage
+│   │   ├── components/          # chat/ task/ settings/ admin/ knowledge/ common/
+│   │   │   ├── knowledge/KbSelector.tsx   # 顶栏知识库下拉选择器（V4.4）
+│   │   │   └── SelfCheckToast.tsx         # 系统自检悬浮通知（V4.5.1）
 │   │   ├── utils/               # taskChain.ts（迭代版本链解析，V2.11）
-│   │   └── styles/              # 样式（自旧版平移 + 迭代）
+│   │   └── styles/              # 样式（V4.5 活泼浅色主题 + V4.3 折叠侧栏）
 │   ├── dist/                    # 构建产物（不入库；scripts/deploy_frontend.sh 本地构建后发布，FastAPI 同源伺服）
 │   ├── public/
 │   └── scripts/                 # Playwright e2e（M1~M5 里程碑验证脚本）
@@ -431,45 +532,50 @@ ai-testflow/
 │   ├── deploy_frontend.sh       # 前端一键发布：本地构建→打包上传→重启→外网验证（含 3 份滚动备份+失败回滚；脚本含服务器配置，已 gitignore 不入库）
 │   ├── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
 │   └── start_local.sh           # 本地起服脚本（restart：kill 8000 后拉起）
-├── tests/                       # 221 条自动化用例（认证 + 分级加密 + 权限 + 对话 + 迭代导入 + 附件解析 + 思考 + 标题复合化 + 多角色等，pytest）
+├── tests/                       # 225 条自动化用例（认证 + 分级加密 + 权限 + 对话 + RAG + 知识库 + 迭代导入 + 附件解析 + 思考 + 标题复合化 + 多角色 + Embedding + 演示模式 + 访客共享，pytest）
 ├── app/
 │   ├── core/
-│   │   ├── config.py            # 配置加载
+│   │   ├── config.py            # 配置加载（含 Embedding / Chroma / AITF_ALLOW_DEMO）
 │   │   ├── db.py                # 数据库连接（MySQL / SQLite 双方言）
 │   │   ├── security.py          # bcrypt + JWT
 │   │   ├── crypto.py            # AES-256-GCM 加解密
-│   │   ├── providers.py         # LLM 厂商预设（8 家 + 自定义）
+│   │   ├── providers.py         # LLM 厂商预设（8 家 + 自定义 + Embedding）
 │   │   └── middleware.py        # 分级加密中间件
 │   ├── models/                  # SQLAlchemy 模型
 │   │   ├── task.py              # Task / StepLog（含 roles 多角色字段，V3.1）
 │   │   ├── user.py              # User / GuestCreationLog / CleanLog
-│   │   └── category.py          # Category（多级分类树）
+│   │   ├── category.py          # Category（多级分类树）
+│   │   └── knowledge.py         # KnowledgeBase / Knowledge / Chunk（V4.0 RAG）
 │   ├── schemas/                 # Pydantic 请求/响应
 │   │   ├── task.py
 │   │   ├── user.py
-│   │   └── category.py
+│   │   ├── category.py
+│   │   └── knowledge.py         # 知识库相关 schema（V4.0）
 │   ├── services/
 │   │   ├── pipeline_lib.py      # 调用内置 generator_core（透传 roles）
 │   │   ├── langchain_client.py  # LangChain 适配层（init_chat_model 统一入口 + 统一 stream，V3）
-│   │   ├── llm_service.py       # OpenAI 兼容 LLM 客户端（AITF_LLM_BACKEND=httpx 回退用）
-│   │   ├── sample_seeder.py     # 新访客示例数据播种（会话 + 任务 + 步骤日志）
-│   │   └── doc_extract.py       # 对话附件文档解析（docx/pdf/md → 纯文本，V2.9）
+│   │   ├── llm_service.py       # OpenAI 兼容 LLM 客户端 + resolve_embedding（V4.2）
+│   │   ├── knowledge/           # RAG 入库 / 检索（ingest / retrieve，V4.0）
+│   │   ├── sample_seeder.py     # 共享 guest 示例数据播种（V4.1）
+│   │   └── doc_extract.py       # 对话附件文档解析（docx/pdf/md/xlsx → 纯文本，V2.9）
 │   ├── workflow/
-│   │   ├── engine.py            # 状态机 + 步骤调度（透传 roles 到生成 Agent）
+│   │   ├── engine.py            # 状态机 + 步骤调度 + 全局任务队列（V3.2）
 │   │   ├── iterate.py           # 迭代流水线（加载基础用例→增量生成→合并去重→校验→导出）
 │   │   └── agents/              # Agent（parser/generator/reviewer/exporter/import/supplement）
 │   ├── api/                     # API 路由
 │   │   ├── auth.py
-│   │   ├── guest.py
+│   │   ├── guest.py             # 共享 guest 签发（V4.1）
 │   │   ├── tasks.py
 │   │   ├── categories.py
-│   │   ├── chat.py              # 对话流式/非流式（V2.6）
-│   │   ├── conversations.py     # 会话持久化（V2.6）
-│   │   ├── llm_config.py
+│   │   ├── chat.py              # 对话流式/非流式（V2.6，V4.1 kb_qa + citations）
+│   │   ├── conversations.py     # 会话持久化（V2.6，V4.1 mode/kb_id）
+│   │   ├── knowledge.py         # RAG 知识库 CRUD + 检索 + 分块修订（V4.0）
+│   │   ├── llm_config.py        # 含 embedding 槽（V4.2）
 │   │   ├── users.py             # admin 用户管理
 │   │   └── deps.py              # 鉴权依赖
 │   └── jobs/
-│       └── guest_cleaner.py     # 访客清理（定时 + 懒清理 + 审计）
+│       └── guest_cleaner.py     # 共享 guest 数据管理（V4.1 简化：手动清空，无自动 TTL）
+├── vectors/                     # Chroma 向量库持久化目录（.gitignore，不入库）
 ├── uploads/  outputs/           # 上传 / 导出目录（按用户分目录，已 gitignore）
 ├── deploy/
 │   └── ai-testflow.service      # systemd 单元（阿里云生产使用）
@@ -477,9 +583,12 @@ ai-testflow/
     ├── PRD.md                   # 产品需求文档
     ├── DEPLOY.md                # 部署指南（同源单服务 + cloudflared 隧道）
     ├── 项目1-工作流平台-MVP执行方案.md  # 技术实现方案（架构底座，版本无关）
+    ├── 项目1-LangChain迁移执行方案.md   # V3 LangChain 化方案
     ├── 项目1-前端React重构执行方案-V2.8.md      # 前端重构执行方案
     ├── 项目1-功能增强执行方案-V2.9.md            # V2.9 功能增强执行方案
-    └── 项目1-统一入口与会话内迭代执行方案-V2.10.md  # V2.10 统一入口执行方案
+    ├── 项目1-统一入口与会话内迭代执行方案-V2.10.md  # V2.10 统一入口执行方案
+    ├── 项目1-RAG知识库执行方案-V4.0.md          # V4.0 RAG 知识库执行方案
+    └── 项目1-知识库问答合一执行方案-V4.1.md       # V4.1 知识库问答合一执行方案
 ```
 
 ***
@@ -526,5 +635,13 @@ ai-testflow/
 | V2.12（已完成） | 导图控件迁出画布：导出 XMind / 全屏 / 缩放 / 百分比 / 居中 与「继续优化」融合进底栏单行 | ✅ 已上线 |
 | V3（已完成） | LLM 接入层 LangChain 化：`init_chat_model` 统一入口 + 全链路统一 `stream()` + `enable_thinking` extra_body 透传 + 思考字段恢复补丁 + `AITF_LLM_BACKEND` 双实现回退 + LangSmith 可观测 + SQLAlchemy 2.0 重构；生成用例实时进度（`StepLog.progress` 逐测试点回调） | ✅ 已上线 |
 | V3.1（已完成） | 多角色协作（产品/测试/开发）：角色化提示词模板 × 「测试点 × 角色」双层循环生成 + 跨角色合并去重 + 前端角色多选 pill + 全链路透传（迭代继承角色） | ✅ 已上线 |
-| V3.2（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
-| V3.3（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
+| V3.2（已完成） | 任务调度底座：全局任务队列 + 5 Worker 池 + 启动恢复 + 失败断点续跑/重试 + 多会话并发隔离 + 步骤卡实时计时器 + 角色化回复身份 | ✅ 已上线 |
+| V4.0（已完成） | RAG 知识库后端：文档入库（docx/pdf/md/xlsx）/ 混合检索 / 分块编辑与修订回滚 / SSE citations 引用溯源 / 会话 kb_qa 模式隔离 / Chroma 向量库 | ✅ 已上线 |
+| V4.1（已完成） | 知识库管理 + AI 问答合一页（pill tabs：问答/文档/检索/图谱）；访客体系简化为全站唯一共享账号；演示模式开关 `AITF_ALLOW_DEMO` | ✅ 已上线 |
+| V4.2（已完成） | Embedding 向量模型独立槽位 + 厂商预设（百炼 text-embedding-v3 / Ollama 等 OpenAI 兼容 /embeddings）+ 设置页向量模型回显与独立测通 | ✅ 已上线 |
+| V4.3（已完成） | 可折叠侧边栏（图标 + 文字 / 收起浮层标签 / 状态持久化） | ✅ 已上线 |
+| V4.4（已完成） | 知识库顶栏下拉选择器（移除左侧堆叠列表，会话上方下拉切换） | ✅ 已上线 |
+| V4.5（已完成） | 活泼浅色主题（马卡龙图标色块 / 紫蓝渐变主色 / 白底侧栏） | ✅ 已上线 |
+| V4.5.1（已完成） | 系统自检悬浮通知（右上角滑入 / 6s 自动消失 / hover 暂停 / 可手动关 / 四项检查） | ✅ 已上线 |
+| V4.6（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
+| V4.7（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
