@@ -130,6 +130,14 @@ def _ensure_columns() -> None:
                 conn.execute(text("ALTER TABLE step_logs ADD COLUMN progress TEXT"))
                 conn.commit()
 
+    # messages 补列（V4.5.2：RAG 引用溯源持久化，JSON 文本；老库启动自动补）
+    if insp.has_table("messages"):
+        mcol = {c["name"] for c in insp.get_columns("messages")}
+        if "citations" not in mcol:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN citations TEXT"))
+                conn.commit()
+
 
 def get_db():
     """FastAPI 依赖：提供数据库会话。"""

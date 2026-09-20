@@ -5,6 +5,7 @@
 - V4.1：会话带 mode（workflow/kb_qa）与 kb_id，列表支持 ?mode= 过滤，
   知识库问答会话与首页工作流会话互不污染
 """
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -35,6 +36,8 @@ class MessageIn(BaseModel):
     role: str = Field(default="user", pattern="^(user|assistant)$")
     content: str = ""
     thinking: str = ""
+    # V4.5.2：可选引用溯源（JSON 数组，原样存文本）
+    citations: list[dict] | None = None
     task_id: str | None = None
 
 
@@ -73,6 +76,17 @@ def _task_brief(db: Session, task_id: str | None) -> dict | None:
     }
 
 
+def _parse_citations(raw: str | None) -> list[dict] | None:
+    """V4.5.2：messages.citations JSON 文本 → 列表；空/坏数据返回 None。"""
+    if not raw:
+        return None
+    try:
+        v = json.loads(raw)
+        return v if isinstance(v, list) and v else None
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 def _to_out(db: Session, c: Conversation, include_messages: bool = False) -> ConversationOut:
     count = db.execute(
         select(func.count()).select_from(Message).where(Message.conversation_id == c.id)
@@ -92,6 +106,7 @@ def _to_out(db: Session, c: Conversation, include_messages: bool = False) -> Con
         out.messages = [
             MessageOut(
                 id=m.id, role=m.role, content=m.content, thinking=m.thinking,
+                citations=_parse_citations(getattr(m, "citations", None)),
                 task_id=m.task_id, created_at=m.created_at,
                 task=_task_brief(db, m.task_id),
             )
@@ -115,11 +130,16 @@ def create_conversation(body: ConversationIn,
 
 @router.get("", response_model=list[ConversationOut])
 def list_conversations(mode: str | None = None,
+                       kb_id: str | None = None,
                        user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)):
     stmt = select(Conversation).where(Conversation.user_id == user.id)
     if mode in ("workflow", "kb_qa"):  # V4.1：按模式过滤，非法值返回全部（兼容老前端）
         stmt = stmt.where(Conversation.mode == mode)
+    # V4.5.2：知识库问答页按库过滤会话，避免切库后看到别的库的问答历史
+    # kb_id 为空的老问答会话不回落——它们本就无法按正确库检索，严格隔离
+    if kb_id:
+        stmt = stmt.where(Conversation.kb_id == kb_id)
     rows = db.execute(stmt.order_by(Conversation.updated_at.desc())).scalars().all()
     return [_to_out(db, c) for c in rows]
 
@@ -137,13 +157,16 @@ def add_message(conv_id: str, body: MessageIn,
                 db: Session = Depends(get_db)):
     c = _own_conversation(db, user, conv_id)
     m = Message(conversation_id=c.id, role=body.role, content=body.content,
-                thinking=body.thinking, task_id=body.task_id)
+                thinking=body.thinking, task_id=body.task_id,
+                citations=(json.dumps(body.citations, ensure_ascii=False)
+                           if body.citations else None))
     db.add(m)
     c.updated_at = utcnow()
     db.commit()
     db.refresh(m)
     return MessageOut(
         id=m.id, role=m.role, content=m.content, thinking=m.thinking,
+        citations=_parse_citations(getattr(m, "citations", None)),
         task_id=m.task_id, created_at=m.created_at,
         task=_task_brief(db, m.task_id),
     )

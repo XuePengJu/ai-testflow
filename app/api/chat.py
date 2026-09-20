@@ -113,12 +113,14 @@ def _ensure_conversation(db: Session, user: User | None, body: ChatIn) -> None:
 
 
 def _persist_chat(db: Session, user: User | None, body: ChatIn, full_text: str,
-                  think_text: str = "") -> None:
+                  think_text: str = "", citations: list[dict] | None = None) -> None:
     """流式结束后把 user + assistant 消息落库到会话（对话记录持久化）。
 
     think_text 是上游独立字段（reasoning_content）累积的思考内容；
     为空时回落到从正文里切 <think> 标签（老模型形态）。思考必须单独存，
     否则历史消息的思考面板会空。
+
+    V4.5.2：citations 一并持久化（JSON 文本），切换会话/刷新后引用不丢。
     """
     if not user or not body.conversation_id:
         return
@@ -128,9 +130,10 @@ def _persist_chat(db: Session, user: User | None, body: ChatIn, full_text: str,
     thinking, reply = _split_think(full_text)
     if think_text:
         thinking = f"{think_text.strip()}\n\n{thinking}".strip() if thinking else think_text.strip()
+    cites_json = json.dumps(citations, ensure_ascii=False) if citations else None
     db.add(Message(conversation_id=conv.id, role="user", content=body.message))
     db.add(Message(conversation_id=conv.id, role="assistant",
-                   content=reply, thinking=thinking))
+                   content=reply, thinking=thinking, citations=cites_json))
     conv.updated_at = utcnow()
     db.commit()
 
@@ -300,7 +303,7 @@ async def _run(db: Session, user: User | None, body: ChatIn, source: str):
         except Exception:
             pass
     finally:
-        _persist_chat(db, user, body, full_text, think_text)
+        _persist_chat(db, user, body, full_text, think_text, citations)
 
 
 @router.post("/chat/stream")

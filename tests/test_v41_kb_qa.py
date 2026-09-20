@@ -78,6 +78,16 @@ wf_list = c.get("/api/conversations?mode=workflow").json()
 assert len(kb_qa_list) == 1 and kb_qa_list[0]["mode"] == "kb_qa"
 assert all(x.get("mode", "workflow") != "kb_qa" for x in wf_list)
 
+# 3.1) V4.5.2：会话列表支持 ?kb_id= 过滤（切库只看到本库问答历史）
+c.post("/api/conversations", json={"title": "另一库问答", "mode": "kb_qa", "kb_id": "kb_other"})
+c.post("/api/conversations", json={"title": "老问答无库", "mode": "kb_qa"})  # 老数据 kb_id 为空
+own = c.get(f"/api/conversations?mode=kb_qa&kb_id={kb_id}").json()
+assert own and all(x["kb_id"] == kb_id for x in own), own
+other = c.get("/api/conversations?mode=kb_qa&kb_id=kb_other").json()
+assert len(other) == 1 and other[0]["title"] == "另一库问答", other
+# kb_id 为空的老会话不回落：严格隔离，不出现在任何按库过滤的结果里
+assert all(x.get("kb_id") for x in own + other), own + other
+
 # 4) citations items 元数据结构（引用溯源映射链路）
 for block in r.text.split("\n\n"):
     if "event: citations" in block and "data: " in block:
