@@ -19,6 +19,7 @@ from app.core.config import VECTOR_DIR, VECTOR_COLLECTION, AITF_ALLOW_DEMO
 logger = logging.getLogger("knowledge.vectorstore")
 
 MOCK_DIM = 256  # 演示用向量维度（真实 embedding 维度由模型决定，互不通用）
+EMBED_BATCH = 20  # 阿里百炼 embedding 单次批量上限 25，留安全余量分批
 
 # 全局生效的 embedding 配置 {provider, base_url, model, api_key}；由调用方在
 # 每次请求前用 llm_service.resolve_embedding(db) 的结果刷新（单进程内赋值安全）
@@ -57,7 +58,11 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
                 base_url=_EMBED_CFG["base_url"],
                 check_embedding_ctx_length=False,
             )
-            return emb.embed_documents([t or " " for t in texts])
+            cleaned = [t or " " for t in texts]
+            out: list[list[float]] = []
+            for i in range(0, len(cleaned), EMBED_BATCH):
+                out.extend(emb.embed_documents(cleaned[i : i + EMBED_BATCH]))
+            return out
         except Exception as e:  # noqa: BLE001
             if AITF_ALLOW_DEMO:
                 logger.warning("embedding 调用失败，演示模式下降级 mock：%s", e)
