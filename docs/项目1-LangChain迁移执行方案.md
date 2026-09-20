@@ -1,6 +1,6 @@
 # 项目 1：LLM 调用层迁移 LangChain 执行方案
 
-> 状态：**阶段 1（依赖+实测）、阶段 2（主链路迁移）、阶段 3（LangSmith 接入）全部完成**；验证全过（221 条 pytest + 真实模型端到端 26 用例 + LangSmith trace 已入库）；分支 `feature/multi-role-collab` 已推 GitHub
+> 状态：**阶段 1（依赖+实测）、阶段 2（主链路迁移）、阶段 3（LangSmith 接入）全部完成**；验证全过（225 条 pytest + 真实模型端到端 26 用例 + LangSmith trace 已入库）；分支 `feature/multi-role-collab` 已推 GitHub
 > 分支：
 >
 > `feature/multi-role-collab`
