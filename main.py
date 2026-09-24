@@ -28,7 +28,7 @@ class NoCacheStaticFiles(StaticFiles):
         response.headers["Cache-Control"] = "no-cache"
         return response
 
-from app.api import auth, categories, chat, conversations, files, guest, knowledge, llm_config, tasks, users
+from app.api import auth, automation, categories, chat, conversations, files, guest, knowledge, llm_config, quality, tasks, users
 from app.core.config import STATIC_DIR, jwt_secret_is_placeholder, ENV
 from app.core.db import init_db, engine
 
@@ -58,6 +58,11 @@ async def lifespan(app: FastAPI):
     from app.core import task_queue
     task_queue.recover_pending_tasks()
     task_queue.start_workers()
+
+    # M2 执行队列：与 task_queue 同模式，lifespan 启动（API 层懒启动兜底，幂等）
+    from app.core import exec_queue
+    exec_queue.recover_pending_runs()
+    exec_queue.start_workers()
 
     yield
 
@@ -92,6 +97,8 @@ app.include_router(chat.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
+app.include_router(quality.router, prefix="/api")
+app.include_router(automation.router, prefix="/api")
 
 
 @app.get("/health")

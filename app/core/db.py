@@ -73,6 +73,7 @@ def init_db() -> None:
     import app.models.llm_config  # noqa: F401
     import app.models.conversation  # noqa: F401
     import app.models.knowledge  # noqa: F401  # V4.0 RAG 知识库（7 张表）
+    import app.models.automation  # noqa: F401  # M1 全链路：被测系统 test_targets
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
 
@@ -92,6 +93,9 @@ def _ensure_columns() -> None:
         alters.append("ADD COLUMN conversation_id VARCHAR(64)")
     if "parent_task_id" not in cols:
         alters.append("ADD COLUMN parent_task_id VARCHAR(64)")
+    # M1 全链路：e2e 任务关联被测系统（可空外键，老库补列）
+    if "target_id" not in cols:
+        alters.append("ADD COLUMN target_id VARCHAR(64)")
     # V3.1 多角色协作：roles JSON 数组文本（MySQL 不允许 TEXT 带 DEFAULT，Python 层兜底）
     if "roles" not in cols:
         alters.append("ADD COLUMN roles TEXT")
@@ -136,6 +140,19 @@ def _ensure_columns() -> None:
         if "citations" not in mcol:
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN citations TEXT"))
+                conn.commit()
+
+    # execution_runs 补列（M4 自愈循环：轮次 + 过程日志；老库启动自动补）
+    # 注意：MySQL 不允许 TEXT 列带 DEFAULT（1101），heal_log 不能写 DEFAULT ''
+    if insp.has_table("execution_runs"):
+        rcol = {c["name"] for c in insp.get_columns("execution_runs")}
+        if "heal_round" not in rcol or "heal_log" not in rcol:
+            with engine.connect() as conn:
+                if "heal_round" not in rcol:
+                    conn.execute(text(
+                        "ALTER TABLE execution_runs ADD COLUMN heal_round INTEGER NOT NULL DEFAULT 0"))
+                if "heal_log" not in rcol:
+                    conn.execute(text("ALTER TABLE execution_runs ADD COLUMN heal_log TEXT"))
                 conn.commit()
 
 

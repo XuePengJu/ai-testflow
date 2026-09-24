@@ -22,5 +22,18 @@ langchain-openai==1.6.2
 langsmith==0.12.5
 
 # ===== V4.0 RAG 知识库 =====
-chromadb>=0.5.5
+chromadb==1.5.9
 rank_bm25>=0.2.2
+
+# ===== M0 平台自身质量量化 =====
+pytest>=8.0
+pytest-json-report>=1.5
+pytest-cov>=5.0
+
+# ===== M1 全链路闭环（网页抓取）=====
+beautifulsoup4>=4.12
+lxml>=5.0
+playwright>=1.45
+
+# ===== M2 执行引擎 =====
+pytest-playwright>=0.5

@@ -13,6 +13,7 @@ from app.api.deps import get_current_user
 from app.core import task_queue
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR, GUEST_MAX_TASKS
 from app.core.db import get_db
+from app.models.automation import TestTarget, encrypt_credential
 from app.models.conversation import Conversation, Message
 from app.models.task import Task, StepLog
 from app.models.user import User
@@ -90,6 +91,15 @@ def _resolve_conversation(db: Session, task: Task) -> str | None:
     return conv.id
 
 
+def _has_auto_script(db: Session, task: Task) -> bool:
+    """M2 执行引擎：任务目录 auto/ 下是否已生成自动化脚本（存在 test_*.py）。
+
+    列表/详情都会调用，必须轻量：只 glob 一次，不做任何 IO 之外的解析。
+    """
+    auto_dir = OUTPUT_DIR / task.user_data_dir(db) / task.id / "auto"
+    return auto_dir.is_dir() and any(auto_dir.glob("test_*.py"))
+
+
 def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
     steps = db.execute(
         select(StepLog).where(StepLog.task_id == task.id).order_by(StepLog.id)
@@ -100,6 +110,8 @@ def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
         formats=task.formats, roles=task.roles or '["qa"]',
         category_id=task.category_id,
         parent_task_id=task.parent_task_id,
+        target_id=task.target_id,
+        has_auto=_has_auto_script(db, task),
         conversation_id=task.conversation_id,
         created_at=task.created_at, finished_at=task.finished_at,
         steps=[
@@ -135,8 +147,13 @@ async def create_task(
     roles: str = Form("qa"),
     name: str = Form(""),
     conversation_id: str = Form(""),
+    # ---- M1 全链路（kind=e2e）专用参数 ----
+    url: str = Form(""),
+    target_id: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
 ):
-    """提交一个测试用例生成任务。可上传规格文件或粘贴文本。"""
+    """提交一个测试用例生成任务。可上传规格文件或粘贴文本；kind=e2e 时走全链路（URL 抓取）。"""
     # 访客任务上限（防滥用）
     if user.role == "guest":
         count = db.execute(
@@ -150,6 +167,65 @@ async def create_task(
     task_id = uuid.uuid4().hex[:12]
     source_type = "file" if file else "text"
     input_ref = ""
+
+    if kind in ("e2e", "explore"):
+        # ---- M1 全链路 / M5 探索式：url / target_id 至少一个；账密可现场填（自动建 target 并加密） ----
+        if file:
+            raise HTTPException(status_code=400, detail="该任务类型不需要上传文件，请填写被测系统地址")
+        e2e_target = None
+        if target_id.strip():
+            e2e_target = db.get(TestTarget, target_id.strip())
+            if not e2e_target or (e2e_target.user_id != user.id and user.role != "admin"):
+                raise HTTPException(status_code=404, detail="被测系统不存在")
+        elif not url.strip():
+            raise HTTPException(status_code=400, detail="请提供被测系统地址（url）或已保存的系统（target_id）")
+
+        source_type = "url"
+        # 现场填 URL：自动创建 TestTarget（有账密则 Fernet 加密落库），任务与其关联
+        if e2e_target is None:
+            from app.api.automation import _validate_base_url
+            clean_url = _validate_base_url(url)
+            e2e_target = TestTarget(
+                id=uuid.uuid4().hex[:12],
+                user_id=user.id,
+                name=(name.strip() or clean_url)[:255],
+                base_url=clean_url,
+                auth_type="form" if username.strip() or password else "none",
+                username_enc=encrypt_credential(username.strip()) if username.strip() else None,
+                password_enc=encrypt_credential(password) if password else None,
+            )
+            db.add(e2e_target)
+            db.flush()  # 先拿 id 再建任务（外键依赖）
+
+        input_ref = e2e_target.base_url or ""
+
+    # 会话关联：传了 conversation_id → 校验存在且属于当前用户（越权一律 404，不暴露存在性）；
+    # e2e 未传 → 自动建会话 + 两条消息（user 发起 + assistant 占位），
+    # 保证任务运行中左侧会话列表立即有记录（此前只靠详情接口 _resolve_conversation 兜底，太晚）。
+    conv_obj = None
+    if conversation_id.strip():
+        conv_obj = db.get(Conversation, conversation_id.strip())
+        if not conv_obj or conv_obj.user_id != user.id:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        conversation_id = conv_obj.id
+    elif kind in ("e2e", "explore"):
+        # e2e / explore 未传 → 自动建会话 + 两条消息（user 发起 + assistant 占位）
+        conv_title = (name.strip() or f"{'🌐 全链路测试' if kind == 'e2e' else '🤖 探索式测试'}-{e2e_target.base_url}")[:255]
+        conv_obj = Conversation(id=uuid.uuid4().hex[:12], user_id=user.id, title=conv_title)
+        db.add(conv_obj)
+        db.flush()  # 先落会话行再挂消息（外键依赖），user 消息必须先于 assistant 占位入库
+        conversation_id = conv_obj.id
+        if kind == "e2e":
+            user_msg = f"🌐 发起全链路测试：{e2e_target.base_url}"
+            bot_msg = "正在探索被测系统并生成测试用例…"
+        else:
+            user_msg = f"🤖 发起探索式测试：{e2e_target.base_url}"
+            bot_msg = "正在自主探索被测系统并生成测试用例…"
+        db.add(Message(conversation_id=conversation_id, role="user", content=user_msg))
+        db.flush()  # 保证消息顺序：user 在前，assistant 占位在后（前端聊天流按序渲染）
+        db.add(Message(conversation_id=conversation_id, role="assistant",
+                       content=bot_msg, task_id=None))
+        conv_obj.updated_at = datetime.utcnow()
 
     # 文件落 data_dir 目录（用户隔离）
     user_dir = UPLOAD_DIR / user.data_dir
@@ -168,7 +244,7 @@ async def create_task(
         input_ref = fname
     elif text.strip():
         input_ref = text
-    else:
+    elif kind not in ("e2e", "explore"):
         raise HTTPException(status_code=400, detail="file 与 text 至少提供一个")
 
     (OUTPUT_DIR / user.data_dir).mkdir(parents=True, exist_ok=True)
@@ -184,12 +260,14 @@ async def create_task(
         status="pending",
         user_id=user.id,
         conversation_id=conversation_id or None,
+        target_id=e2e_target.id if kind in ("e2e", "explore") and e2e_target else None,
     )
     db.add(task)
     db.commit()
     db.refresh(task)
 
-    # 回填该会话下最后一条 assistant 消息的 task_id（聊天流回放时据此渲染节点/用例卡）
+    # 回填该会话下最后一条 assistant 消息的 task_id（聊天流回放时据此渲染节点/用例卡）。
+    # e2e 自动建的会话里，占位消息 task_id=None 会在此被回填新任务 id，无需单独处理。
     if conversation_id:
         last_msg = db.execute(
             select(Message)

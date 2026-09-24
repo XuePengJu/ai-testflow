@@ -27,6 +27,7 @@ from app.models.user import User
 from app.services.doc_extract import ExtractError, UnsupportedFormatError, extract_text, is_supported, supported_hint
 from app.services.knowledge import vectorstore
 from app.services import llm_service
+from src.utils import jsonx
 from app.services.knowledge.ingest import (
     IngestError,
     delete_document_vectors,
@@ -718,11 +719,10 @@ async def _llm_summarize(db: Session, user: User, text: str, doc_title: str) -> 
             temperature=0.3,
         )
         content = resp.choices[0].message.content or ""
-        import json, re
-        # 提取 JSON
-        m = re.search(r'\{[^}]+\}', content)
-        if m:
-            data = json.loads(m.group())
+        # 提取 JSON：改用 jsonx 配对解析。旧写法 r'\{[^}]+\}' 遇嵌套对象会截断成
+        # 非法 JSON（如 {"summary":{"k":1}}）→ 摘要静默退化为全文，用户看不出失败。
+        data = jsonx.find_dict(content) or {}
+        if isinstance(data, dict) and ("summary" in data or "category" in data):
             return {"summary": data.get("summary", ""), "category": data.get("category", "未分类")}
         return {"summary": content, "category": "未分类"}
     except Exception as e:

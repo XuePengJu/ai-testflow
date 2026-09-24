@@ -6,11 +6,14 @@
 增强：检查覆盖度，缺失类型时调用 AI 补充用例。
 """
 import json
-import re
+import logging
 from collections import Counter
 
 from app.services import llm_service
 from src.models.testcase import TestCase, CaseType, Priority, align_step_expectations
+from src.utils import jsonx
+
+logger = logging.getLogger(__name__)
 
 
 _FILL_PROMPT = """你是资深测试工程师。请为以下「测试点」补充测试用例，使其覆盖缺失的维度。
@@ -46,11 +49,22 @@ _MISSING_THRESHOLD = {
 }
 
 
-def _normalize_type(ct):
-    """兼容不同大小写/中文化。"""
+def _normalize_type(ct) -> str:
+    """兼容不同大小写/中文化。
+
+    ⚠️ 必须先取枚举 ``.value``：``CaseType`` 继承 ``(str, Enum)``，
+    ``str(CaseType.NEGATIVE)`` 得到的是 ``'CaseType.NEGATIVE'`` 而**不是** ``'异常'``。
+    旧实现直接 ``str(ct)`` → 归一化对枚举输入全部失效，``by_type`` 的键变成类名，
+    ``by_type.get("异常")`` 恒为 0。用户可见后果有两个：
+      1. 质量报告摘要里「异常/边界占比」恒显示 0%（无论用例实际覆盖多好）；
+      2. 覆盖度缺失维度恒被判为「正向/异常/边界值」三项 → 每次评审都白跑一次
+         AI 补充调用（花时间与额度，补出来的用例还进了一个错误的键）。
+    本函数同时接受枚举与字符串输入（dict 形态的用例传来的是字符串）。
+    """
     if ct is None:
         return ""
-    ct = str(ct).strip()
+    val = getattr(ct, "value", None)      # 枚举实例 → 取字面值（"异常"）
+    ct = val if isinstance(val, str) else str(ct).strip()
     mapping = {
         "正向": "正向", "positive": "正向", "正常": "正向",
         "异常": "异常", "negative": "异常", "出错": "异常",
@@ -95,7 +109,7 @@ def run_reviewer(cases: list[TestCase], client=None) -> tuple[dict, str]:
     """质量校验 + AI 补充。client 为可选的真实模型客户端。"""
     total = len(cases)
     by_type = Counter(_normalize_type(c.case_type) for c in cases)
-    by_priority = Counter(str(c.priority) for c in cases)
+    by_priority = Counter((getattr(c.priority, "value", None) or str(c.priority)) for c in cases)
     abnormal = by_type.get("异常", 0) + by_type.get("边界值", 0)
     modules = Counter(c.module for c in cases if c.module)
 
@@ -127,19 +141,23 @@ def run_reviewer(cases: list[TestCase], client=None) -> tuple[dict, str]:
                     description=desc,
                 )
                 raw = client.chat([{"role": "user", "content": fill_prompt}], temperature=0.5, max_tokens=2048)
-                m = re.search(r"\[.*\]", raw or "", re.S)
-                if m:
-                    try:
-                        arr = json.loads(m.group(0))
-                        new_cases = _build_cases_from_json(arr)
-                        if new_cases:
-                            cases.extend(new_cases)
-                            # 更新 by_type
-                            for nc in new_cases:
-                                by_type[_normalize_type(nc.case_type)] += 1
-                            supplemented = len(new_cases)
-                    except Exception:  # noqa: BLE001
-                        pass
+                # D 修复：改用 jsonx 配对解析（旧贪婪正则在「数组后另有 [1]」「值内含 ]」时
+                # 必然失败并被 except 静默吞掉，表现为「缺维度但一直没补上」且无日志）
+                arr = jsonx.find_dict_list(raw or "", jsonx.CASE_KEYS)
+                if not arr:
+                    logger.warning(
+                        "质量校验的 AI 补充用例解析无产出（缺失维度=%s）：原文 %d 字，reason=%s",
+                        "、".join(missing), len(raw or ""),
+                        "invalid_json" if jsonx.has_array_literal(raw or "") else "no_json",
+                    )
+                else:
+                    new_cases = _build_cases_from_json(arr)
+                    if new_cases:
+                        cases.extend(new_cases)
+                        # 更新 by_type
+                        for nc in new_cases:
+                            by_type[_normalize_type(nc.case_type)] += 1
+                        supplemented = len(new_cases)
             except llm_service.LLMError:
                 pass  # 补充失败不阻断，保留原有报告
 

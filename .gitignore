@@ -35,3 +35,9 @@ venv/
 .trae/
 # 本地向量库数据（Chroma 持久化，不入库）
 vectors/
+
+# M0 平台自身质量量化数据（聚合结果与历史趋势，运行产物不入库）
+quality_data/
+
+# Vite 构建临时产物（vite.config.ts 时间戳文件）
+frontend/vite.config.ts.timestamp-*.mjs

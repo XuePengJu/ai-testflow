@@ -1,5 +1,6 @@
 """平台配置：读取 .env，定义路径与模型开关。"""
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # ai-testflow/
@@ -81,6 +82,14 @@ if AITF_LLM_BACKEND not in ("langchain", "httpx"):
 # 内置的用例生成核心库（已整合，使项目自包含、clone 即跑）
 GENERATOR_CORE_DIR = BASE_DIR / "generator_core"
 
+# generator_core 下是 config/ 与 src/ 两个**顶层包**，app 层多处直接
+# `from src.models.testcase import ...` / `from src.utils.jsonx import ...`。
+# 原实现只在 app/services/pipeline_lib.py 被导入时才注入该路径 —— 属于「谁先导入谁生效」
+# 的隐式依赖（例如 app/api/knowledge.py 单独被导入时 src.* 不可用）。
+# 统一提前到配置模块加载时注入：任何 import app.core.config 的模块都能安全使用 src.*。
+if str(GENERATOR_CORE_DIR) not in sys.path:
+    sys.path.insert(0, str(GENERATOR_CORE_DIR))
+
 # 前端静态目录（V2.8 React 重构完成，默认切指 frontend/dist 构建产物）
 # 一键切回旧版：环境变量 AITF_FRONTEND=legacy 后重启（不动代码、不回滚 git）
 _FRONTEND_MODE = os.getenv("AITF_FRONTEND", "react").strip().lower()
@@ -105,6 +114,28 @@ DB_POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"  # �
 DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))  # 1h 回收，避开 MySQL wait_timeout 静默断连
 DB_ECHO = os.getenv("DB_ECHO", "false").lower() == "true"    # 调试时置 true 打印 SQL
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()     # 可选：直填完整 URL 优先于上面 DB_* 字段
+
+# ============ M0 平台自身质量量化 ============
+# 聚合结果 quality-summary.json 与历史趋势 history.jsonl 落盘目录（AITF_ROOT_DIR 切换时随根目录走）
+QUALITY_DATA_DIR = _ROOT / "quality_data"
+# 后台执行 pytest / Node e2e 的总超时（秒），超时判 failed
+QUALITY_EXEC_TIMEOUT = int(os.getenv("QUALITY_EXEC_TIMEOUT", "900"))
+
+# ============ M1 全链路闭环（网页抓取） ============
+# 同域浅抓取页数上限（入口页 + 导航可达页，BFS）
+CRAWL_MAX_PAGES = int(os.getenv("CRAWL_MAX_PAGES", "8"))
+# 单页请求超时（秒）
+CRAWL_TIMEOUT = int(os.getenv("CRAWL_TIMEOUT", "15"))
+
+# ============ M2 执行引擎 ============
+# 单轮自动化执行 subprocess 超时（秒）
+AUTO_EXEC_TIMEOUT = int(os.getenv("AUTO_EXEC_TIMEOUT", "600"))
+# 执行队列 worker 数（本机 Mac 执行，1 个串行最稳）
+EXEC_WORKERS = int(os.getenv("EXEC_WORKERS", "1"))
+
+# ============ M4 自愈循环 ============
+# 执行失败后 LLM 自愈轮次上限（0=关闭自愈；设 1~3 限制成本）
+AUTO_HEAL_ROUNDS = int(os.getenv("AUTO_HEAL_ROUNDS", "3"))
 
 
 def is_mock() -> bool:

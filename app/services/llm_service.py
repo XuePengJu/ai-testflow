@@ -367,6 +367,49 @@ async def _mock_stream_chunks(user_text: str, attach_name: str = "", want_thinki
         i += chunk_size
     yield ("done", {"full": full, "clean": reply})
 
+# ============ 「按需深度思考」自动判定 ============
+# 对话默认不再无差别开启推理：开思考时模型每次要先吐上万字 reasoning，首字节要等
+# 十几秒，而闲聊与简单指令完全不需要。改为按需判定 —— 前端「总是深度思考」显式开启
+# 时走 True（每轮都推理），未表态时走下面的规则。
+# 实测依据：见 docs/项目1-模型池与思考控制执行方案-V1.0.md（关思考首字节 1s 级 vs 开思考十几秒）。
+_THINK_INTENT_KW = (
+    "为什么", "原因", "排查", "定位", "根因", "分析", "对比", "评估", "诊断",
+    "影响面", "风险", "方案", "选型", "架构", "设计", "区别", "哪个好",
+)
+_THINK_ERROR_RE = re.compile(
+    r"Traceback|Error|Exception|报错|错误|失败|异常|超时|timeout|500|502|404", re.I
+)
+_THINK_MIN_LEN = 60      # 长描述阈值（字符数）
+
+
+def should_deep_think(user_text: str, attach_name: str = "", kb_mode: bool = False) -> bool:
+    """判定本轮对话是否需要「深度思考」（先推理再作答）。
+
+    规则刻意偏保守：误开只是多等几秒，误关只是答得浅一点。
+    不收录「帮我写 / 帮我改」类词 —— 它们多数会走任务生成链路，
+    而那条链路本身就关思考，不该在对话里触发推理。
+
+    ⚠️ 第二个参数只看「用户主动上传的附件名」，**不能**改成 chat_stream 收到的
+    attached_text：那个值是「任务摘要 + RAG 检索结果 + 附件正文」的拼接体，而 RAG
+    默认开启（kb_id 为空即检索全部可见库）、几乎总是非空 —— 拿它当判据会让本函数
+    恒返回 True，按需判定形同虚设。实测踩过：传 null 的「你好」也开了 272 个 think 事件。
+    """
+    t = (user_text or "").strip()
+    if not t:
+        return False
+    if kb_mode:
+        return False          # 知识库问答要的是忠实复述，推理反而引入幻觉
+    if attach_name:
+        return True           # 用户主动上传文档 → 多半是要深度分析
+    if len(t) >= _THINK_MIN_LEN:
+        return True
+    if any(k in t for k in _THINK_INTENT_KW):
+        return True
+    if _THINK_ERROR_RE.search(t):
+        return True
+    return False
+
+
 async def chat_stream(
     db: Session,
     user: User | None,
@@ -374,7 +417,7 @@ async def chat_stream(
     history: list | None,
     attached_text: str = "",
     attach_name: str = "",
-    enable_thinking: bool = True,
+    enable_thinking: bool | None = None,
     roles: list[str] | None = None,
     kb_mode: bool = False,
 ):
@@ -386,11 +429,15 @@ async def chat_stream(
 
     attached_text  ：附加上下文（任务用例摘要 / 上传文档正文），拼进用户消息注入模型。
     attach_name    ：附件文件名，仅用于 mock 模式体现「已读到文档」。
-    enable_thinking：前端「深度思考」开关。True→注入 enable_thinking 并让 think 事件透传；
-                     False→换用无思考要求的系统提示词、不注入参数，且丢弃 think 事件
+    enable_thinking：思考三态。None（默认）→ 按需自动判定（should_deep_think）；
+                     True → 注入 enable_thinking 并让 think 事件透传（「总是深度思考」开启）；
+                     False → 换用无思考要求的系统提示词、不注入参数，且丢弃 think 事件
                      （个别模型不认参数仍会吐推理，丢掉才符合"关了就不显示面板"的预期）。
     roles：参与角色列表（pm/qa/dev），取第一个合法角色作为 AI 回复身份；空则默认 qa。
     """
+    if enable_thinking is None:
+        # 判据用 attach_name 而非 attached_text：后者含 RAG 检索结果、默认非空（详见函数注释）
+        enable_thinking = should_deep_think(user_text or "", attach_name, kb_mode)
     eff = resolve_effective(db, user)
     # 平台默认模型（source=platform，免费厂商由服务端 Key 兜底）同样算"已配好模型"。
     # 旧逻辑只认 user，导致平台默认配置被判为未配置、聊天恒走 mock 模板。

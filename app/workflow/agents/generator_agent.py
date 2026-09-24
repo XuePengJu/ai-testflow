@@ -16,8 +16,9 @@ def run_generator(units: list[RequirementUnit], client=None, model_desc: str = "
                   progress_cb=None, roles=None):
     role_list = parse_roles(roles)
     role_note = "、".join(ROLE_LABELS.get(r, r) for r in role_list)
+    meta: dict = {}
     cases: list[TestCase] = lib_generate(units, client=client, progress_cb=progress_cb,
-                                         roles=role_list)
+                                         roles=role_list, out_meta=meta)
     model_note = model_desc or "未配置可用模型，当前为模拟生成，请到【模型设置】配置真实模型"
     # 统计每个测试点生成多少条用例
     case_count_by_unit = Counter()
@@ -25,6 +26,15 @@ def run_generator(units: list[RequirementUnit], client=None, model_desc: str = "
         case_count_by_unit[c.module] += 1
     unit_stats = [{"name": u.name, "cases_generated": case_count_by_unit.get(u.name, 0)} for u in units]
     summary = f"AI 生成 {len(cases)} 条测试用例（{role_note}视角 · 覆盖正向 / 异常 / 边界 · 模型：{model_note}）"
+    # D 修复：调用成功却解析 0 条的测试点必须显性暴露（原来静默吞掉，白耗一次调用且用户无感）
+    parse_failed = meta.get("parse_failures") or []
+    if parse_failed:
+        names = "、".join(f["unit"] for f in parse_failed[:3])
+        tail = f" 等 {len(parse_failed)} 个" if len(parse_failed) > 3 else ""
+        reasons = sorted({f.get("reason", "unknown") for f in parse_failed})
+        summary += (f"；⚠️ {names}{tail}测试点未返回可解析用例"
+                    f"（原因：{'/'.join(reasons)}），建议降低思考强度或更换模型后重跑")
     details = {"total_cases": len(cases), "by_unit": unit_stats,
-               "model": model_note, "roles": role_list}
+               "model": model_note, "roles": role_list,
+               "parse_failed": parse_failed}
     return cases, summary, json.dumps(details, ensure_ascii=False)

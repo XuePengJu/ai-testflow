@@ -437,6 +437,7 @@ def import_cases(path: str, ext: str) -> tuple[list[TestCase], dict]:
         "total": len(cases),
         "modules": dict(Counter(c.module or "未分类" for c in cases)),
         "by_type": dict(Counter(_norm_type(c.case_type) for c in cases)),
-        "by_priority": dict(Counter(str(c.priority) for c in cases)),
+        # Priority 继承 (str, Enum)：str(Priority.P1) 得到 'Priority.P1' 而非 'P1'，必须先取 .value
+        "by_priority": dict(Counter((getattr(c.priority, "value", None) or str(c.priority)) for c in cases)),
     }
     return cases, summary
