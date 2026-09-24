@@ -1,9 +1,10 @@
 # AI 测试工作流平台
 
-> 作品集「门面担当」全栈产品，当前版本 **V4.5.1**（2026-09-20）。
+> 作品集「门面担当」全栈产品，当前版本 **V4.5.2**（线上）/ **V5.0**（本地交付）。
 > 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端；并内置 **RAG 知识库**与**知识库问答**能力——AI 对话默认自动检索私有/共享知识库并给出引用溯源。支持多厂商大模型、**多角色协作视角（产品/测试/开发）**、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
+> **V5.0 升级为「AI 测试闭环平台」**：URL → 抓取 → 用例 → 脚本 → 执行 → 报告全链路自动化 + 平台自身质量看板（M0–M5 全部本地交付：M4 自愈循环 / M5 探索式测试 Agent 已于 09-24 交付）。
 
-在线演示：[https://ai.clickscope.in](https://ai.clickscope.in)
+在线演示：[https://ai.agentest.vip/](https://ai.agentest.vip/)
 
 ***
 
@@ -284,6 +285,40 @@
 
 - 审计：删除 / 清空动作写审计表
 
+### 质量看板（V5.0 · M0）
+
+- **平台自身质量量化**：pytest + Node Playwright e2e（5 套件）的实测结果聚合成结构化数据，产品内可视化——测试为核心的平台，自己的质量拿得出数字
+
+- 独立「质量报告」页：**所有登录角色可见（含访客）**；「▶ 运行测试」按钮仅 admin 显示，后端 `/api/quality/*` admin only 双重把关
+
+- 汇总卡 4 枚：pytest 用例数 / 通过率 / 代码覆盖率 / e2e 套件通过率；按测试文件的用例分布条形图（纯 SVG，不引图表库）
+
+- 历史趋势：每次运行聚合追加 `quality_data/history.jsonl`，通过率 + 覆盖率折线（近 30 次）；运行中 2s 轮询各阶段进度
+
+- 数据真实性红线：全部来自实测聚合 JSON，**禁止写死展示值**；运行失败显式 failed，不出假数据
+
+### 全链路测试闭环（V5.0 · M1–M5，本地已交付）
+
+> 从「AI 用例生成平台」升级为「AI 测试闭环平台」：给一个被测系统 URL（可选账密）→ 自动抓取页面 → AI 生成测试用例 → 自动生成 Playwright 脚本 → 本机执行 → 失败自愈 → 结构化报告；还可零文档发起**探索式测试**，Agent 自主逛站点、边逛边出用例。
+
+- **被测系统管理**：URL + 账号密码（Fernet 加密落库，API 永不回传），多 target 复用
+
+- **页面抓取**：httpx + BeautifulSoup 同域 BFS ≤8 页；JS 渲染页自动降级 Playwright 渲染（未装浏览器回退静态抓取不崩）；支持账号密码登录（storage_state 复用，hidden 字段保留原值过 CSRF）；每页 full_page 截图 + **探索过程录屏（webm）**
+
+- **六步工作流**：抓取页面 → 解析规格 → AI 生成用例 → 质量校验 → **生成脚本** → 导出文件（复用四 Agent 编排与 StepLog 可观测；抓取完成后步骤卡就地展开页面卡片墙）
+
+- **脚本生成 Agent**：LLM 生成 Python Playwright 脚本（page fixture / get_by_role 选择器 / expect 断言约定），ast.parse 校验失败自动重试；conftest 模板由代码固化（BASE_URL / storage_state 注入 / 失败自动截图），**不经 LLM 生成**
+
+- **本机执行引擎**：独立执行队列（1 worker）subprocess 跑 pytest + chromium headless；cwd 锁定 / no shell / timeout 600s / env 白名单 / 凭据走环境变量不落盘
+
+- **执行报告**：pytest-json-report 结构化解析——汇总条 + 每用例 outcome / error / 截图；执行列表（状态徽标 + 通过率 + 耗时，running 实时轮询）、一键重试、截图 lightbox、录屏回放
+
+- **自愈循环（M4）**：执行失败自动取证（pytest 报错全文 + 失败截图 + 源码 ast 提取）→ LLM 四分类诊断（脚本缺陷 / 产品缺陷 / 环境问题 / 选择器漂移，硬约束禁止修改删除弱化断言）→ 修复脚本（ast 校验 + **代码级断言保护**：旧文件每条 assert 必须原样保留，杜绝"改脚本放水"）→ `heal_backup/` 备份 → 只重跑失败用例；默认 ≤3 轮（`AUTO_HEAL_ROUNDS`）每轮即时落库，run 行「自愈 N 轮」徽章 + 自愈过程折叠区 + ⚠ 疑似产品缺陷警示区
+
+- **探索式测试 Agent（M5）**：ReAct 自主探索——无需任何文档，给 URL 即可自主导航/点击/填表/提交（ref 编号快照省 token），边探索边产出结构化用例；护栏三件套：域名锁定（越域拒绝并回喂原因）+ 危险操作文案黑名单 + 步骤/token/时长三重预算优雅收敛；探索时间线逐步展示动作 / AI 理由 / 截图（`kind=explore` 三步流水线，弹窗一键切换 e2e/explore）；真实 DBERP 联调 8 页 8 截图 + 探索录屏，glm-4.5-flash 真调冒烟 8 步产出 3 用例
+
+- 待办：第 11 节测试数据隔离（run_tag + 台账化清理）⬜ 未落地；M4/M5 的 LLM 真调全量验收待有效 API key（M5 冒烟已通过）。方案与交付台账见 `docs/项目1-全链路测试闭环与Agent化执行方案-V5.0.md` 第 12 节
+
 ### 产品包装
 
 - 右侧悬浮「需求进度」抽屉：已上线 / 开发中 / 规划中，三组进度展示
@@ -310,8 +345,10 @@
 | 思维导图  | **MindElixir**（120KB，可编辑，原生标签支持）                 |
 | 前端渲染  | **marked**（Markdown 解析）+ **DOMPurify**（XSS 净化）          |
 | 文档解析  | **python-docx**（docx 抽取）+ **pdfplumber**（pdf 抽取）         |
-| 任务调度  | 全局任务队列 + 5 Worker 池（uvicorn 启动恢复）+ APScheduler（历史访客清理） |
-| 测试    | pytest（**225 条**后端自动化用例，覆盖认证 / 分级加密 / 权限 / 对话 / RAG / 知识库 / 迭代导入 / 附件解析 / 思考 / 标题复合化 / 多角色 / Embedding / 演示模式）+ Playwright（M1~M5 浏览器端到端验证脚本） |
+| 页面抓取  | **httpx + BeautifulSoup**（同域 BFS ≤8 页）+ **Playwright** 渲染降级与登录态（storage_state） |
+| 自动化执行 | **Playwright(Python) + pytest**：脚本 LLM 生成（ast 校验重试），subprocess 隔离执行 + pytest-json-report 结构化报告（1 worker 队列） |
+| 任务调度  | 全局任务队列 + 5 Worker 池（uvicorn 启动恢复未完成任务） |
+| 测试    | pytest（**348 条** V5.0 本地基线，覆盖认证 / 分级加密 / 权限 / 对话 / RAG / 知识库 / 迭代导入 / 附件解析 / 思考 / 标题复合化 / 多角色 / Embedding / 演示模式 / 页面抓取 / 脚本生成与执行 / 自愈循环 / 探索式 Agent / 质量看板）+ Playwright（M1~M5 浏览器端到端验证脚本） |
 
 ***
 
@@ -442,6 +479,30 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 | GET    | `/api/knowledge/search`                  | 混合检索（`kb_id` / `query` / `top_k`） |
 | POST   | `/api/knowledge/bases/{id}/wiki/index`   | 整库 wiki 索引                       |
 
+### 质量看板（V5.0 · M0，admin only）
+
+| 方法 | 路径                        | 说明                                     |
+| --- | ------------------------- | -------------------------------------- |
+| GET  | `/api/quality/summary`   | 最新质量汇总（pytest 通过率 / 覆盖率 / e2e 结果） |
+| POST | `/api/quality/run`       | 后台触发 pytest + e2e + 聚合（running 时 409） |
+| GET  | `/api/quality/run/status` | 当次运行状态与各阶段进度                       |
+| GET  | `/api/quality/history`   | 历史趋势数组（近 30 次）                     |
+
+### 被测系统与自动化执行（V5.0 · M1–M5）
+
+| 方法 | 路径                                        | 说明                                |
+| --- | ----------------------------------------- | --------------------------------- |
+| POST/GET | `/api/targets`                       | 创建 / 列出被测系统（密码加密，永不回传）        |
+| GET/DELETE | `/api/targets/{id}`                | 详情 / 删除（校验属主）                   |
+| POST | `/api/tasks/{task_id}/run-auto`         | 触发自动化执行（入执行队列；`auto_heal` 参数默认开自愈；已有进行中 run 返回 409） |
+| GET  | `/api/tasks/{task_id}/executions`        | 执行记录列表（新→旧）                    |
+| GET  | `/api/executions/{run_id}`               | 执行详情（含结构化报告；running 带实时进度）      |
+| POST | `/api/executions/{run_id}/retry`         | 复制新 run 重跑                         |
+| GET  | `/api/executions/{run_id}/files/{path}`  | 报告附属文件（截图 / trace，路径白名单）        |
+| GET  | `/api/tasks/{task_id}/pages`             | 抓取页面清单（探索可视化）                    |
+| GET  | `/api/tasks/{task_id}/pages/screenshot/{name}` | 页面截图（文件名白名单防穿越）            |
+| GET  | `/api/tasks/{task_id}/video`             | 探索过程录屏                            |
+
 ### 分类
 
 | 方法     | 路径                                       | 说明                  |
@@ -518,21 +579,26 @@ ai-testflow/
 │   │   ├── api/                 # client.ts（fetch 封装 + AES 加密层，禁止裸 fetch）
 │   │   ├── contexts/            # AuthContext（认证/加密快照）
 │   │   ├── store/               # zustand（chat/task/settings/category）
-│   │   ├── pages/               # Dashboard / KnowledgePage（V4.0 知识库合一页）/ SettingsPage / AdminPage
+│   │   ├── pages/               # Dashboard / KnowledgePage（V4.0 知识库合一页）/ SettingsPage / AdminPage / QualityPage（V5.0 质量看板）
 │   │   ├── components/          # chat/ task/ settings/ admin/ knowledge/ common/
 │   │   │   ├── knowledge/KbSelector.tsx   # 顶栏知识库下拉选择器（V4.4）
+│   │   │   ├── chat/E2ETaskModal.tsx      # 全链路/探索式测试发起弹窗（URL+账密/target，e2e/explore 类型切换，V5.0 M1/M5）
+│   │   │   ├── task/ExecutionPanel.tsx    # 自动化执行列表与报告面板（V5.0 M3）
+│   │   │   ├── task/HealSection.tsx       # 自愈过程折叠区 + 疑似缺陷警示区（V5.0 M4）
+│   │   │   ├── task/ExploreTimeline.tsx   # 探索时间线（动作/理由/截图逐步可视化，V5.0 M5）
 │   │   │   └── SelfCheckToast.tsx         # 系统自检悬浮通知（V4.5.1）
 │   │   ├── utils/               # taskChain.ts（迭代版本链解析，V2.11）
 │   │   └── styles/              # 样式（V4.5 活泼浅色主题 + V4.3 折叠侧栏）
 │   ├── dist/                    # 构建产物（不入库；scripts/deploy_frontend.sh 本地构建后发布，FastAPI 同源伺服）
 │   ├── public/
-│   └── scripts/                 # Playwright e2e（M1~M5 里程碑验证脚本）
+│   └── scripts/                 # Playwright e2e（M1~M5 里程碑验证脚本）+ run-e2e.mjs（质量采集 runner，V5.0 M0）
 ├── frontend-legacy/             # 旧原生单文件前端（回退保留：AITF_FRONTEND=legacy）
 ├── scripts/
 │   ├── deploy_frontend.sh       # 前端一键发布：本地构建→打包上传→重启→外网验证（含 3 份滚动备份+失败回滚；脚本含服务器配置，已 gitignore 不入库）
 │   ├── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
-│   └── start_local.sh           # 本地起服脚本（restart：kill 8000 后拉起）
-├── tests/                       # 225 条自动化用例（认证 + 分级加密 + 权限 + 对话 + RAG + 知识库 + 迭代导入 + 附件解析 + 思考 + 标题复合化 + 多角色 + Embedding + 演示模式 + 访客共享，pytest）
+│   ├── start_local.sh           # 本地起服脚本（restart：kill 8000 后拉起）
+│   └── quality/                 # 质量数据聚合（aggregate_quality.py，V5.0 M0）
+├── tests/                       # 348 条自动化用例（V5.0 本地基线：认证 + 分级加密 + 权限 + 对话 + RAG + 知识库 + 迭代导入 + 附件解析 + 思考 + 标题复合化 + 多角色 + Embedding + 演示模式 + 访客共享 + 页面抓取 + 脚本执行 + 自愈循环 + 探索式 Agent + 质量看板，pytest）
 ├── app/
 │   ├── core/
 │   │   ├── config.py            # 配置加载（含 Embedding / Chroma / AITF_ALLOW_DEMO）
@@ -540,28 +606,35 @@ ai-testflow/
 │   │   ├── security.py          # bcrypt + JWT
 │   │   ├── crypto.py            # AES-256-GCM 加解密
 │   │   ├── providers.py         # LLM 厂商预设（8 家 + 自定义 + Embedding）
+│   │   ├── exec_queue.py        # 自动化执行队列（1 worker，V5.0 M2）
 │   │   └── middleware.py        # 分级加密中间件
 │   ├── models/                  # SQLAlchemy 模型
 │   │   ├── task.py              # Task / StepLog（含 roles 多角色字段，V3.1）
 │   │   ├── user.py              # User / GuestCreationLog / CleanLog
 │   │   ├── category.py          # Category（多级分类树）
-│   │   └── knowledge.py         # KnowledgeBase / Knowledge / Chunk（V4.0 RAG）
+│   │   ├── knowledge.py         # KnowledgeBase / Knowledge / Chunk（V4.0 RAG）
+│   │   └── automation.py        # TestTarget / ExecutionRun（V5.0 全链路闭环）
 │   ├── schemas/                 # Pydantic 请求/响应
 │   │   ├── task.py
 │   │   ├── user.py
 │   │   ├── category.py
-│   │   └── knowledge.py         # 知识库相关 schema（V4.0）
+│   │   ├── knowledge.py         # 知识库相关 schema（V4.0）
+│   │   └── automation.py        # 被测系统 / 执行记录 schema（V5.0）
 │   ├── services/
 │   │   ├── pipeline_lib.py      # 调用内置 generator_core（透传 roles）
 │   │   ├── langchain_client.py  # LangChain 适配层（init_chat_model 统一入口 + 统一 stream，V3）
 │   │   ├── llm_service.py       # OpenAI 兼容 LLM 客户端 + resolve_embedding（V4.2）
 │   │   ├── knowledge/           # RAG 入库 / 检索（ingest / retrieve，V4.0）
 │   │   ├── sample_seeder.py     # 共享 guest 示例数据播种（V4.1）
-│   │   └── doc_extract.py       # 对话附件文档解析（docx/pdf/md/xlsx → 纯文本，V2.9）
+│   │   ├── doc_extract.py       # 对话附件文档解析（docx/pdf/md/xlsx → 纯文本，V2.9）
+│   │   ├── web_crawler.py       # 被测站点抓取（httpx+BS4 BFS / Playwright 降级 / 登录态，V5.0 M1）
+│   │   ├── auto_runner.py       # 本机执行 Runner（subprocess pytest + 报告解析，V5.0 M2）
+│   │   ├── auto_healer.py       # 自愈循环（四分类诊断 / 断言保护 / heal_backup / 只重跑失败，V5.0 M4）
+│   │   └── explorer_agent.py    # 探索式测试 Agent（ReAct + 7 工具 + 域名锁定/黑名单/三重预算，V5.0 M5）
 │   ├── workflow/
-│   │   ├── engine.py            # 状态机 + 步骤调度 + 全局任务队列（V3.2）
+│   │   ├── engine.py            # 状态机 + 步骤调度 + 全局任务队列（V3.2）+ STEPS_E2E 六步 / STEPS_EXPLORE 三步（V5.0）
 │   │   ├── iterate.py           # 迭代流水线（加载基础用例→增量生成→合并去重→校验→导出）
-│   │   └── agents/              # Agent（parser/generator/reviewer/exporter/import/supplement）
+│   │   └── agents/              # Agent（parser/generator/reviewer/exporter/import/supplement/scripter）
 │   ├── api/                     # API 路由
 │   │   ├── auth.py
 │   │   ├── guest.py             # 共享 guest 签发（V4.1）
@@ -572,16 +645,19 @@ ai-testflow/
 │   │   ├── knowledge.py         # RAG 知识库 CRUD + 检索 + 分块修订（V4.0）
 │   │   ├── llm_config.py        # 含 embedding 槽（V4.2）
 │   │   ├── users.py             # admin 用户管理
+│   │   ├── quality.py           # 质量看板采集/聚合/趋势（V5.0 M0）
+│   │   ├── automation.py        # 被测系统 + 执行记录 + 报告文件（V5.0 M1–M3）
 │   │   └── deps.py              # 鉴权依赖
 │   └── jobs/
 │       └── guest_cleaner.py     # 共享 guest 数据管理（V4.1 简化：手动清空，无自动 TTL）
 ├── vectors/                     # Chroma 向量库持久化目录（.gitignore，不入库）
+├── quality_data/                # 质量看板采集与聚合数据（.gitignore，本地留存，V5.0 M0）
 ├── uploads/  outputs/           # 上传 / 导出目录（按用户分目录，已 gitignore）
 ├── deploy/
-│   └── ai-testflow.service      # systemd 单元（阿里云生产使用）
+│   └── ai-testflow.service      # systemd 单元（历史遗留，生产已改用宝塔 Python 项目管理器托管）
 └── docs/                        # 项目文档
     ├── PRD.md                   # 产品需求文档
-    ├── DEPLOY.md                # 部署指南（同源单服务 + cloudflared 隧道）
+    ├── DEPLOY.md                # 部署指南（同源单服务 + 宝塔 Nginx 反代）
     ├── 项目1-工作流平台-MVP执行方案.md  # 技术实现方案（架构底座，版本无关）
     ├── 项目1-LangChain迁移执行方案.md   # V3 LangChain 化方案
     ├── 项目1-前端React重构执行方案-V2.8.md      # 前端重构执行方案
@@ -595,27 +671,30 @@ ai-testflow/
 
 ## 部署架构
 
-- **同源单服务**：FastAPI（127.0.0.1:8000）同时提供 API（`/api`）与前端静态资源（`frontend/dist`，相对路径调用，无跨域）；systemd 单元 `ai-testflow.service` 管理 uvicorn（`Restart=on-failure`）
+- **同源单服务**：FastAPI（127.0.0.1:8000）同时提供 API（`/api`）与前端静态资源（`frontend/dist`，相对路径调用，无跨域）；进程由宝塔 Python 项目管理器托管（早期 systemd 单元已弃用）
 
-- **服务器**：阿里云 ECS（IP / 端口见运维记录，**不写入公开文档**），宝塔面板运维，MySQL 提供远程库
+- **服务器**：阿里云 ECS，宝塔面板统一运维（Nginx / MySQL / Python 项目）；IP 与端口见运维记录，**不写入公开文档**
 
-- **公网访问**：**cloudflared 命名隧道**（`ai.clickscope.in` → `http://localhost:8000`）；因域名未完成 ICP 备案，不能直开 80/443，隧道为当前最稳方案（cpolar 内网穿透方案已弃用）
+- **公网访问**：宝塔 Nginx 反向代理，三域名全 HTTPS（证书 acme.sh 自动续期），域名已完成 **ICP 备案**（公安备案进行中）：
+
+  | 域名 | 用途 |
+  | --- | --- |
+  | `agentest.vip` | 个人主页（静态站，页脚挂 ICP 备案号） |
+  | `ai.agentest.vip` | 本平台（Nginx 反代 → 127.0.0.1:8000） |
+  | `erp.agentest.vip` | 被测系统 DBERP（PHP 站点） |
+
+  IP 直连 80/443 已通过 `return 444` 断连，仅允许域名访问（早期 cpolar 内网穿透 / Cloudflare 隧道方案均已退役）
 
 - **前端发布**：`scripts/deploy_frontend.sh` 本地构建 → 打包上传 → 服务器解压重启 → 健康检查 + 外网验证（3 份滚动备份 + 失败自动回滚）；`frontend/dist` 不入库
 
-- **后端同步**：git bundle 差分包通道（服务器直连 GitHub 超时）；依赖 pip 走阿里云镜像安装
-
-- **被测系统**：DBERP 进销存，同样部署于该服务器，经另一条隧道（`erp.clickscope.in`）访问
+- **后端同步**：git push 后服务器经 gh-proxy 镜像 `git pull --ff-only` 更新（直连 GitHub 不稳），宝塔面板重启项目生效；依赖 pip 走阿里云镜像安装
 
 ```
-浏览器 ──HTTPS──> cloudflared 隧道 ──> 阿里云:8000 (uvicorn)
-                                        ├── /api/*  REST API
-                                        ├── /health 健康检查
-                                        └── /       前端静态页(frontend/dist)
+浏览器 ──HTTPS──> Nginx(443 · ai.agentest.vip) ──反代──> 阿里云:8000 (uvicorn)
+                                                      ├── /api/*  REST API
+                                                      ├── /health 健康检查
+                                                      └── /       前端静态页(frontend/dist)
 ```
-
-> 注意：Cloudflare 分配的 IP 在国内部分网络/代理节点下会被干扰（表现为 `ERR_CONNECTION_CLOSED`）。
-> 若浏览器打不开而服务端正常，先排查本机代理（Clash 等）——给 `clickscope.in` 加 `DIRECT` 规则即可绕开。
 
 详见 `docs/DEPLOY.md`。
 
@@ -643,5 +722,5 @@ ai-testflow/
 | V4.4（已完成） | 知识库顶栏下拉选择器（移除左侧堆叠列表，会话上方下拉切换） | ✅ 已上线 |
 | V4.5（已完成） | 活泼浅色主题（马卡龙图标色块 / 紫蓝渐变主色 / 白底侧栏） | ✅ 已上线 |
 | V4.5.1（已完成） | 系统自检悬浮通知（右上角滑入 / 6s 自动消失 / hover 暂停 / 可手动关 / 四项检查） | ✅ 已上线 |
-| V4.6（规划） | 定时执行 + Allure 报告集成              | 📋 规划 |
-| V4.7（规划） | 接真实 DBERP 后端做端到端接口自动化闭环         | 📋 规划 |
+| V4.5.2（已完成） | RAG 引用溯源持久化（切换会话 / 刷新后引用不丢）+ 知识库问答会话按库隔离（切库不再串历史） | ✅ 已上线 |
+| V5.0（本地交付） | 全链路测试闭环：M0 质量看板（pytest/e2e 量化 + 趋势）+ M1 URL 抓取生成用例（BFS 抓取 / 登录态 / 截图墙 / 探索录屏）+ M2 脚本生成 Agent 与本机执行引擎（subprocess pytest + 结构化报告）+ M3 前端执行报告闭环（执行列表 / 截图 lightbox / 重试）+ M4 自愈循环（四分类诊断 / 断言保护 / 只重跑失败 / 疑似缺陷警示）+ M5 探索式测试 Agent（ReAct 自主探索 / 三重护栏 / 探索时间线 / 真调冒烟通过）✅ 本地已交付（未部署）；测试数据隔离（第 11 节）⬜ 待落地。方案与交付台账见 `docs/项目1-全链路测试闭环与Agent化执行方案-V5.0.md` | ✅ 本地已交付 |
