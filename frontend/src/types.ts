@@ -114,6 +114,10 @@ export interface Task {
   parent_task_id?: string | null;
   /** 所属会话 id：详情页「继续优化」据此跳回会话挂载迭代引用（后端对历史任务做反查兜底） */
   conversation_id?: string | null;
+  /** M3 全链路：e2e 任务绑定的被测系统 id（契约 3 TaskOut 增量） */
+  target_id?: string | null;
+  /** M3：该任务已有自动化脚本（详情抽屉显示「自动化」Tab 的依据） */
+  has_auto?: boolean;
   created_at?: string | null;
   finished_at?: string | null;
   steps: StepLog[];
@@ -126,8 +130,8 @@ export interface ChatDraft {
   file?: File | null;
   kind: string;
   formats: string[];
-  /** 「深度思考」开关（默认开）：关掉则不请求模型思考，也不展示思考面板 */
-  thinking?: boolean;
+  /** 「总是深度思考」开关：true=每轮都先推理；null/省略=按需（由后端判定是否值得推理） */
+  thinking?: boolean | null;
   /** 多角色协作（V3.1）：参与生成的视角，如 ["pm","qa","dev"]，默认 ["qa"] */
   roles?: string[];
 }
@@ -207,4 +211,213 @@ export interface CategoryNode {
   parent_id: number | null;
   task_count: number;
 }
+
+/* ===== M0 平台自身质量量化（质量看板，与 app/api/quality.py 对齐） ===== */
+
+/** pytest 按文件分布的单文件统计 */
+export interface QualityPytestFileStat {
+  total: number;
+  passed: number;
+}
+
+/** 聚合结果的 pytest 维度 */
+export interface QualityPytest {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  pass_rate: number;
+  duration_ms: number;
+  coverage_pct: number;
+  by_file: Record<string, QualityPytestFileStat>;
+  failures: { file: string; test: string; message: string }[];
+}
+
+/** 单个 e2e 套件结果（run-e2e.mjs 产出） */
+export interface QualityE2ESuite {
+  name: string;
+  outcome: string;
+  duration_ms: number;
+  error: string | null;
+}
+
+/** 聚合结果的 e2e 维度 */
+export interface QualityE2E {
+  suites: QualityE2ESuite[];
+  total: number;
+  passed: number;
+  pass_rate: number;
+  duration_ms: number;
+}
+
+/** quality-summary.json 结构 */
+export interface QualitySummary {
+  pytest: QualityPytest;
+  e2e: QualityE2E;
+  generated_at: string;
+}
+
+/** GET /api/quality/summary 响应（尚未运行过时 exists=false） */
+export interface QualitySummaryResp {
+  exists: boolean;
+  summary: QualitySummary | null;
+  message?: string;
+}
+
+/** GET /api/quality/run/status 响应 */
+export interface QualityRunStatus {
+  run_id: string | null;
+  status: "idle" | "running" | "completed" | "failed";
+  stage: string;
+  message: string;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** GET /api/quality/history 元素（趋势图数据点） */
+export interface QualityHistoryPoint {
+  ts: string;
+  pytest_total: number;
+  pass_rate: number;
+  coverage_pct: number;
+  e2e_total: number;
+  e2e_passed: number;
+}
+
+/** 与 app/schemas/automation.py:TargetOut 对齐（M1 全链路：被测系统，M3 Drawer 自动化 Tab 复用） */
+export interface TargetItem {
+  id: string;
+  name: string;
+  base_url: string;
+  auth_type: string;
+  has_auth: boolean;
+  created_at?: string | null;
+}
+
+/* ===== M3 自动化执行（与契约 2 / app/schemas/automation.py ExecutionRunOut 严格对齐） ===== */
+
+export type ExecutionStatus = "pending" | "running" | "completed" | "failed";
+
+/** report_json.summary（契约 2） */
+export interface ExecutionSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  duration_ms: number;
+}
+
+/** report_json.cases[] 单条用例结果（契约 2；screenshot 相对 auto_dir，如 shots/test_tc_001.png） */
+export interface ExecutionCase {
+  case_id: string;
+  node_id: string;
+  title: string;
+  outcome: "passed" | "failed" | "skipped";
+  duration_ms: number;
+  error: string | null;
+  screenshot: string | null;
+}
+
+/** report_json.environment（契约 2） */
+export interface ExecutionEnvironment {
+  browser: string;
+  base_url: string;
+}
+
+/** report_json 解析后的对象（契约 2） */
+export interface ExecutionReport {
+  summary: ExecutionSummary;
+  cases: ExecutionCase[];
+  environment: ExecutionEnvironment;
+  /** M4 自愈：触发过自愈循环时存在（见 HealMeta） */
+  heal?: HealMeta | null;
+}
+
+/** GET /api/tasks/{task_id}/executions 元素 & GET /api/executions/{run_id} 响应（契约 3）。
+ *  report 为后端解析后的对象；pending/running 时为 null（running 只带 progress/total）。 */
+export interface ExecutionRunOut {
+  id: string;
+  task_id: string;
+  user_id: number;
+  trigger: "manual" | "retry";
+  status: ExecutionStatus;
+  progress: number;
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  duration_ms: number;
+  report: ExecutionReport | null;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  /** M4 自愈：已进行的自愈轮次（0=未触发；running 期间轮询可见递增） */
+  heal_round?: number;
+}
+
+/* ===== M4 自愈循环（与 auto_runner._run_heal_flow 写入 report_json.heal 的结构对齐） ===== */
+
+/** heal.log[].suspects[] 单个失败用例取证（auto_healer 落库只保留 case_id/error/screenshot） */
+export interface HealSuspect {
+  case_id: string;
+  error: string;
+  /** 失败截图相对任务目录路径（本版本仅路径，供人工核对） */
+  screenshot: string;
+}
+
+/** heal.log[] 每轮自愈明细 */
+export interface HealLogEntry {
+  round: number;
+  suspects: HealSuspect[];
+  diagnosis: { root_cause: string | null; analysis: string };
+  /** 本轮修复覆盖写回的脚本文件名（未修复为空数组） */
+  changed_files: string[];
+  /** passed / failed / skipped / error / diagnosis_failed / rejected_syntax_error:… / rejected_assert_change */
+  rerun_outcome: string;
+}
+
+/** heal.suspected_bugs[] 疑似真缺陷/环境问题（不可修复收敛记录） */
+export interface SuspectedBug {
+  case_id: string;
+  /** product_bug / env / exhausted */
+  kind: string;
+  reason: string;
+}
+
+/** report_json.heal（M4 自愈结果，存在即表示触发过自愈循环） */
+export interface HealMeta {
+  rounds: number;
+  log: HealLogEntry[];
+  suspected_bugs: SuspectedBug[];
+}
+
+/** POST run-auto / retry 响应（契约 3） */
+export interface ExecutionStartResp {
+  run_id: string;
+  status: string;
+}
+
+/* ===== 页面探索可视化（与 web_crawler.PageDesc / GET /api/tasks/{id}/pages 对齐） ===== */
+
+/** crawler 抓取的单页结构描述（pages.json 元素，前端只消费展示字段） */
+export interface PageDescInfo {
+  url: string;
+  title: string;
+  /** 截图相对任务目录路径（如 pages/page-001.png），空串 = 无截图 */
+  screenshot?: string;
+  rendered?: boolean;
+  text_digest?: string;
+}
+
+/** GET /api/tasks/{task_id}/pages 响应（无产物时 pages 为空数组） */
+export interface TaskPagesResp {
+  task_id: string;
+  pages: PageDescInfo[];
+  /** 探索录屏可播标记（任务目录 videos/explore.webm 存在时为 true） */
+  video_available?: boolean;
+}
+
+
 

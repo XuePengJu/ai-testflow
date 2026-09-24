@@ -4,7 +4,10 @@
  * 方案 B：每个步骤可折叠，默认展开，展开区显示该步思考详情（输入/输出/错误）。
  */
 import { useEffect, useState } from "react";
-import type { Task } from "../../types";
+import type { Task, TaskPagesResp } from "../../types";
+import { fetchTaskPages, fetchTaskVideo } from "../../api/client";
+import { PageShot } from "../task/ExecutionPanel";
+import ExploreTimeline from "./ExploreTimeline";
 import { useTaskStore } from "../../store/taskStore";
 import { isLatestOfChain } from "../../utils/taskChain";
 import { parseServerTime } from "../../utils/time";
@@ -19,18 +22,33 @@ function fmtDuration(ms: number): string {
   return `${m}:${(s % 60).toString().padStart(2, "0")}`;
 }
 
-const STEP_TITLES = ["解析规格", "AI 生成用例", "质量校验", "导出文件"];
+/** 默认步骤标题集（数据驱动渲染的兜底）：普通任务四步 / e2e 全链路六步。
+ *  实际渲染以任务返回的 steps[].title 为准（老任务四步显示不变，向后兼容）。 */
+const BASE_STEP_TITLES = ["解析规格", "AI 生成用例", "质量校验", "导出文件"];
+const E2E_STEP_TITLES = ["抓取页面", "解析需求", "AI生成用例", "质量校验", "脚本生成", "导出文件"];
+/** M5 探索式测试三步（与 engine.STEPS_EXPLORE 对齐） */
+const EXPLORE_STEP_TITLES = ["探索式测试", "脚本生成", "导出文件"];
 const STEP_ICONS: Record<string, string> = {
   解析规格: "🔍",
   "AI 生成用例": "✨",
   质量校验: "🛡️",
   导出文件: "📦",
+  抓取页面: "🌐",
+  解析需求: "🔍",
+  AI生成用例: "✨",
+  脚本生成: "📜",
+  探索式测试: "🧭",
 };
 const RUNNING_HINTS: Record<string, string> = {
   解析规格: "⏳ 正在拆解需求...",
   "AI 生成用例": "✨ 正在生成用例...",
   质量校验: "🛡️ 正在质量校验...",
   导出文件: "📦 正在导出文件...",
+  抓取页面: "🌐 正在抓取页面...",
+  解析需求: "⏳ 正在解析页面功能...",
+  AI生成用例: "✨ 正在生成用例...",
+  脚本生成: "📜 正在生成脚本...",
+  探索式测试: "🧭 正在探索页面（ReAct 循环）...",
 };
 
 export function statusBadge(status: string): { text: string; cls: string } {
@@ -38,6 +56,147 @@ export function statusBadge(status: string): { text: string; cls: string } {
   if (status === "running") return { text: "⏳ 生成中", cls: "run" };
   if (status === "failed") return { text: "✗ 失败", cls: "fail" };
   return { text: "排队中", cls: "sub" };
+}
+
+/**
+ * e2e crawler 步骤（抓取页面）的就地可视化：页面卡片网格 + 探索录屏播放入口 + lightbox。
+ * - 数据源：GET /api/tasks/{id}/pages（截图走 blob objectURL 鉴权，与详情页同模式）
+ * - 加载失败 / 无 pages 产物 → 回退显示原 details JSON 文本（不能因接口失败破坏步骤卡）
+ */
+function CrawlerPagesView({ taskId, json }: { taskId: string; json: string }) {
+  const [resp, setResp] = useState<TaskPagesResp | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [zoom, setZoom] = useState<string | null>(null); // 截图放大 lightbox
+  const [videoUrl, setVideoUrl] = useState<string | null>(null); // 录屏 lightbox
+
+  useEffect(() => {
+    let live = true;
+    void fetchTaskPages(taskId)
+      .then((r) => {
+        if (!live) return;
+        if (r && Array.isArray(r.pages) && r.pages.length > 0) setResp(r);
+        else setFailed(true);
+      })
+      .catch(() => {
+        if (live) setFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [taskId]);
+
+  // 关闭录屏 lightbox 时释放 blob URL
+  useEffect(() => {
+    if (!videoUrl) return;
+    return () => URL.revokeObjectURL(videoUrl);
+  }, [videoUrl]);
+
+  // 回退：接口失败 / 无产物 → 原 JSON 文本照旧（与旧版展开区一致）
+  if (failed) {
+    return json ? (
+      <div className="tsc-io">
+        <span className="tsc-io-label">📥 输入</span>
+        <div className="tsc-io-text">{json}</div>
+      </div>
+    ) : (
+      <div className="tsc-io-text tsc-muted">（暂无页面探索数据）</div>
+    );
+  }
+  if (!resp) {
+    return <div className="tsc-io-text tsc-muted">页面探索结果加载中…</div>;
+  }
+  const pages = resp.pages;
+  return (
+    <div className="tsc-io">
+      <span className="tsc-io-label">🌐 页面探索（{pages.length} 页）</span>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8, marginTop: 6 }}>
+        {pages.map((p, i) => (
+          <div
+            key={`${p.url}-${i}`}
+            title={p.title || p.url}
+            style={{ border: "1px solid #f0f1f3", borderRadius: 8, padding: 6, background: "#fff" }}
+          >
+            {p.screenshot ? (
+              <PageShot taskId={taskId} name={p.screenshot.split("/").pop() || ""} onZoom={setZoom} />
+            ) : (
+              <div
+                className="hint-line"
+                style={{ height: 96, borderRadius: 6, border: "1px dashed #e5e6eb", display: "flex", alignItems: "center", justifyContent: "center" }}
+              >
+                无截图
+              </div>
+            )}
+            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, color: "#1f2329", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {p.title || "(无标题)"}
+            </div>
+            <div className="dash" style={{ fontSize: 11, color: "#8f959e", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.url}>
+              {p.url}
+            </div>
+          </div>
+        ))}
+      </div>
+      {resp.video_available && (
+        <button
+          type="button"
+          className="btn-ghost"
+          style={{ marginTop: 8, height: 26, padding: "0 10px", fontSize: 12 }}
+          title="回放 crawler 浏览器探索全过程（webm 录屏）"
+          onClick={() => {
+            void fetchTaskVideo(taskId).then((u) => {
+              if (u) setVideoUrl(u);
+            });
+          }}
+        >
+          ▶ 观看探索录屏
+        </button>
+      )}
+      {/* 截图放大 lightbox（点击遮罩关闭） */}
+      {zoom && (
+        <div
+          onClick={() => setZoom(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            background: "rgba(15,18,25,.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={zoom}
+            alt="页面截图（放大）"
+            style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 8px 40px rgba(0,0,0,.4)" }}
+          />
+        </div>
+      )}
+      {/* 探索录屏播放 lightbox（点击视频本体不关闭，保证 controls 可用） */}
+      {videoUrl && (
+        <div
+          onClick={() => setVideoUrl(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            background: "rgba(15,18,25,.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <video
+            src={videoUrl}
+            controls
+            autoPlay
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 8px 40px rgba(0,0,0,.4)", background: "#000" }}
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface StepInfo {
@@ -56,9 +215,8 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
   const tasks = useTaskStore((s) => s.tasks);
   const openDetail = useTaskStore((s) => s.openDetail);
   const retryTask = useTaskStore((s) => s.retryTask);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(STEP_TITLES.map((t) => [t, true]))
-  );
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (title: string) => setExpanded((prev) => ({ ...prev, [title]: !prev[title] }));
   // 会话流里同一条迭代链的旧版本卡折叠成一行细条：入口只留最新一张完整卡，避免翻页找入口。
   // 抽屉内的卡（showIterate=false）不做折叠，那里由版本切换器导航。
   const stale = showIterate && !isLatestOfChain(tasks, task.id);
@@ -77,7 +235,7 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
   const badge = statusBadge(live.status);
   const stepMap: Record<string, StepInfo & { started_at?: string | null }> = {};
   (live.steps || []).forEach((s) => {
-    if (STEP_TITLES.includes(s.title))
+    if (s.title)
       stepMap[s.title] = {
         status: s.status,
         progress: s.progress,
@@ -88,7 +246,16 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
       };
   });
 
-  const toggle = (title: string) => setExpanded((prev) => ({ ...prev, [title]: !prev[title] }));
+  // 数据驱动步骤标题：默认集按 kind 兜底（pending 时 steps 为空也能显示骨架），
+  // 后端实际返回的 steps[].title 按出现顺序渲染在默认集之后（向后兼容老任务四步）。
+  const defaultTitles =
+    live.kind === "e2e" ? E2E_STEP_TITLES
+    : live.kind === "explore" ? EXPLORE_STEP_TITLES
+    : BASE_STEP_TITLES;
+  const titles = [...defaultTitles];
+  (live.steps || []).forEach((s) => {
+    if (s.title && !titles.includes(s.title)) titles.push(s.title);
+  });
 
   // 未配置可用模型：解析/生成步骤的摘要会带「未配置可用模型」提示 → 卡片顶部展示醒目提示条
   const mockNotice = (live.steps || []).some((s) =>
@@ -151,12 +318,16 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
         <div className="tsc-mock-tip">⚠️ 未配置可用模型，当前为模拟生成。请到「模型设置」配置真实模型后重新生成。</div>
       )}
       <div className="tsc-steps">
-        {STEP_TITLES.map((title) => {
+        {titles.map((title) => {
           const s = stepMap[title];
           const st = s ? s.status : "pending";
           const ring = st === "completed" ? "✓" : st === "failed" ? "!" : STEP_ICONS[title] || "•";
-          const open = expanded[title];
+          const open = expanded[title] !== false;
           const hasDetail = !!(s?.input_summary || s?.output_summary || s?.error);
+          // e2e 抓取步骤完成后 → 就地可视化（页面卡片 + 探索录屏），失败/无产物回退 JSON
+          const isCrawlerDone = live.kind === "e2e" && title === "抓取页面" && st === "completed";
+          // M5 explore 探索步骤完成后 → 就地可视化（探索时间线：每步动作/理由/结果 + 截图），失败回退 JSON
+          const isExploreDone = live.kind === "explore" && title === "探索式测试" && st === "completed";
           return (
             <div key={title} className={`tsc-step tsc-${st}`}>
               <button type="button" className="tsc-step-head" onClick={() => toggle(title)}>
@@ -185,26 +356,34 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
                   {st === "running" && live.status === "failed" && (
                     <div className="tsc-io-text tsc-muted">任务已中断，可点击上方「🔄 重试」从断点继续</div>
                   )}
-                  {s?.input_summary && (
-                    <div className="tsc-io">
-                      <span className="tsc-io-label">📥 输入</span>
-                      <div className="tsc-io-text">{s.input_summary}</div>
-                    </div>
-                  )}
-                  {s?.output_summary && (
-                    <div className="tsc-io">
-                      <span className="tsc-io-label">📤 输出</span>
-                      <div className="tsc-io-text">{s.output_summary}</div>
-                    </div>
-                  )}
-                  {s?.error && (
-                    <div className="tsc-io tsc-io-err">
-                      <span className="tsc-io-label">✗ 错误</span>
-                      <div className="tsc-io-text">{s.error}</div>
-                    </div>
-                  )}
-                  {st === "completed" && !hasDetail && (
-                    <div className="tsc-io-text tsc-muted">（暂无思考记录）</div>
+                  {isCrawlerDone ? (
+                    <CrawlerPagesView taskId={live.id} json={s?.input_summary || ""} />
+                  ) : isExploreDone ? (
+                    <ExploreTimeline taskId={live.id} json={s?.input_summary || ""} />
+                  ) : (
+                    <>
+                      {s?.input_summary && (
+                        <div className="tsc-io">
+                          <span className="tsc-io-label">📥 输入</span>
+                          <div className="tsc-io-text">{s.input_summary}</div>
+                        </div>
+                      )}
+                      {s?.output_summary && (
+                        <div className="tsc-io">
+                          <span className="tsc-io-label">📤 输出</span>
+                          <div className="tsc-io-text">{s.output_summary}</div>
+                        </div>
+                      )}
+                      {s?.error && (
+                        <div className="tsc-io tsc-io-err">
+                          <span className="tsc-io-label">✗ 错误</span>
+                          <div className="tsc-io-text">{s.error}</div>
+                        </div>
+                      )}
+                      {st === "completed" && !hasDetail && (
+                        <div className="tsc-io-text tsc-muted">（暂无思考记录）</div>
+                      )}
+                    </>
                   )}
                 </div>
               )}

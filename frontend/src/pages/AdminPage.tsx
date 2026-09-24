@@ -2,6 +2,7 @@
  * 管理页（M4，仅 admin）：统计卡 + 用户管理 + 平台默认模型 + 访客清理。
  * 平台配置数据本地拉取（GET /llm/platform-config，admin-only）。
  * V4：统计卡加图标 + 左对齐；访客治理按钮规范化（secondary / outline-danger）。
+ * 方案 A（2026-09-23）：质量看板迁出为独立「质量报告」页（全角色可见），本页回退纯概览。
  */
 import { useCallback, useEffect, useState } from "react";
 import { Users, UserX, ClipboardList, Trash2 } from "lucide-react";

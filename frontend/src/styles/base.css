@@ -1608,10 +1608,10 @@ body {
 .rail.collapsed .rail-login { width: 44px; padding: 0; }
 .rail.collapsed .rail-login .rl-txt { display: none; }
 
-/* 用户信息行：头像 + 用户名/角色 */
-.rail-user { display: flex; align-items: center; gap: 10px; width: 100%; padding: 4px 6px; border-radius: 10px; }
+/* 用户信息行：头像 + 用户名/角色（V4.5.3 对齐：与其他行统一 40px 高 + 色块同宽 26px 头像，文字与导航标签同竖线） */
+.rail-user { display: flex; align-items: center; gap: 10px; width: 100%; height: 40px; padding: 0 10px; border-radius: 10px; }
 .rail-user:hover { background: rgba(148, 163, 184, .12); }
-.rail-user .rail-avatar { width: 32px; height: 32px; font-size: 12px; }
+.rail-user .rail-avatar { width: 26px; height: 26px; border-radius: 8px; font-size: 12px; }
 .rl-user-info { line-height: 1.25; cursor: pointer; overflow: hidden; }
 .rl-user-name { font-size: 13px; color: #e2e8f0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rl-user-role { font-size: 11px; color: #64748b; }
@@ -1744,6 +1744,57 @@ body {
 /* ---- 收起态：色块缩小居中，保持可辨识 ---- */
 .rail.collapsed .rail-btn .rl-ico { width: 24px; height: 24px; }
 .rail.collapsed .rail-btn.active { box-shadow: 0 4px 10px rgba(109, 94, 242, .3); }
+
+/* ==================================================================
+   V4.5.3 侧栏「系统」组对齐修正 + 被测系统子菜单（targets-submenu）：
+   - 退出登录补马卡龙色块，与其它行同一图标列节奏；
+   - 被测系统 = 可折叠父项（点击展开子项列表），子项来自 TARGETS 数组；
+   - 展开态子列表走文档流（缩进 46px 与导航文字对齐）；
+   - 收起态子列表变右侧白色飞出面板；≤768px 顶部横条形态为按钮下方固定面板。
+   ================================================================== */
+.i-target { background: #e6f7ee; color: #10b981; }
+.i-out    { background: #ffeef0; color: #ef4444; }
+
+.rail .rail-btn .rail-chev { width: 14px; height: 14px; margin-left: auto; color: #a2a8b8; transition: transform .2s; flex: none; }
+.rail-sub.open > .rail-btn .rail-chev { transform: rotate(180deg); }
+.rail.collapsed .rail-chev { display: none; }
+
+.rail-submenu { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px; }
+.rail-sub:not(.open) > .rail-submenu { display: none; }
+.rail-subitem {
+  display: flex; align-items: center; gap: 7px; height: 32px;
+  padding: 0 10px 0 46px; border-radius: 9px; text-decoration: none;
+  font-size: 12.5px; color: #4b5163; transition: background .15s, color .15s;
+}
+.rail-subitem svg { width: 13px; height: 13px; color: #a2a8b8; flex: none; }
+.rail-subitem:hover { background: #f3f4fa; color: #1f2333; }
+.rail-subitem:hover svg { color: var(--itf-p600); }
+
+/* 收起态：子菜单变右侧飞出面板 */
+.rail.collapsed .rail-sub { position: relative; }
+.rail.collapsed .rail-submenu { display: none; }
+.rail.collapsed .rail-sub.open .rail-submenu {
+  display: flex; position: absolute; left: calc(100% + 12px); top: 0;
+  width: 190px; background: #fff; border: 1px solid var(--itf-line200);
+  border-radius: 12px; padding: 6px; z-index: 50;
+  box-shadow: 0 12px 32px rgba(20, 25, 50, .14);
+  animation: kbsel-pop .16s ease-out;
+}
+.rail.collapsed .rail-subitem { padding: 0 10px; height: 34px; }
+.rail.collapsed .rail-sub.open .rail-btn .rl-tip { display: none; }
+
+/* ≤768px 顶部横条形态：子菜单为按钮下方固定面板（rail overflow:hidden 不影响 fixed） */
+@media (max-width: 768px) {
+  .rail .rail-sub { position: relative; }
+  .rail .rail-submenu { display: none; }
+  .rail .rail-sub.open .rail-submenu {
+    display: flex; position: fixed; left: 12px; top: 60px;
+    width: 200px; background: #fff; border: 1px solid var(--itf-line200);
+    border-radius: 12px; padding: 6px; z-index: 60;
+    box-shadow: 0 12px 32px rgba(20, 25, 50, .14);
+  }
+  .rail .rail-subitem { padding: 0 10px; height: 34px; }
+}
 
 @media (max-width: 768px) {
   .rail-sticker { display: none; }

@@ -456,7 +456,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           // 迭代沟通模式：带上任务 id，后端把该任务用例摘要注入上下文，AI 才知道在讨论哪个任务
           task_id: get().iterTaskId || undefined,
           file_id: fileId,
-          thinking: draft.thinking !== false,
+          // 思考三态透传：true=总是深度思考；false=强制关；null/省略=按需（后端 should_deep_think 判定）。
+          // 注意不能写成 `draft.thinking !== false`——那会把 null 误转成 true，等于强制开启思考。
+          thinking: draft.thinking ?? null,
           // 角色选择：决定 AI 回复身份（qa测试/pm产品/dev开发），取第一个选中的角色
           roles: draft.roles?.length ? draft.roles : undefined,
           // V4.1：知识库问答限定检索范围（当前库）；mode 标记会话归属（后端 _ensure_conversation 落库）

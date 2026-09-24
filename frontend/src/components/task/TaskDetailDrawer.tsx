@@ -15,8 +15,9 @@ import TaskStepsCard from "../chat/TaskStepsCard";
 import CaseListTab from "./CaseListTab";
 import MindMapTab from "./MindMapTab";
 import ExportTab from "./ExportTab";
+import ExecutionPanel from "./ExecutionPanel";
 
-type TabKey = "mindmap" | "cases" | "export";
+type TabKey = "mindmap" | "cases" | "export" | "auto";
 
 export default function TaskDetailDrawer() {
   const drawerTaskId = useTaskStore((s) => s.drawerTaskId);
@@ -44,6 +45,11 @@ export default function TaskDetailDrawer() {
   useEffect(() => {
     setVerOpen(false);
   }, [drawerTaskId]);
+
+  // M3：「自动化」Tab 仅 e2e/has_auto 任务可见——切到不可见任务时回落到思维导图，避免空 Tab
+  useEffect(() => {
+    if (tab === "auto" && drawerTaskId && detail && !(detail.kind === "e2e" || !!detail.has_auto)) setTab("mindmap");
+  }, [tab, drawerTaskId, detail]);
   useEffect(() => {
     if (!verOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -72,6 +78,8 @@ export default function TaskDetailDrawer() {
 
   // 迭代前置条件：任务已终态 + 已关联会话（后端对历史任务做了反查兜底，正常不会为空）
   const iterable = !!t && (t.status === "completed" || t.status === "failed") && !!t.conversation_id;
+  /** M3：自动化 Tab 显隐（契约 6：kind=e2e 或已有脚本） */
+  const autoVisible = !!t && (t.kind === "e2e" || !!t.has_auto);
   const iterTitle = !t
     ? "加载中"
     : !(t.status === "completed" || t.status === "failed")
@@ -178,12 +186,23 @@ export default function TaskDetailDrawer() {
               >
                 导出
               </button>
+              {/* M3：自动化 Tab（e2e 或已有脚本的任务可见） */}
+              {autoVisible && (
+                <button
+                  type="button"
+                  className={`dtab ${tab === "auto" ? "active" : ""}`}
+                  onClick={() => setTab("auto")}
+                >
+                  自动化
+                </button>
+              )}
             </div>
 
             <div className="drawer-body">
               {tab === "mindmap" && <MindMapTab task={t} />}
               {tab === "cases" && <CaseListTab task={t} focusCaseId={focusCaseId} focusSeq={focusCaseSeq} />}
               {tab === "export" && <ExportTab task={t} />}
+              {tab === "auto" && autoVisible && <ExecutionPanel task={t} />}
             </div>
 
             {/* 底部固定操作栏：三个 Tab 都可见，切 Tab 不消失 —— 迭代的唯一入口 */}

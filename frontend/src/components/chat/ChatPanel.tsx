@@ -10,11 +10,12 @@
  *        无 chip 时为新建任务；chip 由详情页「继续优化」或会话内任务卡挂载。
  */
 import { useEffect, useRef, useState } from "react";
-import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles } from "lucide-react";
+import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles, Globe } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
 import { toast } from "../../api/client";
 import type { ChatDraft } from "../../types";
 import MessageView from "./MessageView";
+import E2ETaskModal from "./E2ETaskModal";
 
 function fmtSize(b: number): string {
   return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(2) + " MB";
@@ -33,7 +34,7 @@ const SAMPLE_LOGIN =
 const SAMPLE_DBERP =
   "DBERP 采购入库。\n功能点：创建采购入库单、关联采购订单、质检、上架、库存更新、单据查询。\n业务规则：入库数量不可超采购数量；质检不合格可退货；库存实时扣减。";
 
-/** 「深度思考」开关的本地记忆键（默认开） */
+/** 「总是深度思考」开关的本地记忆键（默认关＝按需：简单问题直接答，复杂问题由后端自动推理） */
 const THINK_KEY = "aitf_deep_think";
 
 /** 多角色协作（V3.1）：参与生成用例的视角（与后端 src/generator.case_generator 对齐） */
@@ -84,12 +85,13 @@ export default function ChatPanel({
   const [formats] = useState<string[]>(["xlsx", "json", "xmind"]);
   /** 多角色协作（V3.1）：参与生成用例的视角（pm/qa/dev），默认仅测试 */
   const [roles, setRoles] = useState<string[]>(["qa"]);
-  /** 深度思考开关：默认开，本地记忆（关掉则不请求模型思考，也不显示思考面板） */
-  const [deepThink, setDeepThink] = useState<boolean>(() => {
+  /** 「总是深度思考」：默认关＝按需 —— 简单问题直接答，复杂问题（排查/分析/报错等）
+   *  由后端自动判定是否推理。开启后每轮都先推理再作答。本地记忆，未表态时后端走自动判定。 */
+  const [alwaysThink, setAlwaysThink] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(THINK_KEY) !== "0";
+      return localStorage.getItem(THINK_KEY) === "1";
     } catch {
-      return true;
+      return false;
     }
   });
   const streamRef = useRef<HTMLDivElement>(null);
@@ -97,6 +99,8 @@ export default function ChatPanel({
   const fileRef = useRef<HTMLInputElement>(null);
   /** 用户上滚后暂停自动跟随，回到底部恢复 */
   const stickBottom = useRef(true);
+  /** M1 全链路测试发起弹窗 */
+  const [e2eOpen, setE2eOpen] = useState(false);
 
   // 自动滚底：消息变化 + 流式增量
   useEffect(() => {
@@ -142,7 +146,15 @@ export default function ChatPanel({
     if (!txt && !file) return;
     if (streaming) return;
     // V4.2.2：kb_qa 模式不传 roles——避免 QA 人设污染知识问答（回答不再带用例生成话术）
-    const draft: ChatDraft = { text: txt, file, kind, formats, thinking: deepThink, roles: kbMode ? undefined : roles };
+    // thinking：true=总是深度思考；null=未表态 → 后端按需自动判定（llm_service.should_deep_think）
+    const draft: ChatDraft = {
+      text: txt,
+      file,
+      kind,
+      formats,
+      thinking: alwaysThink ? true : null,
+      roles: kbMode ? undefined : roles,
+    };
     // 只传附件不打字时正文保持为空（气泡显示 📎 文件名徽标），不再写「(仅附加文档)」占位符
     void send(txt, draft);
     setText("");
@@ -162,10 +174,10 @@ export default function ChatPanel({
     setFile(f);
   }
 
-  /** 切换深度思考：写本地记忆，下一次发送即生效 */
+  /** 切换「总是深度思考」：写本地记忆，下一次发送即生效 */
   function toggleThink(): void {
-    const next = !deepThink;
-    setDeepThink(next);
+    const next = !alwaysThink;
+    setAlwaysThink(next);
     try {
       localStorage.setItem(THINK_KEY, next ? "1" : "0");
     } catch {
@@ -225,6 +237,11 @@ export default function ChatPanel({
                 <ClipboardList size={18} />
                 <span className="qc-title">输入场景</span>
                 <span className="qc-desc">直接描述你的业务场景</span>
+              </button>
+              <button className="quick-card" type="button" onClick={() => setE2eOpen(true)}>
+                <Globe size={18} />
+                <span className="qc-title">全链路测试</span>
+                <span className="qc-desc">输入网址自动抓取生成用例</span>
               </button>
               <button className="quick-card" type="button" onClick={() => setText(SAMPLE_ECOM)}>
                 <Sparkles size={18} />
@@ -298,6 +315,15 @@ export default function ChatPanel({
             <button
               className="icon-btn"
               type="button"
+              title="🌐 全链路测试：输入网址，AI 自动抓取页面并生成用例"
+              disabled={streaming}
+              onClick={() => setE2eOpen(true)}
+            >
+              <Globe size={20} />
+            </button>
+            <button
+              className="icon-btn"
+              type="button"
               title={`附加文档（${ACCEPT_HINT}），AI 会读取文档内容`}
               disabled={streaming}
               onClick={() => fileRef.current?.click()}
@@ -305,19 +331,19 @@ export default function ChatPanel({
               <Paperclip size={20} />
             </button>
             <button
-              className={`think-toggle ${deepThink ? "active" : ""}`}
+              className={`think-toggle ${alwaysThink ? "active" : ""}`}
               type="button"
-              aria-pressed={deepThink}
+              aria-pressed={alwaysThink}
               title={
-                deepThink
-                  ? "深度思考：已开启 —— 模型会先推理再作答（点击关闭）"
-                  : "深度思考：已关闭 —— 直接作答，不展示思考过程（点击开启）"
+                alwaysThink
+                  ? "总是深度思考：已开启 —— 每轮都会先推理再作答（点击改为按需）"
+                  : "按需深度思考：简单问题直接作答，复杂问题（排查/分析/报错等）自动推理（点击改为每轮都思考）"
               }
               disabled={streaming}
               onClick={toggleThink}
             >
               <Lightbulb size={16} />
-              <span className="tt-text">深度思考</span>
+              <span className="tt-text">总是深度思考</span>
             </button>
             {/* 角色选择器仅工作流模式展示：RAG 问答与用例视角无关（V4.2.2） */}
             {!kbMode && (
@@ -380,6 +406,8 @@ export default function ChatPanel({
           </div>
         </div>
       </div>
+      {/* M1 全链路测试发起弹窗 */}
+      <E2ETaskModal open={e2eOpen} onClose={() => setE2eOpen(false)} />
     </div>
   );
 }
