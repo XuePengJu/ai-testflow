@@ -127,11 +127,18 @@ class LangChainClient:
         return init_chat_model(**kwargs)
 
     def chat(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192,
-             timeout: float = _TIMEOUT) -> str:
-        """stream 收集模式：逐 chunk 拼完整文本返回（对外行为同旧 chat）。"""
+             timeout: float = _TIMEOUT, enable_thinking: bool | None = None) -> str:
+        """stream 收集模式：逐 chunk 拼完整文本返回（对外行为同旧 chat）。
+
+        enable_thinking：None（默认）= 不注入该参数，沿用模型自己的默认行为
+        （与本次改动前完全一致）；True/False = 显式要求端点开/关思考。
+        结构化抽取类调用点应传 False —— 实测思考会让正文退化成"摘要式少量结果"
+        且耗时翻数倍（见 docs/项目1-模型池与思考控制执行方案-V1.0.md §1）。
+        """
         try:
             full = ""
-            for chunk in self._build_model(temperature, max_tokens, timeout).stream(messages):
+            for chunk in self._build_model(temperature, max_tokens, timeout,
+                                           enable_thinking).stream(messages):
                 full += _norm_content(chunk.content)
         except LLMError:
             raise
@@ -143,9 +150,10 @@ class LangChainClient:
             raise LLMError(f"{e.__class__.__name__}: {str(e)[:200]}") from e
         return _THINK_TAG_RE.sub("", full).strip()
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, enable_thinking: bool | None = None) -> str:
         """与旧 BailianClient.generate 同签名：prompt 进、文本出。"""
-        return self.chat([{"role": "user", "content": prompt}])
+        return self.chat([{"role": "user", "content": prompt}],
+                         enable_thinking=enable_thinking)
 
     def chat_stream(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192,
                     timeout: float = _TIMEOUT, enable_thinking: bool | None = None):
@@ -250,11 +258,16 @@ class _HttpxCompatClient:
         self.api_key = api_key
         self.model = model
 
-    def chat(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192) -> str:
-        data = _post_chat(self.base_url, self.api_key, {
+    def chat(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192,
+             timeout: float = _TIMEOUT, enable_thinking: bool | None = None) -> str:
+        payload = {
             "model": self.model, "messages": messages,
             "temperature": temperature, "max_tokens": max_tokens,
-        })
+        }
+        ep_key = f"{self.base_url}|{self.model}"
+        if enable_thinking is not None and ep_key not in _NO_THINKING_PARAM:
+            payload["enable_thinking"] = bool(enable_thinking)
+        data = _post_chat(self.base_url, self.api_key, payload, timeout=timeout)
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
@@ -271,8 +284,9 @@ class _HttpxCompatClient:
         content = _THINK_TAG_RE.sub("", content).strip()
         return content
 
-    def generate(self, prompt: str) -> str:
-        return self.chat([{"role": "user", "content": prompt}])
+    def generate(self, prompt: str, enable_thinking: bool | None = None) -> str:
+        return self.chat([{"role": "user", "content": prompt}],
+                         enable_thinking=enable_thinking)
 
     def chat_stream(self, messages: list, temperature: float = 0.3, max_tokens: int = 8192,
                     timeout: float = _TIMEOUT, enable_thinking: bool | None = None):

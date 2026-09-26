@@ -1,52 +1,18 @@
-"""LLM 配置请求/响应模型（V2.4 FR-I）。"""
-from pydantic import BaseModel, field_validator
+"""LLM 配置请求/响应模型（V2.4 FR-I）。
 
-
-class LLMConfigIn(BaseModel):
-    """PUT 配置：api_key 缺省 = 保留原 Key；显式传空串 = 清除 Key。"""
-    slot: str
-    provider: str = "custom"
-    base_url: str = ""
-    model: str = ""
-    api_key: str | None = None
-
-    @field_validator("slot")
-    @classmethod
-    def _slot(cls, v: str) -> str:
-        if v not in ("text", "vision", "embedding"):
-            raise ValueError("slot 只能是 text / vision / embedding")
-        return v
-
-    @field_validator("model", "base_url")
-    @classmethod
-    def _not_blank_key_fields(cls, v: str, info) -> str:
-        # model / base_url 必填（自定义端点也必须有值）
-        if not v or not v.strip():
-            raise ValueError(f"{info.field_name} 不能为空")
-        return v.strip()
-
-
-class LLMConfigOut(BaseModel):
-    slot: str
-    provider: str
-    base_url: str
-    model: str
-    api_key_masked: str = ""    # 如 sk-****abcd；空 = 未配置 Key
+V5.4：单条配置下线后仅保留连通测试（LLMTestIn）与首页对话流（ChatIn）；
+模型池的请求/响应模型见 llm_pool.py。
+"""
+from pydantic import BaseModel
 
 
 class LLMTestIn(BaseModel):
-    """测试连通：api_key 缺省 = 用已保存的 Key（仅测已保存配置时）。"""
+    """测试连通：api_key 留空 = 复用池里同厂商已存 Key（免费厂商由服务端 Key 兜底）。"""
     provider: str = "custom"
     base_url: str = ""
     model: str = ""
     api_key: str = ""
     kind: str = "chat"              # chat | embedding（V4.0：向量模型走 /embeddings）
-
-
-class LLMEffectiveOut(BaseModel):
-    source: str                      # user / platform / env / mock
-    text: dict | None                # {provider, provider_label, model}
-    vision: dict | None
 
 
 class ChatIn(BaseModel):

@@ -1,7 +1,7 @@
 #!/bin/bash
 # 本地 Docker MySQL 管理（ai-testflow 开发库）
 #
-# 线上库 39.106.200.147:3356 与本库完全独立：
+# 线上库（地址见 .env，不写入文档）与本库完全独立：
 #   本地库跑 Ollama bge-m3 embedding，线上库跑百炼 text-embedding-v3，
 #   二者向量空间不同、模型配置也不同，绝不能共用。
 #

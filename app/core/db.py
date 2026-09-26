@@ -74,6 +74,7 @@ def init_db() -> None:
     import app.models.conversation  # noqa: F401
     import app.models.knowledge  # noqa: F401  # V4.0 RAG 知识库（7 张表）
     import app.models.automation  # noqa: F401  # M1 全链路：被测系统 test_targets
+    import app.models.llm_pool  # noqa: F401  # V5.0 P1：多模型池 llm_model_pool
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
 

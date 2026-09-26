@@ -5,3 +5,4 @@ init_db()（app/core/db.py）create_all 前也会直接 import，这里兜底保
 """
 from app.models.automation import TestTarget  # noqa: F401  M1 全链路：被测系统
 from app.models.automation import ExecutionRun  # noqa: F401  M2 执行引擎：自动化执行记录
+from app.models.llm_pool import LLMModelPool  # noqa: F401  V5.0 P1：多模型池

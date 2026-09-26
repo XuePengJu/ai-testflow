@@ -145,16 +145,16 @@ def _resolve_llm_client() -> tuple[object | None, str]:
     """
     try:
         from app.core.db import SessionLocal
-        from app.services import llm_service
+        from app.services import llm_pool
         db = SessionLocal()
         try:
-            eff = llm_service.resolve_effective(db, None)
+            # V5.0 P1：模型池优先（撞限流自动切换），池空回落单条生效配置
+            client = llm_pool.build_client(db, None, "text")
+            desc = llm_pool.describe_model(db, None, "text")
         finally:
             db.close()
-        cfg = eff.get("text")
-        if cfg and cfg.get("api_key"):
-            client = llm_service.OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
-            return client, str(cfg.get("model") or "")
+        if client is not None:
+            return client, desc
     except Exception as e:  # noqa: BLE001  LLM 解析失败不阻断，走 error 批
         logger.warning("scripter 解析 LLM 配置失败：%s", e)
     return None, ""

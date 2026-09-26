@@ -43,15 +43,12 @@ def set_auto_heal(run_id: str, enabled: bool) -> None:
 
 def _resolve_heal_client():
     """解析自愈用的 LLM 客户端（用户/平台默认/环境变量）；不可用返回 None（跳过自愈）。"""
-    from app.services import llm_service
+    from app.services import llm_pool
 
     db = SessionLocal()
     try:
-        eff = llm_service.resolve_effective(db, None)
-        cfg = eff.get("text")
-        if not cfg or not cfg.get("api_key"):
-            return None
-        return llm_service.OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
+        # V5.0 P1：模型池优先（撞限流自动切换），池空回落单条配置；不可用 → None 跳过自愈
+        return llm_pool.build_client(db, None, "text")
     finally:
         db.close()
 

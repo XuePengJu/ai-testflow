@@ -22,6 +22,7 @@ from app.models.conversation import Conversation
 from app.models.task import Task, StepLog
 from app.models.user import User
 from app.services import llm_service
+from app.services import llm_pool
 from app.services import explorer_agent
 from app.services.pipeline_lib import cases_to_json
 from app.services.web_crawler import PageDesc, pages_to_markdown, crawl_pages_json, run_crawl_sync
@@ -133,17 +134,9 @@ def run_task(task_id: str) -> None:
         owner = db.get(User, task.user_id) if task.user_id else None
         eff = llm_service.resolve_effective(db, owner)
         text_cfg, vision_cfg = eff["text"], eff["vision"]
-        llm_client = None
-        if text_cfg:
-            try:
-                llm_client = llm_service.OpenAICompatClient(
-                    text_cfg["base_url"], text_cfg["api_key"], text_cfg["model"])
-            except llm_service.LLMError:
-                llm_client = None
-        model_desc = (
-            f'{text_cfg["model"]} · {text_cfg["provider_label"]}' if text_cfg
-            else "未配置可用模型（模拟生成）"
-        )
+        # V5.0 P1：模型池优先（多条候选，撞限流自动切换）；池空回落单条生效配置
+        llm_client = llm_pool.build_client(db, owner, "text")
+        model_desc = llm_pool.describe_model(db, owner, "text") or "未配置可用模型（模拟生成）"
 
         # ---- V2.4：两段式视觉理解（business 输入里的图片引用） ----
         vision_note = ""
@@ -152,10 +145,10 @@ def run_task(task_id: str) -> None:
                 raw = Path(input_path).read_text(encoding="utf-8")
                 refs = llm_service.extract_image_refs(raw)
                 if refs:
-                    if vision_cfg:
+                    # V5.0 P1：视觉槽同样走模型池（池空回落单条生效配置）
+                    vclient = llm_pool.build_client(db, owner, "vision")
+                    if vclient is not None:
                         try:
-                            vclient = llm_service.OpenAICompatClient(
-                                vision_cfg["base_url"], vision_cfg["api_key"], vision_cfg["model"])
                             new_text, n = llm_service.vision_enrich(raw, vclient)
                             Path(input_path).write_text(new_text, encoding="utf-8")
                             vision_note = f"；视觉模型解析 {n} 张截图"

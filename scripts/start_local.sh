@@ -4,7 +4,7 @@
 #
 # 环境说明：本地与线上完全隔离——
 #   本地：127.0.0.1:3306 的 Docker MySQL + Ollama bge-m3 embedding
-#   线上：39.106.200.147:3356 + 云端 embedding（见 .env.server）
+#   线上：见 .env.server（不写入文档）+ 云端 embedding
 #   配置源：.env（由 app/core/config.py 读取），可用 AITF_ENV_FILE 切换
 set -u
 ROOT="/Users/xp/Documents/软件测试示例项目/ai-testflow"

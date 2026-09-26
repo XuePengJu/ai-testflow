@@ -41,3 +41,6 @@ quality_data/
 
 # Vite 构建临时产物（vite.config.ts 时间戳文件）
 frontend/vite.config.ts.timestamp-*.mjs
+
+# pytest 覆盖率产物
+.coverage

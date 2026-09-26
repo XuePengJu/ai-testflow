@@ -3,7 +3,8 @@
 - OpenAICompatClient：客户端实现迁移至 app.services.langchain_client（V3 阶段 2）
   - 默认 LangChainClient（init_chat_model + stream() 收集/逐段两用）
   - 应急回退 _HttpxCompatClient（AITF_LLM_BACKEND=httpx）
-- resolve_effective：模型解析优先级 = 用户配置 > 平台默认 > 服务器环境变量 > mock 兜底
+- resolve_effective：模型解析优先级 = 模型池（个人 > 平台） > 服务器环境变量 > mock 兜底
+  （V5.4 起单条配置 llm_configs 已下线，模型池是唯一配置入口）
 - Key 落库加密：复用 crypto 的 AES-256-GCM 原语，密钥 HKDF(JWT_SECRET, info=llm-at-rest:<owner>)
 - 两段式视觉理解：图片（data: URI / http URL）先交视觉模型转文字描述，再进文本模型
 - chat_stream：流式输出（前端打字机体验），yield 内容片段（prompt 强制 <think>…</think> 切分）
@@ -17,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from app.core import config, crypto
 from app.core.providers import provider_label, FREE_PROVIDERS
-from app.models.llm_config import LLMConfig
 from app.models.user import User
 from app.services.langchain_client import (
     LangChainClient,
@@ -25,6 +25,7 @@ from app.services.langchain_client import (
     LLMError,
     _NO_THINKING_PARAM,
 )
+from app.services import llm_pool  # V5.0 P1 多模型池（llm_pool 内部延迟 import 本模块，无循环）
 
 # 服务器环境变量兜底（兼容老部署：.env 里的 DASHSCOPE_API_KEY）
 _BAILIAN_COMPAT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -74,7 +75,7 @@ def _server_key(provider: str) -> str:
 
 # ============ 生效配置解析 ============
 
-def _row_to_cfg(row: LLMConfig, owner_id: int) -> dict:
+def _row_to_cfg(row, owner_id: int) -> dict:
     try:
         api_key = decrypt_key(row.api_key_enc, owner_id) if row.api_key_enc else ""
     except ValueError:
@@ -94,38 +95,23 @@ def _row_to_cfg(row: LLMConfig, owner_id: int) -> dict:
 def resolve_effective(db: Session, user: User | None) -> dict:
     """返回 {"source", "text", "vision"}。
 
-    source: user（用户自配） / platform（admin 平台默认） / env（百炼 .env 兜底） / mock
+    source: user（个人池生效） / platform（平台池生效） / env（百炼 .env 兜底） / mock
     text / vision: None 表示该槽位不可用（text 为 None → mock 生成）。
 
-    生效优先级：
-        用户自配(user) > 平台默认(platform，免费厂商由服务端 Key 兜底) > 百炼 env > mock
-    平台默认对免费厂商(魔搭 / GLM)可不填 Key，解析时由服务端环境变量补全，
-    因此"平台默认"是模型选择的唯一权威来源，徽标与模型管理页展示完全一致。
+    生效优先级（V5.4 起单条配置已下线，模型池是唯一配置入口）：
+        模型池（个人池 > 平台池） > 百炼 env > mock
+    免费厂商由服务端 Key 兜底（resolve_pool_ex 内已处理）。
     """
-    if user is not None:
-        own = {r.slot: r for r in db.execute(
-            select(LLMConfig).where(LLMConfig.user_id == user.id)
-        ).scalars().all()}
-    else:
-        own = {}
-    platform = {r.slot: r for r in db.execute(
-        select(LLMConfig).where(LLMConfig.user_id == 0)
-    ).scalars().all()}
-
     def pick(slot: str) -> tuple[dict | None, str | None]:
-        if slot in own:
-            return _row_to_cfg(own[slot], user.id), "user"
-        if slot in platform:
-            return _row_to_cfg(platform[slot], 0), "platform"
+        pool, owner = resolve_pool_ex(db, user, slot)
+        if pool:
+            cand = next((c for c in pool if not llm_pool.is_cooling(c)), pool[0])
+            return cand, ("user" if owner == "personal" else "platform")
         return None, None
 
-    # 文本槽优先级：用户自配 > 平台默认 > 百炼 env 兜底
-    text_cfg, src = None, None
-    if "text" in own:
-        text_cfg, src = _row_to_cfg(own["text"], user.id), "user"
-    elif "text" in platform:
-        text_cfg, src = _row_to_cfg(platform["text"], 0), "platform"
-    elif config.DASHSCOPE_API_KEY:
+    # 文本槽优先级：模型池 > 百炼 env 兜底
+    text_cfg, src = pick("text")
+    if text_cfg is None and config.DASHSCOPE_API_KEY:
         text_cfg = {
             "provider": "bailian",
             "provider_label": provider_label("bailian"),
@@ -135,14 +121,10 @@ def resolve_effective(db: Session, user: User | None) -> dict:
         }
         src = "env"
 
-    vision_cfg, vsrc = pick("vision")
-
-    if text_cfg is None:
+    if text_cfg is None or not text_cfg.get("api_key"):
         return {"source": "mock", "text": None, "vision": None}
 
-    # text 槽有 Key 才真正可用（免费厂商已由服务端 Key 兜底）
-    if not text_cfg.get("api_key"):
-        return {"source": "mock", "text": None, "vision": None}
+    vision_cfg, _ = pick("vision")
 
     return {
         "source": src or "platform",
@@ -155,27 +137,35 @@ def resolve_embedding(db: Session, user_id: int | None = None) -> dict:
     """解析生效的 Embedding 配置（V4.0 RAG）。
 
     返回 {"source", "cfg"}：
-        source: personal（用户自配，设置页可配）/ platform（admin 平台默认）
+        source: personal（个人池生效）/ platform（平台池生效）
               / env（环境变量 EMBEDDING_API_KEY） / mock
-    优先级：用户配置(slot=embedding) > 平台配置 > 环境变量 > mock。
+    优先级（V5.4 起单条配置已下线）：模型池（个人 > 平台） > 环境变量 > mock。
     注意：向量维度由模型决定，不同用户配置不同模型时跨用户检索（global 库）
     可能失效；同一用户自己的库入库/检索同模型，正常匹配。
     """
-    if user_id is not None:
-        row = db.execute(
-            select(LLMConfig).where(LLMConfig.user_id == user_id, LLMConfig.slot == "embedding")
-        ).scalar_one_or_none()
-        if row:
-            cfg = _row_to_cfg(row, user_id)
-            if cfg.get("api_key"):
-                return {"source": "personal", "cfg": cfg}
-    row = db.execute(
-        select(LLMConfig).where(LLMConfig.user_id == 0, LLMConfig.slot == "embedding")
-    ).scalar_one_or_none()
-    if row:
-        cfg = _row_to_cfg(row, 0)
-        if cfg.get("api_key"):
-            return {"source": "platform", "cfg": cfg}
+    if db is not None:
+        from app.models.llm_pool import LLMModelPool
+
+        def _first(owner_id: int) -> dict | None:
+            rows = db.execute(
+                select(LLMModelPool).where(
+                    LLMModelPool.user_id == owner_id,
+                    LLMModelPool.slot == "embedding",
+                    LLMModelPool.enabled.is_(True),
+                ).order_by(LLMModelPool.priority.asc(), LLMModelPool.id.asc())
+            ).scalars().all()
+            for r in rows:
+                cfg = _pool_row_to_cfg(r, owner_id)
+                if cfg.get("api_key"):
+                    return cfg
+            return None
+
+        cfg = _first(user_id) if user_id is not None else None
+        if cfg is None:
+            cfg = _first(0)
+        if cfg:
+            src = "personal" if cfg.get("owner_id") == user_id and user_id is not None else "platform"
+            return {"source": src, "cfg": cfg}
     if getattr(config, "EMBEDDING_API_KEY", ""):
         return {
             "source": "env",
@@ -195,6 +185,83 @@ def public_view(cfg: dict | None) -> dict | None:
     if not cfg:
         return None
     return {k: cfg[k] for k in ("provider", "provider_label", "base_url", "model")}
+
+
+# ============ 多模型池解析（V5.0 P1） ============
+
+def key_fingerprint(api_key: str) -> str:
+    """Key 的确定性指纹（sha256 前 16 位），模型池判重专用。
+
+    不能用 api_key_enc 判重：crypto.encrypt_obj 每次用随机 nonce 加密，
+    同一个 Key 加密两次结果不同（实测 a == b → False），唯一约束会形同虚设。
+    """
+    import hashlib
+    return hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _pool_row_to_cfg(row, owner_id: int) -> dict:
+    """池行 → 候选 dict（复用 _row_to_cfg：解密失败置空 + 免费厂商服务端 Key 兜底）。"""
+    cfg = _row_to_cfg(row, owner_id)
+    cfg.update({
+        "id": row.id,
+        "owner_id": owner_id,
+        "priority": row.priority,
+        "paid": bool(row.paid),
+        "note": row.note or "",
+        "cooldown_until": row.cooldown_until,
+    })
+    return cfg
+
+
+def resolve_pool_ex(db: Session, user: User | None,
+                    slot: str = "text") -> tuple[list[dict], str | None]:
+    """解析该槽位的候选池，并给出「归属」：(候选池, "personal" | "platform" | None)。
+
+    优先级：用户池（user_id=user.id）非空 → 用它；否则平台池（user_id=0）非空 → 用它；
+    两边都空 → ([], None)（调用方回落 resolve_effective 的单条逻辑，行为与上线池化前完全一致）。
+
+    过滤：enabled=False 不进候选；Key 解不开且免费厂商也无服务端兜底 Key 的也会被剔除
+    （避免把"必然 401"的候选塞进池子，白撞一次）。
+
+    ⚠️ owner 是**归属**（哪一侧的池在生效），不等于"一定有可用候选"：池里条目存在但
+    Key 全部解不开时，owner 仍返回该侧、候选列表却为空。这样 /llm/effective 才能显示
+    「N 条 · 全部不可用」，而不是误报「未启用池」。
+
+    db 为 None（无会话上下文，如单元测试直接调用 chat_stream）→ 视为池为空，回落单条。
+    """
+    if db is None:
+        return [], None
+    from app.models.llm_pool import LLMModelPool
+
+    def _rows(owner_id: int) -> list:
+        return list(db.execute(
+            select(LLMModelPool).where(
+                LLMModelPool.user_id == owner_id,
+                LLMModelPool.slot == slot,
+                LLMModelPool.enabled.is_(True),
+            ).order_by(LLMModelPool.priority.asc(), LLMModelPool.id.asc())
+        ).scalars().all())
+
+    owner: str | None = None
+    rows = _rows(user.id) if user is not None else []
+    if rows:
+        owner = "personal"
+    else:
+        rows = _rows(0)
+        if rows:
+            owner = "platform"
+
+    out: list[dict] = []
+    for r in rows:
+        cfg = _pool_row_to_cfg(r, r.user_id)
+        if cfg.get("api_key"):
+            out.append(cfg)
+    return out, owner
+
+
+def resolve_pool(db: Session, user: User | None, slot: str = "text") -> list[dict]:
+    """该槽位的可用候选池（resolve_pool_ex 的候选部分；签名与语义保持不变）。"""
+    return resolve_pool_ex(db, user, slot)[0]
 
 
 # ============ 对话流式 chat_stream（前端打字机体验） ============
@@ -459,7 +526,10 @@ async def chat_stream(
         yield ("done", {"full": "", "degraded": True})
         return
     cfg = eff["text"]
-    client = OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
+    # V5.0 P1：优先走模型池（多条候选，撞限流自动切换）；池空时回落单条配置
+    client = llm_pool.build_client(db, user, "text")
+    if client is None:
+        client = OpenAICompatClient(cfg["base_url"], cfg["api_key"], cfg["model"])
     produced = False  # 是否已吐出过真实内容（决定出错时能否安全降级到 mock）
     err = ""
     try:
@@ -573,6 +643,7 @@ def test_connectivity(base_url: str, api_key: str, model: str, kind: str = "chat
         reply = OpenAICompatClient(base_url, api_key, model).chat(
             [{"role": "user", "content": "回复「ok」两个字即可。"}],
             temperature=0, max_tokens=16,
+            enable_thinking=False,   # 连通测试只验 Key/端点/模型，无需思考（省时）
         )
         return {
             "ok": True,
