@@ -1,8 +1,9 @@
 # AI 测试工作流平台
 
-> 作品集「门面担当」全栈产品，当前版本 **V4.5.2**（线上）/ **V5.0**（本地交付）。
+> 作品集「门面担当」全栈产品，当前版本 **V4.5.2**（线上）/ **V5.4**（本地交付）。
 > 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端；并内置 **RAG 知识库**与**知识库问答**能力——AI 对话默认自动检索私有/共享知识库并给出引用溯源。支持多厂商大模型、**多角色协作视角（产品/测试/开发）**、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
 > **V5.0 升级为「AI 测试闭环平台」**：URL → 抓取 → 用例 → 脚本 → 执行 → 报告全链路自动化 + 平台自身质量看板（M0–M5 全部本地交付：M4 自愈循环 / M5 探索式测试 Agent 已于 09-24 交付）。
+> **V5.1–V5.4 模型接入收敛**：多模型池（每槽位多条候选 + 优先级 + 限流熔断自动切换）成为唯一模型配置入口，单条配置已下线；模型配置升为一级页面，信息架构重组（用户管理 / 个人中心 / 侧栏「被测系统」子菜单）。
 
 在线演示：[https://ai.agentest.vip/](https://ai.agentest.vip/)
 
@@ -19,7 +20,7 @@
 
 - 过程：四 Agent 编排，每步可观测、可重试、可定位错误
 
-- 扩展：用户级模型配置、任务分类管理、思维导图在线评审、**RAG 知识库问答**
+- 扩展：用户级多模型池（多候选调度）、任务分类管理、思维导图在线评审、**RAG 知识库问答**
 
 ***
 
@@ -252,7 +253,7 @@
 | ------------- | --------------- | ------------------ | ---------------------------- |
 | **guest 访客**  | 全站唯一**共享账号**（`username=guest`，免注册共用） | **不过期、不转正、不限频**；数据混用，admin 可一键清空共享数据 | 体验全功能，任务上限 10              |
 | **user 注册用户** | 邮箱 + 密码（bcrypt） | 永久                 | 只管自己的任务 / 分类 / 模型配置 / 文件     |
-| **admin 管理员** | 首个注册用户自动晋升      | 永久                 | 全量任务、用户治理、访客治理、平台统计、平台默认模型配置、知识库管理 |
+| **admin 管理员** | 首个注册用户自动晋升      | 永久                 | 全量任务、用户治理、访客治理、平台统计、平台模型池、知识库管理 |
 
 > V4.1 起访客体系简化为单一固定共享账号（原「按 IP 动态建访客 / 24h TTL / 访客转正」已移除），降低滥用面、简化前端登录态同步。共享 guest 的任务与文件由 admin 手动清空（`reset_shared_guest_data`），无自动 TTL 清理调度。
 
@@ -319,6 +320,20 @@
 
 - 待办：第 11 节测试数据隔离（run_tag + 台账化清理）⬜ 未落地；M4/M5 的 LLM 真调全量验收待有效 API key（M5 冒烟已通过）。方案与交付台账见 `docs/项目1-全链路测试闭环与Agent化执行方案-V5.0.md` 第 12 节
 
+### 模型池与调度（V5.1–V5.4，本地已交付）
+
+> 模型接入收敛为单一架构：**多模型池是唯一的模型配置入口**（V5.4 单条配置已下线，`llm_configs` 存量数据保留但不再参与调度）。
+
+- **模型配置一级页面（V5.3）**：自设置页拆出的独立入口，全角色可见（访客只读调度摘要，配置接口 403）；admin 含「我的模型 | 平台默认」双 Tab（平台池 V5.2 自管理后台迁入）
+
+- **多模型池（V5.1）**：`text / vision / embedding` 三槽独立，每槽多条候选按 `priority` 从小到大依次调度——某条撞限流 / 额度用尽自动切下一条，任务不中断；健康状态随行落库（`cooldown_until` 熔断冷却 / `success_count` / `fail_count` / `last_error`），**重启不丢熔断记忆**；同条目按 `(user_id, slot, base_url, model, key_fingerprint)` 唯一判重
+
+- **调度优先级**：个人池 > 平台池（user_id=0，admin 维护）> 服务器环境变量兜底（`DASHSCOPE_API_KEY` 等）> mock；顶栏调度摘要实时展示各槽位池的可用 / 冷却状态
+
+- **连通测试不带思考（V5.4）**：池条目测试 / 当前生效模型测试 / 表单连通测试统一 `enable_thinking=False`，端点不认时自动重试，测连通不再白等思考输出
+
+- **信息架构重组（V5.3）**：管理后台改名「用户管理」（页面只含用户管理与访客治理）；「设置」瘦身成「个人中心」（个人资料 + 修改密码，入口移至侧栏底部用户区）；侧栏新增「被测系统」可折叠子菜单（数据源数组化，外链新窗口打开，收起态飞出面板）
+
 ### 产品包装
 
 - 右侧悬浮「需求进度」抽屉：已上线 / 开发中 / 规划中，三组进度展示
@@ -348,7 +363,7 @@
 | 页面抓取  | **httpx + BeautifulSoup**（同域 BFS ≤8 页）+ **Playwright** 渲染降级与登录态（storage_state） |
 | 自动化执行 | **Playwright(Python) + pytest**：脚本 LLM 生成（ast 校验重试），subprocess 隔离执行 + pytest-json-report 结构化报告（1 worker 队列） |
 | 任务调度  | 全局任务队列 + 5 Worker 池（uvicorn 启动恢复未完成任务） |
-| 测试    | pytest（**348 条** V5.0 本地基线，覆盖认证 / 分级加密 / 权限 / 对话 / RAG / 知识库 / 迭代导入 / 附件解析 / 思考 / 标题复合化 / 多角色 / Embedding / 演示模式 / 页面抓取 / 脚本生成与执行 / 自愈循环 / 探索式 Agent / 质量看板）+ Playwright（M1~M5 浏览器端到端验证脚本） |
+| 测试    | pytest（**384 条** V5.4 本地基线，覆盖认证 / 分级加密 / 权限 / 对话 / RAG / 知识库 / 迭代导入 / 附件解析 / 思考 / 标题复合化 / 多角色 / Embedding / 演示模式 / 页面抓取 / 脚本生成与执行 / 自愈循环 / 探索式 Agent / 质量看板 / **模型池**）+ Playwright（m1~m5 浏览器端到端套件 + run-e2e.mjs 汇总 runner，已适配 V5.3 信息架构） |
 
 ***
 
@@ -515,19 +530,22 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 | POST   | `/api/tasks/{task_id}/category/{cat_id}` | 任务归入分类              |
 | DELETE | `/api/tasks/{task_id}/category`          | 任务移出分类              |
 
-### 模型配置
+### 模型池与配置（V5.1–V5.4）
 
 | 方法     | 路径                              | 说明                 |
 | ------ | --------------------------- | ------------------ |
-| GET  | `/api/llm/config`            | 获取当前用户配置（Key 脱敏，含 embedding 槽） |
-| PUT  | `/api/llm/config`            | 保存用户配置（Key 加密落库）   |
-| DELETE | `/api/llm/config/{slot}`   | 删除某槽位配置（text/vision/embedding） |
-| POST | `/api/llm/test`              | 测试连通（用已保存或传入的配置）   |
 | GET  | `/api/llm/providers`         | 获取厂商预设列表（含 Embedding 预设） |
-| GET  | `/api/llm/effective`         | 当前生效配置（用户 > 平台默认 > 环境变量 > mock，含 embedding） |
-| GET  | `/api/llm/platform-config`   | （admin）获取平台默认配置 |
-| PUT  | `/api/llm/platform-config`   | （admin）设置平台默认配置    |
-| POST | `/api/llm/test-default/{slot}` | （admin）测试平台默认配置（slot 含 embedding） |
+| GET  | `/api/llm/effective`         | 当前生效配置（含各槽位池现状与调度摘要） |
+| GET/POST | `/api/llm/pool/{slot}`   | 个人池列表 / 新增候选（Key AES 加密，指纹判重 409） |
+| PUT/DELETE | `/api/llm/pool/{slot}/{id}` | 更新候选（未传 Key 保留旧 Key）/ 删除 |
+| POST | `/api/llm/pool/{slot}/reorder` | 池内优先级排序（全量 ids）    |
+| PATCH | `/api/llm/pool/{slot}/{id}/enabled` | 启用/停用某条候选    |
+| POST | `/api/llm/pool/{slot}/{id}/test` | 测试单条连通（enable_thinking=False） |
+| GET  | `/api/llm/pool/{slot}/health` | 池健康汇总（可用/冷却/错误计数）  |
+| GET/POST | `/api/llm/platform-pool/{slot}` | 平台池（GET 登录只读；POST admin） |
+| PUT/DELETE/PATCH | `/api/llm/platform-pool/{slot}/{id}/...` | 平台池更新/删除/排序/启停/测连通（写操作 admin） |
+| POST | `/api/llm/test`              | 测试连通（用已保存池条目或传入的配置，Key 缺失自动复用同厂商池条目） |
+| POST | `/api/llm/test-default/{slot}` | （admin）测试平台池当前生效候选（slot 含 embedding） |
 
 ### 管理后台（admin）
 
@@ -578,9 +596,12 @@ ai-testflow/
 │   ├── src/
 │   │   ├── api/                 # client.ts（fetch 封装 + AES 加密层，禁止裸 fetch）
 │   │   ├── contexts/            # AuthContext（认证/加密快照）
-│   │   ├── store/               # zustand（chat/task/settings/category）
-│   │   ├── pages/               # Dashboard / KnowledgePage（V4.0 知识库合一页）/ SettingsPage / AdminPage / QualityPage（V5.0 质量看板）
+│   │   ├── store/               # zustand（chat/task/settings/category/pool——poolStore 池数据，V5.1）
+│   │   ├── pages/               # Dashboard / KnowledgePage（V4.0 知识库合一页）/ ModelConfigPage（V5.3 模型配置一级页）/ SettingsPage（V5.3 个人中心）/ AdminPage（V5.3 用户管理）/ QualityPage（V5.0 质量看板）
 │   │   ├── components/          # chat/ task/ settings/ admin/ knowledge/ common/
+│   │   │   ├── settings/LLMPoolCard.tsx   # 模型池卡片（每槽一张：候选列表/排序/启停/测连通/健康徽标，V5.1）
+│   │   │   ├── settings/LLMSlotGroup.tsx  # 槽位分组（V5.4 起仅渲染池卡，单条配置已下线）
+│   │   │   ├── settings/EffectiveBar.tsx  # 顶栏调度摘要（各槽池可用/冷却状态）
 │   │   │   ├── knowledge/KbSelector.tsx   # 顶栏知识库下拉选择器（V4.4）
 │   │   │   ├── chat/E2ETaskModal.tsx      # 全链路/探索式测试发起弹窗（URL+账密/target，e2e/explore 类型切换，V5.0 M1/M5）
 │   │   │   ├── task/ExecutionPanel.tsx    # 自动化执行列表与报告面板（V5.0 M3）
@@ -598,7 +619,7 @@ ai-testflow/
 │   ├── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
 │   ├── start_local.sh           # 本地起服脚本（restart：kill 8000 后拉起）
 │   └── quality/                 # 质量数据聚合（aggregate_quality.py，V5.0 M0）
-├── tests/                       # 348 条自动化用例（V5.0 本地基线：认证 + 分级加密 + 权限 + 对话 + RAG + 知识库 + 迭代导入 + 附件解析 + 思考 + 标题复合化 + 多角色 + Embedding + 演示模式 + 访客共享 + 页面抓取 + 脚本执行 + 自愈循环 + 探索式 Agent + 质量看板，pytest）
+├── tests/                       # 384 条自动化用例（V5.4 本地基线：认证 + 分级加密 + 权限 + 对话 + RAG + 知识库 + 迭代导入 + 附件解析 + 思考 + 标题复合化 + 多角色 + Embedding + 演示模式 + 访客共享 + 页面抓取 + 脚本执行 + 自愈循环 + 探索式 Agent + 质量看板 + 模型池，pytest）
 ├── app/
 │   ├── core/
 │   │   ├── config.py            # 配置加载（含 Embedding / Chroma / AITF_ALLOW_DEMO）
@@ -613,17 +634,20 @@ ai-testflow/
 │   │   ├── user.py              # User / GuestCreationLog / CleanLog
 │   │   ├── category.py          # Category（多级分类树）
 │   │   ├── knowledge.py         # KnowledgeBase / Knowledge / Chunk（V4.0 RAG）
-│   │   └── automation.py        # TestTarget / ExecutionRun（V5.0 全链路闭环）
+│   │   ├── automation.py        # TestTarget / ExecutionRun（V5.0 全链路闭环）
+│   │   └── llm_pool.py          # LLMModelPool（模型池候选，V5.1：priority/健康状态/key_fingerprint）
 │   ├── schemas/                 # Pydantic 请求/响应
 │   │   ├── task.py
 │   │   ├── user.py
 │   │   ├── category.py
 │   │   ├── knowledge.py         # 知识库相关 schema（V4.0）
-│   │   └── automation.py        # 被测系统 / 执行记录 schema（V5.0）
+│   │   ├── automation.py        # 被测系统 / 执行记录 schema（V5.0）
+│   │   └── llm_pool.py          # 模型池 schema（V5.1）
 │   ├── services/
 │   │   ├── pipeline_lib.py      # 调用内置 generator_core（透传 roles）
 │   │   ├── langchain_client.py  # LangChain 适配层（init_chat_model 统一入口 + 统一 stream，V3）
-│   │   ├── llm_service.py       # OpenAI 兼容 LLM 客户端 + resolve_embedding（V4.2）
+│   │   ├── llm_service.py       # OpenAI 兼容 LLM 客户端 + resolve_effective/resolve_embedding（V5.4 起纯池解析：个人池 > 平台池 > env > mock）+ PoolClient 池调度（限流熔断自动切换）
+│   │   ├── llm_pool.py          # 模型池服务（判重/排序/健康/错误分类，V5.1）
 │   │   ├── knowledge/           # RAG 入库 / 检索（ingest / retrieve，V4.0）
 │   │   ├── sample_seeder.py     # 共享 guest 示例数据播种（V4.1）
 │   │   ├── doc_extract.py       # 对话附件文档解析（docx/pdf/md/xlsx → 纯文本，V2.9）
@@ -643,7 +667,8 @@ ai-testflow/
 │   │   ├── chat.py              # 对话流式/非流式（V2.6，V4.1 kb_qa + citations）
 │   │   ├── conversations.py     # 会话持久化（V2.6，V4.1 mode/kb_id）
 │   │   ├── knowledge.py         # RAG 知识库 CRUD + 检索 + 分块修订（V4.0）
-│   │   ├── llm_config.py        # 含 embedding 槽（V4.2）
+│   │   ├── llm_config.py        # providers / effective / test（V5.4 单条配置端点已删）
+│   │   ├── llm_pool.py          # 模型池 API：个人池 + 平台池 CRUD/排序/启停/测连通/健康（V5.1）
 │   │   ├── users.py             # admin 用户管理
 │   │   ├── quality.py           # 质量看板采集/聚合/趋势（V5.0 M0）
 │   │   ├── automation.py        # 被测系统 + 执行记录 + 报告文件（V5.0 M1–M3）
@@ -724,3 +749,7 @@ ai-testflow/
 | V4.5.1（已完成） | 系统自检悬浮通知（右上角滑入 / 6s 自动消失 / hover 暂停 / 可手动关 / 四项检查） | ✅ 已上线 |
 | V4.5.2（已完成） | RAG 引用溯源持久化（切换会话 / 刷新后引用不丢）+ 知识库问答会话按库隔离（切库不再串历史） | ✅ 已上线 |
 | V5.0（本地交付） | 全链路测试闭环：M0 质量看板（pytest/e2e 量化 + 趋势）+ M1 URL 抓取生成用例（BFS 抓取 / 登录态 / 截图墙 / 探索录屏）+ M2 脚本生成 Agent 与本机执行引擎（subprocess pytest + 结构化报告）+ M3 前端执行报告闭环（执行列表 / 截图 lightbox / 重试）+ M4 自愈循环（四分类诊断 / 断言保护 / 只重跑失败 / 疑似缺陷警示）+ M5 探索式测试 Agent（ReAct 自主探索 / 三重护栏 / 探索时间线 / 真调冒烟通过）✅ 本地已交付（未部署）；测试数据隔离（第 11 节）⬜ 待落地。方案与交付台账见 `docs/项目1-全链路测试闭环与Agent化执行方案-V5.0.md` | ✅ 本地已交付 |
+| V5.1（本地交付） | 多模型池 P1+P2：`llm_model_pool` 表（每槽多候选 + priority + 健康状态落库）+ PoolClient 限流熔断自动切换 + 个人池/平台池全套 API + 前端池卡片（排序/启停/测连通/健康徽标），池空回落单条配置零破坏上线 | ✅ 本地已交付 |
+| V5.2（本地交付） | 平台模型区自管理后台迁出至配置页「平台默认」Tab（admin）；模型配置中心分段 Tab | ✅ 本地已交付 |
+| V5.3（本地交付） | 信息架构重组：模型配置拆为一级页面（全角色可见，访客只读调度摘要）；管理后台改名「用户管理」；「设置」瘦身成「个人中心」（入口移至侧栏底部用户区）；侧栏「系统」组对齐修正 +「被测系统」可折叠子菜单（外链数据源数组化，收起态飞出面板）；e2e m1~m5 全套适配 V5.3 选择器 | ✅ 本地已交付 |
+| V5.4（本地交付） | 单条配置下线，模型池成唯一配置入口（`llm_configs` 数据保留不再参与调度；解析链 = 个人池 > 平台池 > env > mock）；连通测试统一 `enable_thinking=False`（不带思考测连通）；`/llm/config` 与 `/llm/platform-config` 共 6 端点删除 | ✅ 本地已交付 |

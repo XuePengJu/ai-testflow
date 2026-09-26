@@ -1,7 +1,7 @@
 # DBERP 进销存管理系统 · 完整使用文档（V 1.3）
 
 > 本文档基于**实际部署环境**核对生成，适用你服务器上安装的版本：
-> - 服务器：阿里云 39.106.200.147，Web 根目录 `/www/wwwroot/dberp/`
+> - 服务器：阿里云（域名 erp.agentest.vip，IP 见运维记录不写入公开文档），Web 根目录 `/www/wwwroot/dberp/`
 > - 数据库：库名 `dberp`（utf8mb4，共 55 张业务表）
 > - 实际版本：**DBERP V 1.3 Release 250320**（版本号 1.325032000）
 > - 技术架构：Laminas（Zend Framework 3）+ Doctrine 2（ORM）

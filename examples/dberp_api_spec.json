@@ -7,7 +7,7 @@
     "contact": { "name": "测试作品集逆向还原" }
   },
   "servers": [
-    { "url": "http://39.106.200.147", "description": "生产环境（阿里云）" }
+    { "url": "https://erp.agentest.vip", "description": "生产环境（阿里云）" }
   ],
   "paths": {
     "/api": {

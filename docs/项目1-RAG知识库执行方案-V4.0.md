@@ -350,7 +350,7 @@ unprocessed → parsing → chunking → processing → ready（已就绪 ✓）
    是唯一权限口径，列表/检索/对话共用。
 2. **SQLAlchemy 保留名坑**：Declarative 模型列名不能用 `metadata`（与 Base.metadata 冲突），
    已改名 `doc_meta` / `custom_meta`。
-3. **测试隔离强制**：.env 配的是线上 MySQL（39.106.200.147:3356），本地测试默认会写线上库！
+3. **测试隔离强制**：.env 配的是线上 MySQL（生产库，地址见 `.env`，不写入文档），本地测试默认会写线上库！
    已清理一次误写数据。此后测试一律：
    `DATABASE_URL="sqlite:////tmp/kb_test/app.db" AITF_ROOT_DIR=/tmp/kb_test` 隔离运行。
    线上库的 7 张新表由 init_db create_all 自动建（幂等，保留）。
