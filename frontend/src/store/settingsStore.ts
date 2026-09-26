@@ -1,30 +1,20 @@
 /**
- * 设置页 store（zustand）：LLM 配置 + 生效模型（M4）。
+ * 设置页 store（zustand）：LLM 厂商预设 + 生效模型（M4）。
  * 无轮询——进入页面拉一次，操作后定向刷新。
- * platform 模式数据由 AdminPage 自行拉取（同接口，user_id=0 视角）。
+ * V5.4：单条配置（myConfigs / saveConfig / deleteConfig）已随功能下线移除，
+ * 模型池数据由 poolStore 管理（见 poolStore.ts）。
  */
 import { create } from "zustand";
-import { api, apiJson, API, toast } from "../api/client";
-import { getAuthSnapshot } from "../contexts/authState";
-import type { LLMConfigRow, LLMEffective, ProviderMap } from "../types";
+import { apiJson, API } from "../api/client";
+import type { LLMEffective, ProviderMap } from "../types";
 
 interface SettingsState {
   providers: ProviderMap;
   providersLoaded: boolean;
-  myConfigs: LLMConfigRow[];
-  configsLoaded: boolean;
   effective: LLMEffective | null;
 
   loadProviders: () => Promise<void>;
-  loadMyConfigs: () => Promise<void>;
   loadEffective: () => Promise<void>;
-  /** 保存配置（mode=personal|platform），成功后刷新对应数据 */
-  saveConfig: (
-    mode: "personal" | "platform",
-    body: { slot: string; provider: string; base_url: string; model: string; api_key: string | null },
-  ) => Promise<boolean>;
-  /** 删除配置槽 */
-  deleteConfig: (mode: "personal" | "platform", slot: string) => Promise<boolean>;
   /** 连通测试（表单值，不落库）；kind=chat|embedding（V4.0 向量模型走 /embeddings） */
   testConfig: (body: { provider: string; base_url: string; model: string; api_key: string; kind?: string }) => Promise<{
     ok: boolean;
@@ -44,8 +34,6 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   providers: {},
   providersLoaded: false,
-  myConfigs: [],
-  configsLoaded: false,
   effective: null,
 
   async loadProviders() {
@@ -54,56 +42,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (p) set({ providers: p, providersLoaded: true });
   },
 
-  async loadMyConfigs() {
-    const snap = getAuthSnapshot();
-    if (!snap.token) return;
-    const rows = await apiJson<LLMConfigRow[]>(API + "/llm/config");
-    if (rows) set({ myConfigs: Array.isArray(rows) ? rows : [], configsLoaded: true });
-  },
-
   async loadEffective() {
     const eff = await apiJson<LLMEffective>(API + "/llm/effective");
     if (eff) set({ effective: eff });
-  },
-
-  async saveConfig(mode, body) {
-    const path = mode === "platform" ? "/llm/platform-config" : "/llm/config";
-    const row = await apiJson<LLMConfigRow>(API + path, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    });
-    if (!row) return false;
-    if (mode === "personal") {
-      const rest = get().myConfigs.filter((c) => c.slot !== row.slot);
-      set({ myConfigs: [...rest, row] });
-    }
-    await get().loadEffective();
-    return true;
-  },
-
-  async deleteConfig(mode, slot) {
-    const path = (mode === "platform" ? "/llm/platform-config/" : "/llm/config/") + slot;
-    let r: Response;
-    try {
-      r = await api(API + path, { method: "DELETE" });
-    } catch {
-      toast("删除失败");
-      return false;
-    }
-    if (!r.ok) {
-      let detail = `HTTP ${r.status}`;
-      try {
-        const d = (await r.json()) as { detail?: string };
-        if (d?.detail) detail = d.detail;
-      } catch { /* ignore */ }
-      toast(detail);
-      return false;
-    }
-    if (mode === "personal") {
-      set({ myConfigs: get().myConfigs.filter((c) => c.slot !== slot) });
-    }
-    await get().loadEffective();
-    return true;
   },
 
   async testConfig(body) {
@@ -121,6 +62,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   reset() {
-    set({ providers: {}, providersLoaded: false, myConfigs: [], configsLoaded: false, effective: null });
+    set({ providers: {}, providersLoaded: false, effective: null });
   },
 }));

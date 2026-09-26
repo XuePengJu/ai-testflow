@@ -1,43 +1,37 @@
 /**
- * 管理页（M4，仅 admin）：统计卡 + 用户管理 + 平台默认模型 + 访客清理。
+ * 管理页（M4，仅 admin）：统计卡 + 用户管理 + 访客清理。
  * 平台配置数据本地拉取（GET /llm/platform-config，admin-only）。
  * V4：统计卡加图标 + 左对齐；访客治理按钮规范化（secondary / outline-danger）。
  * 方案 A（2026-09-23）：质量看板迁出为独立「质量报告」页（全角色可见），本页回退纯概览。
+ * V5.2（2026-09-25）：平台模型区整体迁出到「设置」页（admin 的「平台默认」Tab），本页不再含模型配置。
  */
 import { useCallback, useEffect, useState } from "react";
 import { Users, UserX, ClipboardList, Trash2 } from "lucide-react";
 import { apiJson, API, toast } from "../api/client";
 import { useAuth } from "../hooks/useAuth";
-import { useSettingsStore } from "../store/settingsStore";
 import UserTable from "../components/admin/UserTable";
-import LLMConfigCard from "../components/settings/LLMConfigCard";
-import type { AdminStats, AdminUserRow, LLMConfigRow } from "../types";
+import type { AdminStats, AdminUserRow } from "../types";
 
 export default function AdminPage() {
   const { me, role, ready } = useAuth();
-  const loadEffective = useSettingsStore((s) => s.loadEffective);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUserRow[]>([]);
-  const [platform, setPlatform] = useState<LLMConfigRow[]>([]);
   const [cleaning, setCleaning] = useState("");
 
   const loadAll = useCallback(async () => {
-    const [st, us, pf] = await Promise.all([
+    const [st, us] = await Promise.all([
       apiJson<AdminStats>(API + "/admin/stats"),
       apiJson<AdminUserRow[]>(API + "/users"),
-      apiJson<LLMConfigRow[]>(API + "/llm/platform-config"),
     ]);
     if (st) setStats(st);
     if (us) setUsers(us);
-    if (pf) setPlatform(Array.isArray(pf) ? pf : []);
   }, []);
 
   useEffect(() => {
     if (ready && role === "admin") {
       void loadAll();
-      void loadEffective();
     }
-  }, [ready, role, loadAll, loadEffective]);
+  }, [ready, role, loadAll]);
 
   const resetSharedGuest = async () => {
     const msg =
@@ -106,33 +100,6 @@ export default function AdminPage() {
       </section>
 
       <UserTable users={users} myId={me.id > 0 ? me.id : -1} onChanged={() => void loadAll()} />
-
-      <section className="set-card">
-        <h3>平台默认模型</h3>
-        <div className="sub">
-          未配置个人模型的用户（含访客）将使用此默认；免费厂商不填 Key 时由服务器环境变量提供。
-        </div>
-        <div className="llm-grid">
-          <LLMConfigCard
-            slot="text"
-            mode="platform"
-            saved={platform.find((c) => c.slot === "text")}
-            onSaved={() => void loadAll()}
-          />
-          <LLMConfigCard
-            slot="vision"
-            mode="platform"
-            saved={platform.find((c) => c.slot === "vision")}
-            onSaved={() => void loadAll()}
-          />
-          <LLMConfigCard
-            slot="embedding"
-            mode="platform"
-            saved={platform.find((c) => c.slot === "embedding")}
-            onSaved={() => void loadAll()}
-          />
-        </div>
-      </section>
     </div>
   );
 }

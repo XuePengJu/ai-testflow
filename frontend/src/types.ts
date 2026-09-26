@@ -154,23 +154,86 @@ export interface ProviderPreset {
 
 export type ProviderMap = Record<string, ProviderPreset>;
 
-/** 与 app/schemas/llm_config.py:LLMConfigOut 对齐 */
-export interface LLMConfigRow {
+/** 与 app/schemas/llm_pool.py:PoolItemOut 对齐（模型池一条） */
+export interface LLMPoolItem {
+  id: number;
   slot: string;
+  provider: string;
+  provider_label: string;
+  base_url: string;
+  model: string;
+  /** 如 ****abcd；空 = 靠服务器环境变量兜底 Key */
+  api_key_masked: string;
+  priority: number;
+  enabled: boolean;
+  /** 付费模型（老板承担费用，界面给橙色徽标提示） */
+  paid: boolean;
+  note: string;
+  /** Key 指纹（判重/同 Key 提示用，不泄露 Key） */
+  key_fingerprint: string;
+  cooldown_until: string | null;
+  cooling: boolean;
+  last_error: string | null;
+  success_count: number;
+  fail_count: number;
+  /** 是否为当前实际生效的池（用户池非空时平台池为 false） */
+  effective: boolean;
+}
+
+/** 池内一条的新增 / 修改入参（api_key 缺省 = 保留原 Key） */
+export interface LLMPoolItemIn {
   provider: string;
   base_url: string;
   model: string;
-  /** 如 ****abcd；空 = 未配置 Key */
-  api_key_masked: string;
+  api_key?: string | null;
+  paid?: boolean;
+  note?: string;
+  enabled?: boolean;
+  priority?: number | null;
 }
 
-/** /api/llm/effective 响应（public_view 形态，不含 Key） */
+/** GET /api/llm/pool/{slot}/health */
+export interface LLMPoolHealth {
+  slot: string;
+  total: number;
+  enabled: number;
+  available: number;
+  items: Array<{
+    id: number;
+    model: string;
+    enabled: boolean;
+    cooling: boolean;
+    cooldown_until: string | null;
+    last_error: string | null;
+    success_count: number;
+    fail_count: number;
+  }>;
+}
+
+/** /api/llm/effective 的 pools[slot]：该槽位池的现状（V5.1 P1） */
+export interface LLMPoolStats {
+  /** 有可用候选才算池真的接管 */
+  active: boolean;
+  /** 池归属：personal = 我的池 / platform = 平台池 / null = 未启用池 */
+  owner: "personal" | "platform" | null;
+  /** 池内全部条数（含已停用），与池卡卡头同口径 */
+  total: number;
+  enabled: number;
+  available: number;
+  cooling: number;
+  /** 优先序号（1-based）；0 = 无可用候选 */
+  hit: number;
+}
+
+/** /api/llm/effective 响应（public_view 形态，不含 Key）；source 增加 pool = 模型池生效 */
 export interface LLMEffective {
   source: string;
   text: { provider: string; provider_label: string; base_url: string; model: string } | null;
   vision: { provider: string; provider_label: string; base_url: string; model: string } | null;
   embedding?: { provider: string; provider_label: string; base_url: string; model: string } | null;
   embedding_source?: string;
+  /** V5.1 P1：三槽池现状（effective 走 get_current_user，访客也能拿到条数） */
+  pools?: Partial<Record<"text" | "vision" | "embedding", LLMPoolStats>>;
 }
 
 /** /api/llm/test-default/{slot} 响应 */
@@ -220,6 +283,17 @@ export interface QualityPytestFileStat {
   passed: number;
 }
 
+/** 单条 pytest 用例明细（聚合脚本透传，旧版 summary 无此字段） */
+export interface QualityCase {
+  file: string;
+  name: string;
+  param: string;
+  outcome: string;
+  duration_ms: number;
+  /** 用例类型：api=接口测试（触达 HTTP 客户端）/ unit=单元测试（旧数据无此字段） */
+  kind?: "api" | "unit" | "";
+}
+
 /** 聚合结果的 pytest 维度 */
 export interface QualityPytest {
   total: number;
@@ -229,8 +303,14 @@ export interface QualityPytest {
   pass_rate: number;
   duration_ms: number;
   coverage_pct: number;
+  /** 接口测试 / 单元测试条数（按用例函数判定；旧数据无此字段） */
+  api_cases?: number;
+  unit_cases?: number;
   by_file: Record<string, QualityPytestFileStat>;
+  cases?: QualityCase[];
   failures: { file: string; test: string; message: string }[];
+  /** 各类型段最近采集时间（分段合并后 unit/api 时间可不同；旧数据无此字段） */
+  segments?: { unit?: string; api?: string };
 }
 
 /** 单个 e2e 套件结果（run-e2e.mjs 产出） */
@@ -239,6 +319,10 @@ export interface QualityE2ESuite {
   outcome: string;
   duration_ms: number;
   error: string | null;
+  /** 真实操作步骤（runner 从脚本 ✅/❌ 日志行解析），旧报告无此字段 */
+  steps?: { ok: boolean; name: string }[];
+  /** 该套件最近一次真实执行时间（部分运行合并后各套件可不同） */
+  collected_at?: string;
 }
 
 /** 聚合结果的 e2e 维度 */
@@ -255,6 +339,8 @@ export interface QualitySummary {
   pytest: QualityPytest;
   e2e: QualityE2E;
   generated_at: string;
+  /** 是否全量运行（部分运行合并后 false） */
+  full_run?: boolean;
 }
 
 /** GET /api/quality/summary 响应（尚未运行过时 exists=false） */
@@ -262,6 +348,16 @@ export interface QualitySummaryResp {
   exists: boolean;
   summary: QualitySummary | null;
   message?: string;
+}
+
+/** e2e 套件实时状态（运行进度轮询返回） */
+export interface QualityRunSuiteState {
+  name: string;
+  status: "pending" | "running" | "passed" | "failed" | "error";
+  duration_ms: number | null;
+  steps_ok: number;
+  steps_total: number;
+  last_step: string;
 }
 
 /** GET /api/quality/run/status 响应 */
@@ -273,6 +369,16 @@ export interface QualityRunStatus {
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  /** 本次运行计划（V2：范围选择） */
+  plan?: { unit: boolean; api: boolean; e2e: string[] | null } | null;
+  /** pytest 阶段进度（0~100；阶段外 null） */
+  pytest_percent?: number | null;
+  pytest_done?: number | null;
+  pytest_total_hint?: number | null;
+  /** e2e 套件实时状态（仅 e2e 阶段及之后有值） */
+  suites?: QualityRunSuiteState[];
+  /** 最近输出行（环形缓冲，最多 12 条） */
+  log_tail?: string[];
 }
 
 /** GET /api/quality/history 元素（趋势图数据点） */
@@ -283,6 +389,10 @@ export interface QualityHistoryPoint {
   coverage_pct: number;
   e2e_total: number;
   e2e_passed: number;
+  /** 部分运行标记（旧数据/全量运行无此字段） */
+  partial?: boolean;
+  /** 本次运行范围，如 ["pytest:api", "e2e"] */
+  scopes?: string[];
 }
 
 /** 与 app/schemas/automation.py:TargetOut 对齐（M1 全链路：被测系统，M3 Drawer 自动化 Tab 复用） */

@@ -189,8 +189,18 @@ export function getQualitySummary(): Promise<QualitySummaryResp | null> {
 }
 
 /** 后台触发一轮完整测试（pytest + e2e + 聚合）；运行中调用返回 409 → null */
-export function startQualityRun(): Promise<{ run_id: string; status: string } | null> {
-  return apiJson<{ run_id: string; status: string }>(`${API}/quality/run`, { method: "POST" });
+/** 运行范围：全部缺省=全量；unit/api 不勾不跑；e2e true=全部套件 / 数组=m1~m5 子集 / []=跳过 */
+export interface QualityRunScope {
+  unit?: boolean | null;
+  api?: boolean | null;
+  e2e?: boolean | string[] | null;
+}
+
+export function startQualityRun(scope?: QualityRunScope): Promise<{ run_id: string; status: string; plan?: unknown } | null> {
+  return apiJson<{ run_id: string; status: string; plan?: unknown }>(
+    `${API}/quality/run`,
+    { method: "POST", body: JSON.stringify(scope ?? {}) },
+  );
 }
 
 /** 当次（或最近一次）运行状态与阶段进度 */

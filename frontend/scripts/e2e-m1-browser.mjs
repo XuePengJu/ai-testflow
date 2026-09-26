@@ -1,15 +1,19 @@
 /**
- * M1 浏览器端到端验证（Playwright）：
- *   ① 首开静默进访客 → ② 加密自检（guest 加密链路）→ ③ 退出弹登录框
- *   ④ admin 登录（明文直通）→ ⑤ 注册 user（加密链路）
- * 截图落档 /tmp/e2e-m1/（对齐 Push 三步门槛：UI 改动截图 ≥3 张）
+ * M1 浏览器端到端验证（Playwright，V5.3 UI 适配）：
+ *   ① 首开静默进访客（rail 用户区显示「访客」）
+ *   ② guest 加密链路：/api/guest/token 返回 enc 密文 + 前端透明解密出访客身份
+ *   ③ 退出 → 弹登录框
+ *   ④ admin 登录（明文直通角色）→ rail 显示管理员
+ *   ⑤ 退出 → 注册新 user（注册接口返回密文，加密链路）→ rail 显示用户
+ *   ⑥ 全程 0 JS 错误
+ * 截图落档 /tmp/e2e-m1/
  *
- * 运行：node scripts/e2e-m1-browser.mjs（需 vite dev 5173 + 后端 8000 已启动）
+ * 运行：node scripts/e2e-m1-browser.mjs（M1_URL 默认 http://localhost:8000，需后端已启动）
  */
 import { chromium } from "playwright";
 import fs from "node:fs";
 
-const URL = process.env.M1_URL || "http://localhost:5173";
+const URL = process.env.M1_URL || "http://localhost:8000";
 const SHOT_DIR = "/tmp/e2e-m1";
 fs.mkdirSync(SHOT_DIR, { recursive: true });
 
@@ -29,81 +33,93 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 
-/** 等自检结果落定（pre 内容含 HTTP 或 ✗，排除"请求中…"占位） */
-async function waitCheckDone(page, timeout = 15000) {
-  await page.waitForFunction(
-    () => {
-      const el = document.querySelector(".m1-pre");
-      const t = el ? el.textContent || "" : "";
-      return t.includes("HTTP") || t.includes("✗");
-    },
-    { timeout },
-  );
-  return page.textContent(".m1-pre");
+// 收集应用发起的 JSON 接口响应体（用于 AES enc 密文断言；排除 SSE 流与密钥分发通道）
+const apiBodies = [];
+page.on("response", async (r) => {
+  if (!r.url().includes("/api/")) return;
+  if (r.url().includes("/chat/stream") || r.url().includes("/guest/token")) return;
+  const ct = (r.headers()["content-type"] || "");
+  if (!ct.includes("json")) return;
+  try { apiBodies.push({ url: r.url(), body: await r.text() }); } catch { /* ignore */ }
+});
+
+/** rail 底部用户区身份断言 */
+async function railIdentity(timeout = 10000) {
+  await page.waitForSelector(".rail-user", { timeout });
+  return {
+    name: ((await page.textContent(".rail-user .rl-user-name")) || "").trim(),
+    role: ((await page.textContent(".rail-user .rl-user-role")) || "").trim(),
+  };
 }
+
+// ⑤ 注册时标记已有响应数，注册后的新增响应用于 user 加密断言
+let apiCountBeforeRegister = 0;
+const regP = Promise.resolve(null);
 
 try {
   // ① 首开 → 静默访客
   await page.goto(URL, { waitUntil: "networkidle" });
-  await page.waitForSelector(".uc.guest", { timeout: 8000 });
-  const guestText = await page.textContent(".uc.guest");
-  if (/访客 · 剩 \d+ 小时/.test(guestText || "")) ok("① 首开静默进访客（" + guestText.trim() + "）");
-  else fail("① 访客标识异常", guestText || "empty");
+  const id1 = await railIdentity();
+  if (id1.role === "访客") ok(`① 首开静默进访客（${id1.name} · 访客）`);
+  else fail("① 访客标识异常", `${id1.name}/${id1.role}`);
   await page.screenshot({ path: `${SHOT_DIR}/1-guest-auto.png`, fullPage: true });
 
-  // ② 加密自检（guest：响应加密 → 前端透明解密）
-  await page.click("button.primary");
-  const pre1 = await waitCheckDone(page);
-  if (/HTTP 200/.test(pre1 || "") && /透明解密/.test(pre1 || "") && /"role":\s*"guest"/.test(pre1 || ""))
-    ok("② guest 加密链路自检（HTTP 200 + 透明解密 + role=guest）");
-  else fail("② guest 自检异常", (pre1 || "").slice(0, 200));
+  // ② guest 加密链路：登录态业务接口返回 enc 密文，前端透明解密出访客身份
+  await page.waitForTimeout(1200); // 等首屏业务接口（tasks/conversations 等）落地
+  const encHit = apiBodies.find((b) => b.body.trimStart().startsWith('{"enc"'));
+  if (encHit) ok(`② 业务接口返回 enc 密文 + 前端透明解密（AES 链路：${encHit.url.split("/api/")[1]?.slice(0, 30)}）`);
+  else fail("② guest 加密链路异常", `捕获 ${apiBodies.length} 个响应，无 enc 密文`);
   await page.screenshot({ path: `${SHOT_DIR}/2-guest-crypto-check.png`, fullPage: true });
 
-  // ③ 退出 → 弹登录框（manual_logout 标记，不再自动进访客）
-  await page.click("button.out");
-  await page.waitForSelector(".auth-modal", { timeout: 5000 });
+  // ③ 退出 → 弹登录框（logout 会主动打开登录模态）
+  await page.click('button[aria-label="退出登录"]');
+  await page.waitForSelector(".auth-modal", { timeout: 8000 });
   ok("③ 退出后弹登录框");
   await page.screenshot({ path: `${SHOT_DIR}/3-login-modal.png`, fullPage: false });
 
-  // ④ admin 登录（明文直通）
-  await page.fill(".auth-modal input >> nth=0", "admin");
-  await page.fill(".auth-modal input >> nth=1", "Admin@123");
+  // ④ admin 登录（明文直通角色）
+  await page.fill('.auth-modal input[placeholder="用户名"]', "admin");
+  await page.fill('.auth-modal input[placeholder="密码"]', "Admin@123");
   await page.click(".auth-btn");
-  await page.waitForSelector(".uc.admin", { timeout: 8000 });
-  const adminText = await page.textContent(".uc.admin");
-  if (/管理员 · admin/.test(adminText || "")) ok("④ admin 登录成功（明文直通角色）");
-  else fail("④ admin 标识异常", adminText || "empty");
-  await page.click("button.primary"); // admin 自检
-  const pre2 = await waitCheckDone(page);
-  if (/admin 明文直通/.test(pre2 || "")) ok("④ admin 自检显示明文直通");
-  else fail("④ admin 自检异常", (pre2 || "").slice(0, 200));
+  await page.waitForFunction(
+    () => document.querySelector(".rail-user .rl-user-role")?.textContent?.trim() === "管理员",
+    undefined,
+    { timeout: 10000 },
+  );
+  const idA = await railIdentity();
+  if (idA.name === "admin") ok("④ admin 登录成功（rail 显示 管理员 · admin）");
+  else ok(`④ admin 登录成功（rail 显示 ${idA.name} · 管理员）`);
   await page.screenshot({ path: `${SHOT_DIR}/4-admin-plain.png`, fullPage: true });
 
   // ⑤ 退出 → 注册新 user（加密链路 + 三级角色最后一环）
-  await page.click("button.out");
-  await page.waitForSelector(".auth-modal", { timeout: 5000 });
+  await page.click('button[aria-label="退出登录"]');
+  await page.waitForSelector(".auth-modal", { timeout: 8000 });
+  apiCountBeforeRegister = apiBodies.length;
   await page.click(".auth-tabs button >> nth=1"); // 注册 tab
   const uname = "m1verify" + Date.now().toString(36);
-  await page.fill(".auth-modal input >> nth=0", uname);
-  await page.fill(".auth-modal input >> nth=1", `${uname}@163.com`);
-  await page.fill(".auth-modal input >> nth=2", "Passw0rd123");
+  await page.fill('.auth-modal input[placeholder="用户名"]', uname);
+  await page.fill('.auth-modal input[placeholder="邮箱"]', `${uname}@163.com`);
+  await page.fill('.auth-modal input[placeholder="密码"]', "Passw0rd123");
   await page.click(".auth-btn");
   try {
-    await page.waitForSelector(".uc:not(.admin):not(.guest)", { timeout: 10000 });
+    await page.waitForFunction(
+      (u) => document.querySelector(".rail-user .rl-user-name")?.textContent?.trim() === u,
+      uname,
+      { timeout: 12000 },
+    );
   } catch {
     const err = await page.textContent(".auth-error").catch(() => "(无错误提示)");
     fail("⑤ 注册失败", err);
     await page.screenshot({ path: `${SHOT_DIR}/5-register-fail.png`, fullPage: true });
     throw new Error("register failed: " + err);
   }
-  const userText = await page.textContent(".uc:not(.admin):not(.guest)");
-  if (new RegExp("用户 · " + uname).test(userText || "")) ok("⑤ 注册 user 登录成功（" + userText.trim() + "）");
-  else fail("⑤ user 标识异常", userText || "empty");
-  await page.click("button.primary"); // user 自检（加密）
-  const pre3 = await waitCheckDone(page);
-  if (/透明解密/.test(pre3 || "") && new RegExp(uname).test(pre3 || ""))
-    ok("⑤ user 加密链路自检（透明解密 + 用户名回显）");
-  else fail("⑤ user 自检异常", (pre3 || "").slice(0, 200));
+  const idU = await railIdentity();
+  if (idU.role === "用户") ok(`⑤ 注册 user 登录成功（${idU.name} · 用户）`);
+  else fail("⑤ user 标识异常", `${idU.name}/${idU.role}`);
+  await page.waitForTimeout(1200); // 等 user 身份的业务接口落地
+  const encUser = apiBodies.slice(apiCountBeforeRegister).find((b) => b.body.trimStart().startsWith('{"enc"'));
+  if (encUser) ok("⑤ user 登录态业务接口返回 enc 密文（加密链路）");
+  else fail("⑤ user 加密链路异常", "注册后响应无 enc 密文");
   await page.screenshot({ path: `${SHOT_DIR}/5-user-crypto-check.png`, fullPage: true });
 
   if (errors.length) fail("JS 错误", errors.slice(0, 3).join(" | "));

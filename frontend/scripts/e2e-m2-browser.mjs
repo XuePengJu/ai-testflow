@@ -1,19 +1,22 @@
 /**
- * M2 浏览器端到端验证（Playwright）：
- *   ① 静默进访客 + 三栏布局渲染
- *   ② 发消息 → SSE 流式回复（mock）→ 出现「生成测试用例」按钮
- *   ③ 点击生成 → 任务创建 → 消息升级步骤卡 → 轮询到完成
- *   ④ 任务列表出现新任务 + 点击定位滚动高亮任务卡
+ * M2 浏览器端到端验证（Playwright，V5.3 UI 适配）：
+ *   ① 静默进访客 → 退出 → **test 账户登录**（2026-09-26 起弃用访客执行：访客任务上限
+ *      GUEST_MAX_TASKS=10 曾被历史运行占满导致创建 429；test 为注册用户无配额限制，
+ *      且对话走平台池真实模型链路）
+ *   ② 新建会话 → 发消息 → 流式回复 → 出现「✨ 生成测试用例」按钮
+ *   ③ 点击生成 → 任务创建 → 消息升级任务卡 → 轮询到「✓ 已完成」
+ *   ④ 任务列表出现新任务 → 点击打开详情抽屉
  *   ⑤ 新建会话 → 切回旧会话回放历史消息
  *   ⑥ 全程 0 JS 错误
  * 截图落档 /tmp/e2e-m2/
  *
- * 运行：node scripts/e2e-m2-browser.mjs（需 vite dev 5173 + 后端 8000 已启动）
+ * 运行：node scripts/e2e-m2-browser.mjs（M2_URL 默认 http://localhost:8000，需后端已启动）
+ * 依赖：test / test1234 账号（本地种子账号）
  */
 import { chromium } from "playwright";
 import fs from "node:fs";
 
-const URL = process.env.M2_URL || "http://localhost:5173";
+const URL = process.env.M2_URL || "http://localhost:8000";
 const SHOT_DIR = "/tmp/e2e-m2";
 fs.mkdirSync(SHOT_DIR, { recursive: true });
 
@@ -32,111 +35,99 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+// 删除任务走 window.confirm，统一接受
+page.on("dialog", (d) => void d.accept());
 
 try {
-  // ① 首开：静默访客 + 三栏布局
+  // ① 进入首页（默认访客态）→ 退出 → test 账户登录
   await page.goto(URL, { waitUntil: "networkidle" });
-  await page.waitForSelector(".uc.guest", { timeout: 8000 });
-  const guestText = await page.textContent(".uc.guest");
-  if (/访客 · 剩 \d+ 小时/.test(guestText || "")) ok("① 静默进访客（" + guestText.trim() + "）");
-  else fail("① 访客标识异常", guestText || "empty");
-  await page.waitForSelector(".conv-panel", { timeout: 5000 });
-  await page.waitForSelector(".chat-panel .chat-stream", { timeout: 5000 });
-  await page.waitForSelector(".task-panel", { timeout: 5000 });
-  ok("① 三栏布局渲染（会话栏 + 对话流 + 任务栏）");
+  await page.waitForSelector(".rail-user", { timeout: 10000 });
+  for (const sel of [".conv-panel", ".chat-panel", ".task-panel"]) {
+    await page.waitForSelector(sel, { timeout: 8000 });
+  }
+  ok("① 三栏布局渲染（历史会话 | 对话流 | 任务列表）");
+  await page.click('button[aria-label="退出登录"]');
+  await page.waitForSelector(".auth-modal", { timeout: 8000 });
+  await page.fill('.auth-modal input[placeholder="用户名"]', "test");
+  await page.fill('.auth-modal input[placeholder="密码"]', "test1234");
+  await page.click(".auth-btn");
+  await page.waitForFunction(
+    () => document.querySelector(".rail-user .rl-user-name")?.textContent?.trim() === "test",
+    undefined,
+    { timeout: 10000 },
+  );
+  const roleText = ((await page.textContent(".rail-user .rl-user-role")) || "").trim();
+  if (roleText === "用户") ok("① test 账户登录成功（test · 用户）");
+  else fail("① test 登录后角色异常", roleText);
+  // reload 清掉访客态残留（访客会话消息卡轮询会以 test token 请求 guest 任务 → 权限 404）
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForSelector(".rail-user", { timeout: 10000 });
   await page.screenshot({ path: `${SHOT_DIR}/1-layout.png`, fullPage: true });
 
-  // ② 发消息 → SSE 流式回复
-  const req =
-    "采购管理 - 采购订单创建。功能点：新增采购单、提交审批、审批通过/驳回。业务规则：金额超 5 万需二级审批。";
-  await page.fill(".chat-input-row textarea", req);
-  await page.click(".send-btn");
-  // 等 AI 回复 done（生成用例按钮出现）
-  await page.waitForSelector(".confirm-btn", { timeout: 30000 });
-  const replyText = await page.textContent(".msg-ai .reply-body");
-  if (replyText && replyText.trim().length > 10) ok("② SSE 流式回复完成（" + replyText.trim().slice(0, 40) + "…）");
-  else fail("② 流式回复异常", (replyText || "").slice(0, 100));
-  const sendBtnBack = await page.textContent(".send-btn");
-  if (!/停止/.test(sendBtnBack || "")) ok("② 流式结束输入区恢复（发送按钮回归）");
-  else fail("② 输入区未恢复", sendBtnBack || "");
-  await page.screenshot({ path: `${SHOT_DIR}/2-stream-reply.png`, fullPage: true });
+  // ①b 新建会话：test 账户有历史会话，旧讨论回复可能干扰生成按钮定位
+  await page.click(".conv-panel .side-head .qtag");
+  await page.waitForSelector(".chat-panel .welcome", { timeout: 8000 });
+  ok("① 新建会话，空白欢迎页");
 
-  // ③ 点击「生成测试用例」→ 任务创建 → 步骤卡轮询
-  await page.click(".confirm-btn");
-  // 等任务卡出现
-  await page.waitForSelector(".task-steps-card", { timeout: 15000 });
-  ok("③ 任务已创建，消息升级为步骤卡");
-  // 等轮询到完成（mock 流水线很快，给 60s）
+  // ② 发消息 → mock 流式回复 → 生成用例确认按钮
+  await page.fill(".chat-panel textarea", "测试一个登录页面：输入正确的用户名和密码后跳转首页");
+  await page.click(".chat-panel .send-btn");
+  await page.waitForSelector(".msg.msg-ai", { timeout: 15000 });
+  ok("② 发送消息，AI 回复开始流式输出");
+  await page.waitForSelector(".qtag.confirm-btn", { timeout: 60000 });
+  ok("② 回复完成，出现「✨ 生成测试用例」按钮");
+  await page.screenshot({ path: `${SHOT_DIR}/2-reply.png`, fullPage: true });
+
+  // ③ 点击生成 → 任务卡 → 轮询到完成
+  const taskCountBefore = await page.locator(".task-panel .task-item").count();
+  await page.click(".qtag.confirm-btn");
+  // 任务卡：mock 链路渲染 .task / .tsc-io；平台池真实链路渲染 .task-steps-card
+  await page.waitForSelector(".msg-ai .task, .msg-ai .tsc-io, .msg-ai .task-steps-card", { timeout: 20000 });
+  ok("③ 任务创建，消息升级为任务卡");
   await page.waitForFunction(
-    () => {
-      const pills = document.querySelectorAll(".tsc-head .pill");
-      for (const p of pills) if (/已完成/.test(p.textContent || "")) return true;
-      return false;
-    },
-    { timeout: 60000, polling: 1000 },
+    () => (document.querySelector(".msg-ai")?.textContent || "").includes("已完成"),
+    undefined,
+    { timeout: 180000 }, // test 账户走平台池真实 workflow，比 mock 慢
   );
-  const cardText = await page.textContent(".task-steps-card");
-  if (/已完成/.test(cardText || "") && /用例/.test(cardText || "")) ok("③ 步骤卡轮询到终态（" + (cardText || "").replace(/\s+/g, " ").slice(0, 60) + "…）");
-  else fail("③ 步骤卡终态异常", (cardText || "").slice(0, 150));
+  ok("③ 任务轮询到「✓ 已完成」");
   await page.screenshot({ path: `${SHOT_DIR}/3-task-card.png`, fullPage: true });
 
-  // ④ 任务列表出现新任务 + 点击定位（消息流仍在含任务卡的会话）
+  // ④ 任务列表出现新任务 → 打开详情抽屉
   await page.waitForFunction(
-    () => (document.querySelectorAll(".task-panel .task-item") || []).length >= 1,
-    null,
+    (n) => document.querySelectorAll(".task-panel .task-item").length > n,
+    taskCountBefore,
     { timeout: 15000 },
   );
-  const taskItems = await page.$$eval(".task-panel .task-item", (els) =>
-    els.map((e) => (e.textContent || "").replace(/\s+/g, " ").trim()),
-  );
-  ok("④ 任务列表出现任务（" + taskItems.length + " 条）");
-  // 当前会话内点击任务「⌖」定位按钮 → 滚动定位 + 高亮任务卡
-  // （M3/M4 交互演进：任务项整行点击=打开详情抽屉，定位收敛到 ⌖ 按钮）
-  await page.click(".task-panel .t-locate >> nth=0");
-  await page.waitForTimeout(600);
-  const flashed = await page.$eval(".task-steps-card", (el) => el.classList.contains("flash")).catch(() => false);
-  if (flashed) ok("④ 点击任务列表项 → 定位滚动 + 高亮任务卡");
-  else fail("④ 任务定位高亮未触发", "flash class not found");
-  // 切新对话后点击 → 应提示「不在当前会话」而非静默
-  await page.click(".conv-panel .side-head .qtag"); // ＋ 新对话
-  await page.waitForSelector(".welcome", { timeout: 5000 });
-  await page.click(".task-panel .t-locate >> nth=0");
-  await page.waitForFunction(
-    () => {
-      const toasts = document.querySelectorAll(".toast, [class*=toast]");
-      for (const t of toasts) if (/不在当前会话/.test(t.textContent || "")) return true;
-      return false;
-    },
-    null,
-    { timeout: 5000 },
-  ).then(() => ok("④ 新会话中点击任务 → 提示「不在当前会话」")).catch(() => fail("④ 新会话点击任务无提示", "toast not found"));
-  await page.screenshot({ path: `${SHOT_DIR}/4-task-focus.png`, fullPage: true });
+  ok("④ 任务列表出现新任务");
+  await page.click(".task-panel .task-item >> nth=0");
+  await page.waitForSelector(".drawer-head .drawer-title", { timeout: 10000 });
+  ok("④ 点击任务打开详情抽屉");
+  await page.screenshot({ path: `${SHOT_DIR}/4-drawer.png`, fullPage: false });
+  await page.keyboard.press("Escape"); // 关抽屉，避免遮挡后续步骤
 
-  // ⑤ 切回旧会话回放历史
-  const histCount = await page.$$eval(".conv-panel .hist-item", (els) => els.length);
-  if (histCount >= 1) {
-    await page.click(".conv-panel .hist-item >> nth=0");
-    await page.waitForFunction(
-      () => (document.querySelectorAll(".chat-stream .msg") || []).length >= 2,
-      null,
-      { timeout: 10000 },
-    );
-    const msgs = await page.$$eval(".chat-stream .msg", (els) => els.length);
-    ok(`⑤ 会话回放（侧栏 ${histCount} 条会话，回放 ${msgs} 条消息）`);
-  } else {
-    fail("⑤ 会话侧栏为空", "no hist-item");
-  }
-  await page.screenshot({ path: `${SHOT_DIR}/5-conv-replay.png`, fullPage: true });
+  // ⑤ 新建会话 → 切回旧会话回放历史
+  await page.click(".conv-panel .side-head .qtag");
+  await page.waitForSelector(".chat-panel .welcome", { timeout: 8000 });
+  ok("⑤ 新建会话回到空白欢迎页");
+  await page.click(".conv-panel .hist-item >> nth=0");
+  await page.waitForSelector(".msg.msg-user", { timeout: 8000 });
+  const msgCount = await page.locator(".msg").count();
+  if (msgCount >= 2) ok(`⑤ 切回旧会话，历史消息回放（${msgCount} 条）`);
+  else fail("⑤ 历史回放消息数不足", String(msgCount));
+  await page.screenshot({ path: `${SHOT_DIR}/5-replay.png`, fullPage: true });
 
-  // ⑥ JS 错误汇总
-  if (errors.length === 0) ok("⑥ 全程 0 JS 错误");
-  else fail("⑥ JS 错误", errors.join(" | ").slice(0, 400));
+  if (errors.length) fail("JS 错误", errors.slice(0, 3).join(" | "));
+  else ok("全程 0 JS 错误");
 } catch (e) {
-  fail("流程异常中断", String(e).slice(0, 400));
+  fail("流程异常中断", String(e));
   await page.screenshot({ path: `${SHOT_DIR}/0-error.png`, fullPage: true }).catch(() => {});
 } finally {
-  fs.writeFileSync(`${SHOT_DIR}/result.txt`, results.join("\n") + "\n");
   await browser.close();
+  fs.writeFileSync(
+    `${SHOT_DIR}/result.txt`,
+    results.join("\n") + `\n\n截图目录: ${SHOT_DIR}\n时间: ${new Date().toISOString()}\n`,
+  );
+  const failed = results.some((r) => r.startsWith("❌"));
+  console.log(failed ? "\n存在失败项" : "\n全部通过");
+  process.exit(failed ? 1 : 0);
 }
-console.log(results.includes(results.find((r) => r.startsWith("❌"))) ? "\n存在失败项" : "\n全部通过");
-process.exit(results.some((r) => r.startsWith("❌")) ? 1 : 0);

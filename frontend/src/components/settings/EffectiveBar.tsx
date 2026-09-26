@@ -1,116 +1,118 @@
 /**
- * 生效模型条（M4）：当前实际使用的模型（我的配置 > 平台默认 > 环境变量 > mock）
- * + 一键测通（POST /llm/test-default/{slot}，服务端解析配置，无需暴露 Key）。
- * V4：来源改 badge；测连通按钮 secondary。
+ * 模型调度摘要（V5.1）：只读，全角色可见（含访客）。
+ *
+ * 池不是「多条同时生效」，而是「一条生效梯队」：任一时刻只有一个模型在干活，
+ * 其余是后备，它限流 / 报错就自动顺延下一条。所以本卡只回答三件事：
+ * 这一槽由谁接管、梯队多大、当前优先用第几条。
+ *
+ * 取数口径（V5.1 P1）：改走后端 /llm/effective 的 pools 字段，每槽给
+ * owner / total / enabled / available / cooling / hit，判据与 build_client（真实调度）同源。
+ * 相比 V5.0 的三点收益：
+ *   ① 三槽都准确 —— 旧口径后端 source 只反映 text 槽，vision / embedding 一律误报「未启用池」；
+ *   ② 访客也能看到条数 —— effective 走 get_current_user、不是 require_user，
+ *      而池列表接口对访客是 403，旧版只能显示「模型池接管」不猜数字；
+ *   ③ 不再为算条数而额外拉 3 次池列表，少一层耦合。
+ *
+ * 文案用「优先 ①」而非「最近命中」：后端给的是「按优先级预期会命中」，
+ * 不是「上次实际命中」。等池表加 last_used_at 再升级口径 —— 宁保守，不说谎。
  */
-import { useState } from "react";
 import { useSettingsStore } from "../../store/settingsStore";
+import { circledIndex } from "./llmPresets";
+import type { LLMPoolStats } from "../../types";
 
-const SOURCE_LABEL: Record<string, string> = {
-  user: "我的配置",
-  platform: "平台默认",
-  env: "服务器环境变量",
-  mock: "Mock 演示模式",
+const SLOTS = ["text", "vision", "embedding"] as const;
+type Slot = (typeof SLOTS)[number];
+
+const SLOT_LABEL: Record<Slot, string> = { text: "文本", vision: "图像", embedding: "向量" };
+
+const NONE_MODEL: Record<Slot, string> = {
+  text: "未配置",
+  vision: "未配置（可选）",
+  embedding: "未配置（知识库不可用）",
 };
+
+type Kind = "mine" | "platform" | "single";
+
+/**
+ * 池现状 → 状态徽标。
+ *   owner 为 null       该槽没有池（未配置时后端走 env 兜底 / mock）
+ *   hit 为 0            有池但一条可用候选都没有（全冷却 / 全停用 / Key 全不可解）
+ *   pools 字段缺失       后端旧版本，按老的 source 兜底，不显示错误结论
+ */
+function describe(st: LLMPoolStats | undefined, source: string): { kind: Kind; badge: string } {
+  if (!st) {
+    return source === "pool"
+      ? { kind: "mine", badge: "模型池接管" }
+      : { kind: "single", badge: "未启用池" };
+  }
+  if (!st.owner) return { kind: "single", badge: "未启用池" };
+
+  const kind: Kind = st.owner === "personal" ? "mine" : "platform";
+  const prefix = st.owner === "platform" ? "平台 " : "";
+  if (st.hit <= 0) return { kind, badge: `${prefix}${st.total} 条 · 全部不可用` };
+  const avail = st.available < st.total ? ` · 可用 ${st.available}` : "";
+  return { kind, badge: `${prefix}${st.total} 条${avail} · 优先 ${circledIndex(st.hit)}` };
+}
 
 export default function EffectiveBar() {
   const effective = useSettingsStore((s) => s.effective);
-  const testDefault = useSettingsStore((s) => s.testDefault);
-  const [testing, setTesting] = useState<Record<string, boolean>>({});
-  const [results, setResults] = useState<Record<string, { ok: boolean; text: string }>>({});
-
-  const runTest = async (slot: "text" | "vision" | "embedding") => {
-    setTesting((m) => ({ ...m, [slot]: true })); // 按槽位独立：互不置灰，可并发测
-    try {
-      const r = await testDefault(slot);
-      if (!r) {
-        setResults((m) => ({ ...m, [slot]: { ok: false, text: "请求失败" } }));
-        return;
-      }
-      setResults((m) => ({
-        ...m,
-        [slot]: r.ok
-          ? { ok: true, text: `✓ 可用${r.latency_ms != null ? ` · ${r.latency_ms}ms` : ""}（${r.model || ""}）` }
-          : { ok: false, text: `✗ ${r.error_label || "不可用"}` },
-      }));
-    } finally {
-      setTesting((m) => ({ ...m, [slot]: false }));
-    }
-  };
 
   if (!effective) return null;
 
+  const rows = SLOTS.map((slot) => {
+    const cfg = effective[slot] ?? null;
+    const st = effective.pools?.[slot];
+    const { kind, badge } = describe(st, effective.source);
+    return {
+      slot,
+      kind,
+      badge,
+      model: cfg ? `${cfg.provider_label} · ${cfg.model}` : null,
+      /** 池真的在接管（有空闲候选），而不只是「归属是我的」 */
+      takingOver: kind !== "single" && (st?.active ?? false),
+    };
+  });
+
+  const mine = rows.filter((r) => r.kind === "mine" && r.takingOver).length;
+  const plat = rows.filter((r) => r.kind === "platform" && r.takingOver).length;
+  const head = mine > 0
+    ? `${mine} 个槽位由我的模型池接管`
+    : plat > 0
+      ? "由平台模型池接管"
+      : "未启用模型池（池空时走平台兜底 / mock）";
+
   return (
     <section className="set-card effective-bar" data-testid="effective-bar">
-      <h3>当前生效模型</h3>
-      <div className="eff-source">
-        <span className="role-badge user">来源：{SOURCE_LABEL[effective.source] || effective.source}</span>
+      <div className="sched-head">
+        <h3>模型调度</h3>
+        <span className={`sched-badge${mine > 0 ? " on" : ""}`} data-testid="sched-head-badge">
+          {head}
+        </span>
       </div>
-      <div className="eff-row">
-        <div>
-          <div className="eff-name">文本模型</div>
-          <div className="eff-model">
-            {effective.text ? `${effective.text.provider_label} · ${effective.text.model}` : "未配置"}
+
+      <dl className="sched-list">
+        {rows.map((r) => (
+          <div className="sched-row" key={r.slot} data-testid={`sched-row-${r.slot}`}>
+            <dt className="sched-slot">{SLOT_LABEL[r.slot]}</dt>
+            <dd className="sched-state">
+              <span className={`sched-tag ${r.kind}`} data-testid={`sched-tag-${r.slot}`}>
+                {r.badge}
+              </span>
+            </dd>
+            <dd className={`sched-model${r.model ? "" : " none"}`} title={r.model ?? undefined}>
+              {r.model ?? NONE_MODEL[r.slot]}
+            </dd>
           </div>
+        ))}
+      </dl>
+
+      {effective.embedding_source === "mock" && (
+        <div className="sched-warn" data-testid="sched-mock-warn">
+          当前为 mock 向量，知识库检索质量差 —— 配置 Embedding 后需重建索引。
         </div>
-        <button
-          className="btn-secondary btn-sm"
-          disabled={!!testing.text}
-          onClick={() => void runTest("text")}
-          data-testid="test-effective-text"
-        >
-          {testing.text ? "测试中…" : "测连通"}
-        </button>
-        {results.text && (
-          <span className={"test-msg " + (results.text.ok ? "test-ok" : "test-err")}>{results.text.text}</span>
-        )}
-      </div>
-      <div className="eff-row">
-        <div>
-          <div className="eff-name">图像模型</div>
-          <div className="eff-model">
-            {effective.vision ? `${effective.vision.provider_label} · ${effective.vision.model}` : "未配置（可选）"}
-          </div>
-        </div>
-        <button
-          className="btn-secondary btn-sm"
-          disabled={!!testing.vision}
-          onClick={() => void runTest("vision")}
-          data-testid="test-effective-vision"
-        >
-          {testing.vision ? "测试中…" : "测连通"}
-        </button>
-        {results.vision && (
-          <span className={"test-msg " + (results.vision.ok ? "test-ok" : "test-err")}>{results.vision.text}</span>
-        )}
-      </div>
-      {/* V4.4.1 向量模型回显：所有角色可见（用户自配/平台默认/env 均回显；mock 显示未配置提示） */}
-      <div className="eff-row">
-        <div>
-          <div className="eff-name">向量模型（Embedding）</div>
-          <div className="eff-model">
-            {effective.embedding
-              ? `${effective.embedding.provider_label} · ${effective.embedding.model}`
-              : "未配置（知识库入库与检索不可用）"}
-          </div>
-          {effective.embedding_source === "mock" && (
-            <div className="eff-model" style={{ fontSize: 12, color: "#d97706" }}>
-              ⚠️ 当前为 mock 向量，请到「模型配置 → Embedding」配置后重建索引
-            </div>
-          )}
-        </div>
-        <button
-          className="btn-secondary btn-sm"
-          disabled={!!testing.embedding}
-          onClick={() => void runTest("embedding")}
-          data-testid="test-effective-embedding"
-        >
-          {testing.embedding ? "测试中…" : "测连通"}
-        </button>
-        {results.embedding && (
-          <span className={"test-msg " + (results.embedding.ok ? "test-ok" : "test-err")}>{results.embedding.text}</span>
-        )}
-      </div>
+      )}
+
+      <div className="sched-foot">只读摘要；单个模型的连通测试在各槽位卡片内</div>
     </section>
   );
 }

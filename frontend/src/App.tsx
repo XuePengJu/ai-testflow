@@ -1,15 +1,16 @@
 /**
  * V4.2 应用壳 · 全量对齐设计稿（knowledge-hub-redesign）：
  * - 布局：左侧深色图标 rail（64px）+ 右侧内容区（.app-body）
- *   rail = logo / 对话 / 知识库 / 管理(admin) | spacer | 自检 / GitHub / 设置 / 头像·登出
+ *   rail = 对话 / 知识库 / 质量报告 / 模型配置 / 用户管理(admin) | spacer | 自检 / GitHub / 用户名→个人中心
  * - main：对话驱动三栏（左历史会话 | 中对话流 | 右任务列表+分类树）
- * - knowledge：知识库管理台（V4.2 已对齐设计稿视觉）
- * - settings / admin：整页视图
+ * - knowledge / models / quality / settings(个人中心) / admin(用户管理)：整页视图
  * 原 V2.8 顶部 header 全部功能保留，仅形态迁移到 rail（图标 + title 提示）。
+ * V5.3（2026-09-26）：信息架构重组 —— 模型配置拆为一级入口；管理后台改名用户管理；
+ * 「设置」按钮移除，改为点击 rail 底部用户名区域打开（个人中心）。
  */
 import { useEffect, useState } from "react";
 import {
-  Settings, Shield, ShieldCheck, Loader2, LogOut,
+  Shield, ShieldCheck, Loader2, LogOut, Cpu,
   BookOpen, MessageSquare, UserPlus, ChevronsLeft, ChevronsRight,
   FlaskConical, Boxes, ChevronDown, ExternalLink,
 } from "lucide-react";
@@ -24,11 +25,12 @@ import SelfCheckToast from "./components/SelfCheckToast";
 import TaskList from "./components/task/TaskList";
 import TaskDetailDrawer from "./components/task/TaskDetailDrawer";
 import SettingsPage from "./pages/SettingsPage";
+import ModelConfigPage from "./pages/ModelConfigPage";
 import AdminPage from "./pages/AdminPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import QualityPage from "./pages/QualityPage";
 
-type View = "main" | "settings" | "admin" | "knowledge" | "quality";
+type View = "main" | "settings" | "models" | "admin" | "knowledge" | "quality";
 
 const GITHUB_REPO = "https://github.com/XuePengJu/ai-testflow";
 
@@ -94,13 +96,15 @@ export default function App() {
     if (view === "knowledge" && ready && !me) setView("main");
     // 方案 A：质量报告对所有登录角色开放（含访客），未登录回主视图
     if (view === "quality" && ready && !me) setView("main");
+    // V5.3：模型配置对所有登录角色开放（访客只读调度摘要，配置接口后端 403）
+    if (view === "models" && ready && !me) setView("main");
   }, [view, ready, role, me]);
 
   // V4.0：跨页面跳转事件（如知识库创建后引导去设置页配置向量模型）
   useEffect(() => {
     const h = (e: Event) => {
       const d = (e as CustomEvent<string>).detail;
-      if (d === "main" || d === "settings" || d === "admin" || d === "knowledge" || d === "quality") setView(d);
+      if (d === "main" || d === "settings" || d === "models" || d === "admin" || d === "knowledge" || d === "quality") setView(d);
     };
     window.addEventListener("nav-to", h);
     return () => window.removeEventListener("nav-to", h);
@@ -166,7 +170,10 @@ export default function App() {
         {railBtn("knowledge", <BookOpen />, "知识库", canKb, { active: view === "knowledge", onClick: () => setView("knowledge"), aria: role === "guest" ? "知识库（访客 · 只读共享库）" : "知识库 · 文档与问答", ico: "i-kb" })}
         {/* 方案 A：质量报告对所有登录角色开放（展示用途，运行按钮 admin 专属） */}
         {railBtn("quality", <FlaskConical />, "质量报告", canKb, { active: view === "quality", onClick: () => setView("quality"), aria: "质量报告 · 平台测试量化数据", ico: "i-quality" })}
-        {railBtn("admin", <Shield />, "管理后台", role === "admin", { active: view === "admin", onClick: () => setView("admin"), aria: "管理后台（仅管理员）", ico: "i-admin" })}
+        {/* V5.3：模型配置升为一级入口（原在设置页内）；全角色可见，访客只读调度摘要 */}
+        {railBtn("models", <Cpu />, "模型配置", canKb, { active: view === "models", onClick: () => setView("models"), aria: "模型配置 · 模型池与调度", ico: "i-models" })}
+        {/* V5.3：管理后台改名「用户管理」（页面现已只含用户管理与访客治理） */}
+        {railBtn("admin", <Shield />, "用户管理", role === "admin", { active: view === "admin", onClick: () => setView("admin"), aria: "用户管理（仅管理员）", ico: "i-admin" })}
 
         <div className="rail-spacer"><span className="rail-sticker" aria-hidden="true">🧪</span></div>
 
@@ -211,7 +218,7 @@ export default function App() {
           <span className="rl-txt">源码</span>
           <span className="rl-tip" aria-hidden="true">在 GitHub 上查看源码</span>
         </a>
-        {railBtn("settings", <Settings />, "设置", !!me, { active: view === "settings", onClick: () => setView("settings"), ico: "i-set" })}
+        {/* V5.3：「设置」rail 按钮移除 —— 个人中心改由 rail 底部用户名区域进入 */}
         {!me || !role ? (
           <button className="rail-login" onClick={() => showLogin("login")} aria-label="登录 / 注册">
             <span className="rl-txt">登录 / 注册</span>
@@ -223,7 +230,7 @@ export default function App() {
               <button
                 className="rail-avatar"
                 onClick={() => setView("settings")}
-                aria-label={`${role === "guest" ? "访客" : role === "admin" ? "管理员" : "用户"} · ${me.username}（进设置）`}
+                aria-label={`${role === "guest" ? "访客" : role === "admin" ? "管理员" : "用户"} · ${me.username}（进个人中心）`}
               >
                 {role === "guest" ? <UserPlus size={16} /> : me.username.slice(0, 1).toUpperCase()}
               </button>
@@ -248,6 +255,7 @@ export default function App() {
         )}
         {view === "knowledge" && <KnowledgePage />}
         {view === "quality" && <QualityPage />}
+        {view === "models" && <ModelConfigPage />}
         {view === "settings" && <SettingsPage />}
         {view === "admin" && <AdminPage />}
       </div>
