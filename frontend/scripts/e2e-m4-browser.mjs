@@ -7,7 +7,7 @@
  *   ④ 调度摘要生效 + 池条目测连通返回结果
  *   ⑤ admin 登录 → 用户管理页：统计卡 3 项 + 用户表
  *   ⑥ 平台默认模型池添加（admin · 平台默认 Tab）
- *   ⑦ 视图切换：AI 对话三栏保留
+ *   ⑦ 视图切换：用例设计三栏保留
  *   ⑧ 分类树：新建顶级/子分类 → 树渲染
  *   ⑨ 任务归类（🏷 菜单 → cat-move）→ 分类计数
  *   ⑩ 分类过滤任务列表
@@ -215,8 +215,8 @@ try {
   ok(`④b 测连通链路返回：${(testMsg || "").trim().slice(0, 60)}`);
   await page.screenshot({ path: `${SHOT_DIR}/2-settings-llm.png`, fullPage: true });
 
-  // ⑦ 视图切换回工作台（V5.3：AI 对话）
-  await page.click('.rail-btn:has-text("AI 对话")');
+  // ⑦ 视图切换回工作台（V5.3：用例设计）
+  await page.click('.rail-btn:has-text("用例设计")');
   for (const sel of [".conv-panel", ".chat-panel", ".task-panel"]) {
     await page.waitForSelector(sel, { timeout: 8000 });
   }

@@ -110,7 +110,7 @@ try {
   await page.screenshot({ path: `${SHOT_DIR}/5-real-llm-settings.png` });
 
   // ③ 回工作台发消息 → 真实 LLM 流式回复（平台池调度）
-  await page.click('.rail-btn:has-text("AI 对话")');
+  await page.click('.rail-btn:has-text("用例设计")');
   await page.waitForSelector(".chat-panel textarea", { timeout: 8000 });
   await page.fill(".chat-panel textarea", "用一句话说明等价类划分法在测试中的作用");
   await page.click(".chat-panel .send-btn");

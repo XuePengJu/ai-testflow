@@ -150,11 +150,11 @@ export default function App() {
       {/* V4.3 左侧可折叠侧边栏：默认展开（图标+文字），可收起为 64px 图标态 */}
       <nav className={"rail" + (railCollapsed ? " collapsed" : "")} aria-label="主导航">
         <div className="rail-head">
-          <div className="rl-logo" title="AI 测试工作流平台" onClick={() => setView("main")} style={{ cursor: "pointer" }}>
+          <div className="rl-logo" title="AgentTest · AI 测试智能体平台" onClick={() => setView("main")} style={{ cursor: "pointer" }}>
             <Shield size={19} />
           </div>
           <div className="rl-title" onClick={() => setView("main")} style={{ cursor: "pointer" }}>
-            AI TestFlow
+            AgentTest
           </div>
         </div>
         <button
@@ -166,7 +166,7 @@ export default function App() {
         </button>
 
         <div className="rl-group">工作区</div>
-        {railBtn("main", <MessageSquare />, "AI 对话", true, { active: view === "main", onClick: () => setView("main"), aria: "AI 对话 · 测试工作台", ico: "i-chat" })}
+        {railBtn("main", <MessageSquare />, "用例设计", true, { active: view === "main", onClick: () => setView("main"), aria: "用例设计 · 测试工作台", ico: "i-chat" })}
         {railBtn("knowledge", <BookOpen />, "知识库", canKb, { active: view === "knowledge", onClick: () => setView("knowledge"), aria: role === "guest" ? "知识库（访客 · 只读共享库）" : "知识库 · 文档与问答", ico: "i-kb" })}
         {/* 方案 A：质量报告对所有登录角色开放（展示用途，运行按钮 admin 专属） */}
         {railBtn("quality", <FlaskConical />, "质量报告", canKb, { active: view === "quality", onClick: () => setView("quality"), aria: "质量报告 · 平台测试量化数据", ico: "i-quality" })}
