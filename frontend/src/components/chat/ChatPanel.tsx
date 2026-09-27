@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles, Globe } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
+import { useUiStore } from "../../store/uiStore";
 import { toast } from "../../api/client";
 import type { ChatDraft } from "../../types";
 import MessageView from "./MessageView";
@@ -99,8 +100,10 @@ export default function ChatPanel({
   const fileRef = useRef<HTMLInputElement>(null);
   /** 用户上滚后暂停自动跟随，回到底部恢复 */
   const stickBottom = useRef(true);
-  /** M1 全链路测试发起弹窗 */
-  const [e2eOpen, setE2eOpen] = useState(false);
+  /** M1 全链路测试发起弹窗：状态提升到 uiStore（V5.4 侧栏入口与输入框图标共用） */
+  const e2eOpen = useUiStore((s) => s.e2eModalOpen);
+  const setE2eOpen = (v: boolean) =>
+    v ? useUiStore.getState().openE2eModal() : useUiStore.getState().closeE2eModal();
 
   // 自动滚底：消息变化 + 流式增量
   useEffect(() => {

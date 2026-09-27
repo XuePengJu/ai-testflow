@@ -1601,9 +1601,19 @@ body {
 /* ---- 问答会话列表（panel item 风格） ---- */
 .kb-chat-side { background: #fff; border-right: 1px solid var(--itf-line200); }
 .kb-chat-item {
-  display: flex; flex-direction: column; gap: 2px; align-items: stretch; text-align: left;
-  padding: 10px 12px !important; border-radius: var(--itf-r) !important; position: relative;
+  display: flex; flex-direction: row; align-items: center; gap: 6px; text-align: left;
+  padding: 10px 8px 10px 12px !important; border-radius: var(--itf-r) !important; position: relative;
+  cursor: pointer; outline: none;
 }
+.kb-chat-item:focus-visible { border-color: var(--itf-p600); }
+.kb-chat-item .kci-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.kb-chat-item .kci-del {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border: none; border-radius: 6px; background: transparent;
+  color: var(--gray-400, #9ca3af); cursor: pointer; opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+.kb-chat-item:hover .kci-del, .kb-chat-item:focus-within .kci-del { opacity: 1; }
+.kb-chat-item .kci-del:hover { color: #dc2626; background: #fee2e2; }
 .kb-chat-item.on { background: var(--itf-p50) !important; }
 .kb-chat-item.on::before {
   content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px;
@@ -1825,6 +1835,7 @@ body {
 .i-check  { background: #fff3e4; color: #f59e0b; }
 .i-git    { background: #eceef4; color: #4b5163; }
 .i-set    { background: #e8f1fe; color: #4f8df7; }
+.i-e2e    { background: #e0ecff; color: #2563eb; }
 .rail .rail-btn.active .rl-ico { background: rgba(255, 255, 255, .22); color: #fff; }
 
 /* ---- 侧栏空隙贴纸 ---- */

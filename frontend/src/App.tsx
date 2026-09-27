@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import {
   Shield, ShieldCheck, Loader2, LogOut, Cpu,
   BookOpen, MessageSquare, UserPlus, ChevronsLeft, ChevronsRight,
-  FlaskConical, Boxes, ChevronDown, ExternalLink,
+  FlaskConical, Boxes, ChevronDown, ExternalLink, Globe,
 } from "lucide-react";
 import { useAuth } from "./hooks/useAuth";
 import { useChatStore } from "./store/chatStore";
@@ -20,6 +20,7 @@ import { useTaskStore } from "./store/taskStore";
 import { useSettingsStore } from "./store/settingsStore";
 import { useCategoryStore } from "./store/categoryStore";
 import ChatPanel from "./components/chat/ChatPanel";
+import { useUiStore } from "./store/uiStore";
 import ConversationPicker from "./components/chat/ConversationPicker";
 import SelfCheckToast from "./components/SelfCheckToast";
 import TaskList from "./components/task/TaskList";
@@ -124,7 +125,7 @@ export default function App() {
    * 收起态隐藏文字，hover 弹出 CSS 浮层标签（.rl-tip）替代系统 title。
    */
   const railBtn = (
-    v: View | "selfcheck" | "github" | "logout",
+    v: View | "selfcheck" | "github" | "logout" | "e2e",
     icon: React.ReactNode,
     label: string,
     show: boolean,
@@ -167,6 +168,11 @@ export default function App() {
 
         <div className="rl-group">工作区</div>
         {railBtn("main", <MessageSquare />, "用例设计", true, { active: view === "main", onClick: () => setView("main"), aria: "用例设计 · 测试工作台", ico: "i-chat" })}
+        {/* V5.4：全链路测试入口从聊天输入框小图标提升到侧栏（辨识度）；先切回主视图再弹窗 */}
+        {railBtn("e2e", <Globe />, "全链路测试", true, {
+          onClick: () => { setView("main"); useUiStore.getState().openE2eModal(); },
+          aria: "全链路测试 · 输入网址 AI 自动生成用例", ico: "i-e2e",
+        })}
         {railBtn("knowledge", <BookOpen />, "知识库", canKb, { active: view === "knowledge", onClick: () => setView("knowledge"), aria: role === "guest" ? "知识库（访客 · 只读共享库）" : "知识库 · 文档与问答", ico: "i-kb" })}
         {/* 方案 A：质量报告对所有登录角色开放（展示用途，运行按钮 admin 专属） */}
         {railBtn("quality", <FlaskConical />, "质量报告", canKb, { active: view === "quality", onClick: () => setView("quality"), aria: "质量报告 · 平台测试量化数据", ico: "i-quality" })}
