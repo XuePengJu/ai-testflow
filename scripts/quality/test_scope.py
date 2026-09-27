@@ -5,8 +5,8 @@
     .venv/bin/python scripts/quality/test_scope.py --kind unit --out /tmp/unit-list.txt
 
 pytest 侧用 @文件语法消费：pytest @/tmp/api-list.txt
-类型判定复用 aggregate_quality._build_case_kinds（函数级扫描，与看板展示口径一致）。
-tests/ 无 class 式用例（已核实），nodeid 形如 tests/test_x.py::test_y。
+类型判定复用 aggregate_quality 的 AST 扫描（与看板展示口径一致）。
+类内用例带类名前缀：tests/test_x.py::TestClass::test_y（缺前缀 pytest 会报 not found）。
 """
 import argparse
 import sys
@@ -16,7 +16,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from aggregate_quality import _build_case_kinds  # noqa: E402
+from aggregate_quality import build_scope_nodeids  # noqa: E402
 
 
 def main() -> int:
@@ -26,12 +26,7 @@ def main() -> int:
     args = parser.parse_args()
 
     tests_dir = _PROJECT_ROOT / "tests"
-    kinds = _build_case_kinds(tests_dir)
-    nodeids = sorted(
-        f"tests/{fname}::{func}"
-        for (fname, func), kind in kinds.items()
-        if kind == args.kind
-    )
+    nodeids = build_scope_nodeids(tests_dir, args.kind)
     if not nodeids:
         print(f"警告：未找到任何 {args.kind} 类型用例", file=sys.stderr)
     args.out.parent.mkdir(parents=True, exist_ok=True)

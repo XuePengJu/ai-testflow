@@ -15,7 +15,7 @@ from fastapi import HTTPException
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "scripts" / "quality"))
 
-from aggregate_quality import aggregate  # noqa: E402
+from aggregate_quality import aggregate, build_scope_nodeids  # noqa: E402
 from app.api.quality import QualityRunReq, _normalize_plan  # noqa: E402
 
 
@@ -188,3 +188,64 @@ def test_partial_e2e_history_scopes(tmp_path, prev_full_summary, monkeypatch):
     pt = json.loads((prev_full_summary / "history.jsonl").read_text().splitlines()[-1])
     assert pt["partial"] is True
     assert pt["scopes"] == ["e2e"]
+
+
+# ---------------- AST 用例扫描（类内用例 / 字符串字面量） ----------------
+
+_SCOPE_SAMPLE = '''"""回归样本：类内用例 + 字符串里的假函数。"""
+import pytest
+
+SAMPLE_SCRIPT = """
+def test_fake_in_string():
+    assert 1 + 1 == 2
+"""
+
+
+def test_top_api(client):
+    assert client.get("/api/health").status_code == 200
+
+
+def test_top_unit():
+    assert 1 + 1 == 2
+
+
+class TestSuiteAPI:
+    def test_in_class_api(self, client):
+        assert client.post("/api/tasks").status_code == 201
+
+
+class TestSuiteUnit:
+    def test_in_class_unit(self):
+        assert 1 + 1 == 2
+'''
+
+
+def _make_tests_dir(tmp_path: Path) -> Path:
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_sample.py").write_text(_SCOPE_SAMPLE, encoding="utf-8")
+    return tests_dir
+
+
+def test_case_kinds_ast_ignores_string_literals_and_classes(tmp_path):
+    """AST 扫描：字符串字面量里的 def 不算用例；类内用例按函数名入键。"""
+    from aggregate_quality import _build_case_kinds
+    kinds = _build_case_kinds(_make_tests_dir(tmp_path))
+    assert ("test_sample.py", "test_fake_in_string") not in kinds   # 字符串里的假函数
+    assert kinds[("test_sample.py", "test_top_api")] == "api"
+    assert kinds[("test_sample.py", "test_top_unit")] == "unit"
+    assert kinds[("test_sample.py", "test_in_class_api")] == "api"   # 类内方法按函数名
+    assert kinds[("test_sample.py", "test_in_class_unit")] == "unit"
+
+
+def test_scope_nodeids_include_class_prefix(tmp_path):
+    """清单 nodeid：类内用例带 Class:: 前缀、不含字符串里的假函数、保持文件内定义序。"""
+    tests_dir = _make_tests_dir(tmp_path)
+    assert build_scope_nodeids(tests_dir, "api") == [
+        "tests/test_sample.py::test_top_api",
+        "tests/test_sample.py::TestSuiteAPI::test_in_class_api",
+    ]
+    assert build_scope_nodeids(tests_dir, "unit") == [
+        "tests/test_sample.py::test_top_unit",
+        "tests/test_sample.py::TestSuiteUnit::test_in_class_unit",
+    ]

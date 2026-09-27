@@ -9,9 +9,11 @@
 每次聚合向 history.jsonl 追加一行（带时间戳），供看板趋势图使用。
 """
 import argparse
+import ast
 import json
 import re
 import sys
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,35 +37,82 @@ def _load_json(path: Path) -> dict | None:
 _API_CALL_RE = re.compile(
     r"(?:client|ac)\s*\.\s*(?:get|post|put|delete|patch|request)\b|httpx|['\"]/?api/", re.IGNORECASE
 )
-_TEST_DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+(test_\w+)")
+
+
+def _iter_test_defs(tree: ast.Module):
+    """遍历 AST，产出 pytest 实际会收集的测试函数：模块级 + 顶层类内（含异步）。
+
+    基于真实语法节点——字符串字面量里的 def（如演示用样例脚本常量）不会被误判。
+    产出 ((类名链…), 函数节点)。
+    """
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            yield (), node
+        elif isinstance(node, ast.ClassDef):
+            for sub in node.body:
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and sub.name.startswith("test_"):
+                    yield (node.name,), sub
+
+
+def _classify_func(source: str, node) -> str:
+    """按函数源码段判定 api/unit（规则与看板展示口径一致）。"""
+    segment = ast.get_source_segment(source, node) or ""
+    return "api" if _API_CALL_RE.search(segment) else "unit"
+
+
+def _parse_test_module(path: Path) -> tuple[str, ast.Module] | None:
+    """读取并解析单个测试文件；语法错误时跳过（不阻断整体扫描）。
+
+    SyntaxWarning 静默：个别测试文件 docstring 含无效转义序列，解析告警会污染运行日志。
+    """
+    source = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            return source, ast.parse(source, filename=str(path))
+    except SyntaxError:
+        return None
 
 
 def _build_case_kinds(tests_dir: Path) -> dict[tuple[str, str], str]:
-    """扫描 tests/ 源码，按用例函数判定类型 → {(文件名, 函数名): "api"|"unit"}。
+    """AST 扫描 tests/ 源码，按用例函数判定类型 → {(文件名, 函数名): "api"|"unit"}。
 
     判定规则（函数级，而非文件级——同一文件常混两种）：
     - 函数体内出现 client.get/post…、await ac.…、httpx、"/api/…" → 接口测试（api）
     - 其余（纯函数/服务层/DB 层断言）→ 单元测试（unit）
+
+    键为 (文件名, 函数名)：类内用例的 pytest nodeid 尾段正是函数名，聚合侧按此匹配。
     """
     kinds: dict[tuple[str, str], str] = {}
     for path in sorted(tests_dir.glob("test_*.py")):
-        current: str | None = None
-        body: list[str] = []
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            m = _TEST_DEF_RE.match(line)
-            if m:
-                if current is not None:
-                    kinds[(path.name, current)] = (
-                        "api" if _API_CALL_RE.search("\n".join(body)) else "unit"
-                    )
-                current, body = m.group(1), [line]
-            elif current is not None:
-                body.append(line)
-        if current is not None:
-            kinds[(path.name, current)] = (
-                "api" if _API_CALL_RE.search("\n".join(body)) else "unit"
-            )
+        parsed = _parse_test_module(path)
+        if parsed is None:
+            continue
+        source, tree = parsed
+        for _classes, func in _iter_test_defs(tree):
+            kinds[(path.name, func.name)] = _classify_func(source, func)
     return kinds
+
+
+def build_scope_nodeids(tests_dir: Path, kind: str) -> list[str]:
+    """按类型生成 pytest 可直接消费的完整 nodeid 清单。
+
+    类内用例带类名前缀：tests/test_x.py::TestClass::test_y（缺前缀会 not found）。
+    顺序 = 文件名字典序 + 文件内定义序（与全量运行 pytest 的收集顺序一致）：
+    部分用例依赖同文件先序用例留下的 DB 状态，若按字母排序会打破依赖导致假失败。
+    """
+    nodeids: list[str] = []
+    for path in sorted(tests_dir.glob("test_*.py")):
+        parsed = _parse_test_module(path)
+        if parsed is None:
+            continue
+        source, tree = parsed
+        rel = f"tests/{path.name}"
+        for classes, func in _iter_test_defs(tree):
+            if _classify_func(source, func) != kind:
+                continue
+            nodeids.append("::".join((rel, *classes, func.name)))
+    return nodeids
 
 
 def _agg_pytest(reports_dir: Path, tests_dir: Path | None = None) -> dict:
