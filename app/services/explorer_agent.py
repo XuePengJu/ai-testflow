@@ -39,6 +39,8 @@ logger = logging.getLogger("services.explorer_agent")
 # 副作用导入：pipeline_lib 会把 generator_core 注入 sys.path（_normalize_case 需要
 # src.models.testcase.align_step_expectations；与 sample_seeder 同一惯例）
 from app.services import pipeline_lib  # noqa: F401,E402
+from app.services.decision_provider import (CONFIDENCE_HIGH, FAST_ACTIONS,  # noqa: E402
+                                            FastDecider)
 
 # ---- 预算配置：os.getenv 直读（调用时读取，测试可 monkeypatch；不改 config.py） ----
 def _max_steps() -> int:
@@ -332,6 +334,103 @@ class ExploreOutcome:
     page_obs: dict = field(default_factory=dict)       # url → 最近一次快照文本（pages_md 素材）
 
 
+# ============ 阶段 0 埋点：ReAct 耗时基线 ============
+#
+# 分层决策改造前先量化瓶颈：决策（LLM 调用）到底占探索总耗时的几成？
+# 只加观测，不改 ReAct 分支逻辑。数据两处落地：
+#   1) outcome.details["metrics"] —— 随 StepLog 走，前端 ExploreTimeline 可读
+#   2) out_dir/explore/metrics.json —— 离线分析、阶段 1/2 前后对照
+# 关键指标是 llm_pct：占比高 → 决策层改造有收益；占比低 → 瓶颈在浏览器动作，
+# 该去优化等待策略而不是换模型。
+
+@dataclass
+class ExploreMetrics:
+    step_ms: list = field(default_factory=list)       # 每步墙钟耗时
+    snapshot_ms: list = field(default_factory=list)   # browser.snapshot() 耗时
+    llm_ms: list = field(default_factory=list)        # 决策模型调用耗时
+    llm_in: list = field(default_factory=list)        # 决策输入字符数
+    llm_out: list = field(default_factory=list)       # 决策输出字符数
+    actions: dict = field(default_factory=dict)       # 动作 → 次数
+    parse_errors: int = 0                             # 决策 JSON 解析失败次数
+    danger_blocked: int = 0                           # 危险操作拦截次数
+    repeats: int = 0                                  # 重复动作次数
+    fast_ms: list = field(default_factory=list)       # 快速判断（分层模式）耗时
+    fast_in: list = field(default_factory=list)       # 快速判断输入字符数
+    fast_out: list = field(default_factory=list)      # 快速判断输出字符数
+    fast_hits: int = 0                                # 快速判断直接执行次数
+    escalations: int = 0                              # 快速判断升级主 LLM 次数
+    repeat_blocked: int = 0                           # 震荡指纹硬拒次数
+    fast_skipped: int = 0                             # 按路由预测跳过快判的次数
+
+    def note_action(self, action: str) -> None:
+        self.actions[action] = self.actions.get(action, 0) + 1
+
+    @staticmethod
+    def _stat(xs: list) -> dict:
+        if not xs:
+            return {"n": 0, "sum": 0, "avg": 0, "p50": 0, "p95": 0}
+        s = sorted(int(x) for x in xs)
+        n = len(s)
+
+        def q(p: float) -> int:
+            i = min(n - 1, max(0, int(round((n - 1) * p))))
+            return s[i]
+
+        return {"n": n, "sum": int(sum(s)), "avg": int(sum(s) / n),
+                "p50": q(0.5), "p95": q(0.95)}
+
+    def summary(self) -> dict:
+        total = int(sum(self.step_ms))
+        llm = int(sum(self.llm_ms))
+        snap = int(sum(self.snapshot_ms))
+        fast = int(sum(self.fast_ms))
+        browser = max(0, total - llm - snap - fast)
+
+        def pct(x: int) -> float:
+            return round(x / total * 100, 1) if total else 0.0
+
+        return {
+            "steps": len(self.step_ms),
+            "total_ms": total,
+            "llm_total_ms": llm,
+            "llm_pct": pct(llm),
+            "fast_pct": pct(fast),
+            "snapshot_pct": pct(snap),
+            "browser_pct": pct(browser),
+            "step_ms": self._stat(self.step_ms),
+            "snapshot_ms": self._stat(self.snapshot_ms),
+            "llm_ms": self._stat(self.llm_ms),
+            "llm_in_chars": self._stat(self.llm_in),
+            "llm_out_chars": self._stat(self.llm_out),
+            "actions": dict(sorted(self.actions.items(), key=lambda kv: -kv[1])),
+            "parse_errors": self.parse_errors,
+            "danger_blocked": self.danger_blocked,
+            "repeats": self.repeats,
+            "fast_hits": self.fast_hits,
+            "escalations": self.escalations,
+            "repeat_blocked": self.repeat_blocked,
+            "fast_skipped": self.fast_skipped,
+            "fast_ms": self._stat(self.fast_ms),
+            "fast_in_chars": self._stat(self.fast_in),
+            "fast_out_chars": self._stat(self.fast_out),
+        }
+
+
+def _write_metrics_file(out_dir: str | None, metrics: dict) -> str:
+    """埋点落盘（离线分析用）；失败只告警，不影响主流程。"""
+    if not out_dir:
+        return ""
+    try:
+        p = Path(out_dir) / "explore" / "metrics.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(metrics, ensure_ascii=False, indent=2),
+                     encoding="utf-8")
+        return str(p)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("埋点落盘失败：%s", e)
+        return ""
+
+
 # ============ 决策解析与护栏 ============
 
 def _strip_fences(raw: str) -> str:
@@ -412,7 +511,11 @@ def explore_pages_md(entry_url: str, outcome: ExploreOutcome) -> str:
 _SYSTEM_PROMPT = """你是探索式测试 Agent（ReAct 模式），目标站点：{url}。任务：{goal}
 
 每轮你必须只输出一个 JSON 对象（不要 markdown 围栏、不要任何解释文字）：
-{{"reason": "一句话理由", "tool": "工具名", "args": {{...}}}}
+{{"reason": "一句话理由", "tool": "工具名", "args": {{...}}, "next": "fast"}}
+
+next 字段：预测你执行完本步后的下一个动作类型——若仍是点击/导航/后退/截图等
+纯浏览动作，输出 "fast"（快速决策器接管以提速）；若需要填表、编写用例或复杂
+推理，输出 "main"。
 
 可用工具：
 - browser_navigate {{"url": "..."}} —— 跳转页面（仅允许 {host} 域内）
@@ -498,6 +601,18 @@ def run_explore(entry_url: str, credentials: dict | None = None,
     history: list[str] = []
     steps: list[dict] = []
     storage_state = ""
+    metrics = ExploreMetrics()
+    seen_fp: dict[str, int] = {}
+
+    # 分层决策开关（EXPLORE_LAYERED=1）：每步先走快速判断，高置信直接执行，
+    # 低置信 / 需要生成（fill、submit_cases）/ 解析失败 → 升级主 LLM。默认关闭。
+    fast: FastDecider | None = None
+    if os.getenv("EXPLORE_LAYERED", "0") == "1":
+        fast = FastDecider(llm_client)
+    # 路由提示：上一步决策对"下一步动作类型"的预测（fast=纯浏览 / main=需生成）。
+    # 首步固定 main：登录判断与首屏规划交给主模型。避免"先快判失败再升级"
+    # 的双重调用浪费（首次对照实验 10/12 步升级 → 每步白花一次快判调用）。
+    route_hint = "main"
 
     def _allow_url(url: str) -> tuple[bool, str]:
         """域名锁定：仅允许入口域（file:// 入口允许任意 file:// 页面）。"""
@@ -523,6 +638,7 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                "screenshot": shot_rel}
         steps.append(rec)
         outcome.steps = steps
+        metrics.note_action(action)
         if progress_cb:
             try:
                 mark = "" if ok else "⚠ "
@@ -584,30 +700,66 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                 break
 
             step_no += 1
+            t_step = time.monotonic()
+            t_snap = time.monotonic()
             obs, registry = browser.snapshot()
+            metrics.snapshot_ms.append((time.monotonic() - t_snap) * 1000)
             if browser.url not in outcome.page_obs:
                 outcome.page_obs[browser.url] = obs
 
-            messages = _build_decision_messages(goal, entry_url,
-                                                entry_host or entry_scheme, history, obs,
-                                                step_no, max_steps)
-            try:
-                raw = llm_client.chat(messages, temperature=0.2, max_tokens=2048)
-            except Exception as e:  # noqa: BLE001  LLM 网络失败 → 收敛不崩
-                _add_step(browser.url, "llm_error", {}, "调用决策模型", False,
-                          f"{e.__class__.__name__}: {str(e)[:120]}")
-                outcome.stop_reason = "error"
-                break
-            est_tokens += (sum(len(str(m["content"])) for m in messages) + len(raw or "")) // 2
+            # ---- 分层决策：按上一步的 next 预测路由（EXPLORE_LAYERED=1 时）----
+            plan: dict | None = None
+            if fast is not None and route_hint == "fast":
+                fd, fmeta = fast.decide(goal, entry_host or entry_scheme,
+                                        history, obs, step_no, max_steps)
+                metrics.fast_ms.append(fmeta["ms"])
+                metrics.fast_in.append(fmeta["in"])
+                metrics.fast_out.append(fmeta["out"])
+                est_tokens += (fmeta["in"] + fmeta["out"]) // 2
+                if fd.action in FAST_ACTIONS and fd.confidence >= CONFIDENCE_HIGH:
+                    plan = {"reason": fd.reason or "快速判断", "tool": fd.action,
+                            "args": fd.args}
+                    metrics.fast_hits += 1
+                    route_hint = fd.next
+                else:
+                    # 预测失误（这步其实需要生成/低置信）→ 升级主 LLM，
+                    # 且下一步路由改由主 LLM 的 next 决定
+                    metrics.escalations += 1
+                    route_hint = "main"
+            elif fast is not None:
+                metrics.fast_skipped += 1
 
-            try:
-                plan = parse_decision(raw)
-            except (ValueError, json.JSONDecodeError) as e:
-                reason = f"决策解析失败（{e}），请严格只输出 JSON 对象"
-                _add_step(browser.url, "parse_error", {"raw": (raw or "")[:200]},
-                          "解析 LLM 决策", False, reason)
-                history.append(f"[决策无效] {reason}")
-                continue
+            if plan is None:
+                # 升级主 LLM：低置信 / 需要生成（fill、submit_cases）/ 快判失败
+                messages = _build_decision_messages(goal, entry_url,
+                                                    entry_host or entry_scheme, history, obs,
+                                                    step_no, max_steps)
+                try:
+                    t_llm = time.monotonic()
+                    raw = llm_client.chat(messages, temperature=0.2, max_tokens=2048)
+                    metrics.llm_ms.append((time.monotonic() - t_llm) * 1000)
+                    metrics.llm_in.append(sum(len(str(m["content"])) for m in messages))
+                    metrics.llm_out.append(len(raw or ""))
+                except Exception as e:  # noqa: BLE001  LLM 网络失败 → 收敛不崩
+                    _add_step(browser.url, "llm_error", {}, "调用决策模型", False,
+                              f"{e.__class__.__name__}: {str(e)[:120]}")
+                    outcome.stop_reason = "error"
+                    break
+                est_tokens += (sum(len(str(m["content"])) for m in messages) + len(raw or "")) // 2
+
+                try:
+                    plan = parse_decision(raw)
+                except (ValueError, json.JSONDecodeError) as e:
+                    reason = f"决策解析失败（{e}），请严格只输出 JSON 对象"
+                    _add_step(browser.url, "parse_error", {"raw": (raw or "")[:200]},
+                              "解析 LLM 决策", False, reason)
+                    history.append(f"[决策无效] {reason}")
+                    metrics.parse_errors += 1
+                    metrics.step_ms.append((time.monotonic() - t_step) * 1000)
+                    continue
+                if fast is not None:
+                    nh = str(plan.get("next") or "").strip().lower()
+                    route_hint = nh if nh in ("fast", "main") else "main"
 
             action = str(plan.get("tool") or "").strip()
             args = plan.get("args") if isinstance(plan.get("args"), dict) else {}
@@ -619,8 +771,29 @@ def run_explore(entry_url: str, credentials: dict | None = None,
             repeat_count = repeat_count + 1 if action_key == last_action_key else 1
             last_action_key = action_key
             if repeat_count == 3:
+                metrics.repeats += 1
                 history.append("【系统警告】已连续 3 次执行完全相同的动作。"
                                "请改变探索目标；若功能流已探索充分，立即 submit_cases 提交用例并结束。")
+
+            # 震荡检测（阶段 0 发现的缺陷修复）：navigate→back→navigate 这类
+            # A→B 交替震荡，上面的连续重复护栏抓不到。按 (url, action, args)
+            # 指纹跨步去重：第 2 次注入警告，第 3 次起硬拒（submit_cases 豁免）。
+            if action != "submit_cases":
+                fp = (f"{browser.url}|{action}|"
+                      f"{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}")
+                seen_fp[fp] = seen_fp.get(fp, 0) + 1
+                fp_n = seen_fp[fp]
+                if fp_n == 2:
+                    history.append("【系统警告】该动作在当前页面已执行过且结果相同，"
+                                   "请勿重复；请换一个目标或路径。")
+                elif fp_n >= 3:
+                    metrics.repeat_blocked += 1
+                    _add_step(browser.url, action, args, reason, False,
+                              f"震荡拦截（同页面同动作已执行 {fp_n - 1} 次无新进展）")
+                    history.append(f"[{action}] → 已拦截：同页面重复 {fp_n - 1} 次无新进展，"
+                                   "禁止再执行相同动作；请立即 submit_cases 或探索其他区域")
+                    metrics.step_ms.append((time.monotonic() - t_step) * 1000)
+                    continue
 
             # ---- 工具分发（护栏内执行） ----
             if action == "browser_navigate":
@@ -645,6 +818,7 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                 else:
                     kw = is_dangerous(info.get("name", ""))
                     if kw:
+                        metrics.danger_blocked += 1
                         deny = f"已拒绝：命中危险操作黑名单（「{kw}」），一期禁止执行该点击"
                         _add_step(browser.url, action, args, reason, False, deny)
                         history.append(f"[{action}] {ref}({info.get('name')}) → {deny}")
@@ -700,6 +874,7 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                           f"提交 {len(normalized)} 条用例（累计 {len(outcome.cases)} 条）", shot)
                 history.append(f"[{action}] 提交 {len(normalized)} 条用例（累计 {len(outcome.cases)} 条）")
                 if done_flag:
+                    metrics.step_ms.append((time.monotonic() - t_step) * 1000)
                     outcome.stop_reason = "done"
                     break
                 history.append("（done=false：可继续探索其他功能流，结束时请 submit_cases 且 done=true）")
@@ -708,6 +883,8 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                 deny = f"未知工具 {action}，可用工具见系统提示"
                 _add_step(browser.url, action, args, reason, False, deny)
                 history.append(f"[{action}] → {deny}")
+
+            metrics.step_ms.append((time.monotonic() - t_step) * 1000)
 
             if done_flag and action != "submit_cases":
                 # LLM 在非 submit_cases 工具上标记 done：尊重其结束意愿
@@ -728,6 +905,7 @@ def run_explore(entry_url: str, credentials: dict | None = None,
         f"探索 {len(steps)} 步，提交 {len(outcome.cases)} 条用例"
         f"（登录：{outcome.login}，收敛：{outcome.stop_reason}）"
     )
+    m = metrics.summary()
     outcome.details = {
         "url": entry_url,
         "login": outcome.login,
@@ -735,6 +913,8 @@ def run_explore(entry_url: str, credentials: dict | None = None,
         "steps": steps,
         "cases_submitted": len(outcome.cases),
         "storage_state": storage_state,
+        "metrics": m,
+        "metrics_file": _write_metrics_file(out_dir, m),
     }
     return outcome
 
