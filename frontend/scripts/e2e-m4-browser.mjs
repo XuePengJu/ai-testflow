@@ -72,7 +72,9 @@ cur = c.cursor(); cur.execute(${JSON.stringify(sql)}); c.commit(); c.close()`;
   } else {
     py = `import sqlite3;c=sqlite3.connect(${JSON.stringify(`${ROOT}/app.db`)});c.executescript(${JSON.stringify(sql)});c.commit();c.close()`;
   }
-  execFileSync(`${ROOT}/.venv/bin/python`, ["-c", py], { stdio: "pipe" });
+  const pyBin = [`${ROOT}/.venv/bin/python`, `${ROOT}/venv/bin/python`, "python3"]
+    .find((p) => p === "python3" || fs.existsSync(p));
+  execFileSync(pyBin, ["-c", py], { stdio: "pipe" });
 }
 
 /* ---------- 明文认证通道：API 注册/登录 ---------- */
