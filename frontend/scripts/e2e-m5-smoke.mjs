@@ -19,13 +19,15 @@
 import { chromium } from "playwright";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const URL = process.env.M5_URL || "http://localhost:8000";
 const API = URL + "/api";
 const SHOT_DIR = "/tmp/e2e-m5";
 fs.mkdirSync(SHOT_DIR, { recursive: true });
 
-const ROOT = "/Users/xp/Documents/软件测试示例项目/ai-testflow";
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const USER = "e2e_m5_smoke";
 const EMAIL = "e2e-m5-smoke@e2e-testmail.com";
 const PWD = "M5Smoke!2026";

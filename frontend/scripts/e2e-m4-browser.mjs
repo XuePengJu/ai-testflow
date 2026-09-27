@@ -22,13 +22,15 @@
 import { chromium } from "playwright";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const URL = process.env.M4_URL || "http://localhost:8000";
 const API = "http://localhost:8000/api";
 const SHOT_DIR = "/tmp/e2e-m4";
 fs.mkdirSync(SHOT_DIR, { recursive: true });
 
-const ROOT = "/Users/xp/Documents/软件测试示例项目/ai-testflow";
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const USER = "e2e_m4_user";
 const ADMIN = "e2e_m4_admin";
