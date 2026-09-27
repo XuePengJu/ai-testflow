@@ -90,12 +90,21 @@ class BrowserSession:
     def __init__(self, headless: bool = True):
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().start()
-        # root 下必须加 --no-sandbox（复用 web_crawler 的启动参数计算）
-        from app.services.web_crawler import _chromium_launch_args
-        self._browser = self._pw.chromium.launch(headless=headless,
-                                                 args=_chromium_launch_args())
-        self._context = self._browser.new_context()
-        self._page = self._context.new_page()
+        try:
+            # root 下必须加 --no-sandbox（复用 web_crawler 的启动参数计算）
+            from app.services.web_crawler import _chromium_launch_args
+            self._browser = self._pw.chromium.launch(headless=headless,
+                                                     args=_chromium_launch_args())
+            self._context = self._browser.new_context()
+            self._page = self._context.new_page()
+        except Exception:
+            # 启动失败必须 stop：sync_playwright 在当前线程持有运行中的事件循环，
+            # 不关会泄漏 running loop，导致同进程后续 async 测试/协程全部 RuntimeError
+            try:
+                self._pw.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
         self._registry: dict[str, dict] = {}
 
     @property
