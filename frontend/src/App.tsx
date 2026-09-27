@@ -7,23 +7,26 @@
  * 原 V2.8 顶部 header 全部功能保留，仅形态迁移到 rail（图标 + title 提示）。
  * V5.3（2026-09-26）：信息架构重组 —— 模型配置拆为一级入口；管理后台改名用户管理；
  * 「设置」按钮移除，改为点击 rail 底部用户名区域打开（个人中心）。
+ * V5.5（2026-09-28）：用例库资产化 —— 新增一级「用例库」页（测试用例集管理）；
+ * 「用例设计」改名「AI 会话」；会话页移除右侧「我的任务」栏（与用例库重复），
+ * 任务列表轮询收归 App 层（会话任务卡实时刷新依赖同一份数据）。
  */
 import { useEffect, useState } from "react";
 import {
   Shield, ShieldCheck, Loader2, LogOut, Cpu,
   BookOpen, MessageSquare, UserPlus, ChevronsLeft, ChevronsRight,
-  FlaskConical, Boxes, ChevronDown, ExternalLink, Globe,
+  FlaskConical, Boxes, ChevronDown, ExternalLink, Globe, Library,
 } from "lucide-react";
 import { useAuth } from "./hooks/useAuth";
 import { useChatStore } from "./store/chatStore";
-import { useTaskStore } from "./store/taskStore";
+import { useTaskStore, startListPolling } from "./store/taskStore";
 import { useSettingsStore } from "./store/settingsStore";
 import { useCategoryStore } from "./store/categoryStore";
 import ChatPanel from "./components/chat/ChatPanel";
 import E2EPage from "./pages/E2EPage";
 import ConversationPicker from "./components/chat/ConversationPicker";
 import SelfCheckToast from "./components/SelfCheckToast";
-import TaskList from "./components/task/TaskList";
+import CaseLibraryPage from "./pages/CaseLibraryPage";
 import TaskDetailDrawer from "./components/task/TaskDetailDrawer";
 import SettingsPage from "./pages/SettingsPage";
 import ModelConfigPage from "./pages/ModelConfigPage";
@@ -31,7 +34,7 @@ import AdminPage from "./pages/AdminPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import QualityPage from "./pages/QualityPage";
 
-type View = "main" | "settings" | "models" | "admin" | "knowledge" | "quality" | "e2e";
+type View = "main" | "cases" | "settings" | "models" | "admin" | "knowledge" | "quality" | "e2e";
 
 const GITHUB_REPO = "https://github.com/XuePengJu/ai-testflow";
 
@@ -89,6 +92,13 @@ export default function App() {
     }
   }, [token, refreshConversations, refreshTasks, newConversation]);
 
+  // V5.5 任务列表轮询收归 App 层：会话页任务卡实时刷新与用例库页共用同一份数据
+  useEffect(() => {
+    if (!token) return;
+    const stop = startListPolling();
+    return stop;
+  }, [token]);
+
   // 非 admin 切到 admin 视图时踢回 main（登出/角色变化兜底）
   useEffect(() => {
     if (view === "admin" && ready && role !== "admin") setView("main");
@@ -105,7 +115,7 @@ export default function App() {
   useEffect(() => {
     const h = (e: Event) => {
       const d = (e as CustomEvent<string>).detail;
-      if (d === "main" || d === "settings" || d === "models" || d === "admin" || d === "knowledge" || d === "quality" || d === "e2e") setView(d);
+      if (d === "main" || d === "cases" || d === "settings" || d === "models" || d === "admin" || d === "knowledge" || d === "quality" || d === "e2e") setView(d);
     };
     window.addEventListener("nav-to", h);
     return () => window.removeEventListener("nav-to", h);
@@ -167,7 +177,9 @@ export default function App() {
         </button>
 
         <div className="rl-group">工作区</div>
-        {railBtn("main", <MessageSquare />, "用例设计", true, { active: view === "main", onClick: () => setView("main"), aria: "用例设计 · 测试工作台", ico: "i-chat" })}
+        {railBtn("main", <MessageSquare />, "AI 会话", true, { active: view === "main", onClick: () => setView("main"), aria: "AI 会话 · 测试工作台", ico: "i-chat" })}
+        {/* V5.5：用例库升为一级入口（原会话页右栏「我的任务」的资产化形态），全角色可见 */}
+        {railBtn("cases", <Library />, "用例库", true, { active: view === "cases", onClick: () => setView("cases"), aria: "用例库 · 测试用例资产管理", ico: "i-cases" })}
         {/* V5.4：全链路测试升为独立整页入口（原聊天输入框弹窗废弃）；全角色可见 */}
         {railBtn("e2e", <Globe />, "全链路测试", true, {
           active: view === "e2e",
@@ -254,12 +266,12 @@ export default function App() {
       {/* 右侧内容区 */}
       <div className="app-body">
         {view === "main" && (
-          <main className="app-main">
+          <main className="app-main app-main-chat">
             <ConversationPicker />
             <ChatPanel showCitations />
-            <TaskList />
           </main>
         )}
+        {view === "cases" && <CaseLibraryPage />}
         {view === "knowledge" && <KnowledgePage />}
         {view === "quality" && <QualityPage />}
         {view === "e2e" && <E2EPage />}

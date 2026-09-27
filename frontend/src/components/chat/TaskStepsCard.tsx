@@ -403,6 +403,18 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
           >
             查看用例 / 思维导图 →
           </button>
+          {/* V5.5 用例库资产化：完成即入库，引导去用例库管理（筛选/评审/迭代） */}
+          <button
+            type="button"
+            className="qtag"
+            title="用例已自动入用例库（草稿），去库中评审管理"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.dispatchEvent(new CustomEvent("nav-to", { detail: "cases" }));
+            }}
+          >
+            📚 用例库
+          </button>
           {/* 会话内闭环：直接挂载迭代引用 chip，用户无需先开详情抽屉 */}
           {showIterate && (
             <button

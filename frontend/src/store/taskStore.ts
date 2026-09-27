@@ -51,7 +51,7 @@ async function pollTask(taskId: string, onEnd: () => void): Promise<void> {
       const { useChatStore } = await import("./chatStore");
       useChatStore.getState().updateMsgTask(taskId, t);
       if (t.status === "completed" || t.status === "failed") {
-        toast(t.status === "completed" ? `任务完成：${t.name}（${t.cases_count} 个用例）` : `任务失败：${t.name}`);
+        toast(t.status === "completed" ? `任务完成：${t.name}（${t.cases_count} 个用例）已入用例库` : `任务失败：${t.name}`);
         onEnd();
         return;
       }

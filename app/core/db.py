@@ -100,6 +100,9 @@ def _ensure_columns() -> None:
     # V3.1 多角色协作：roles JSON 数组文本（MySQL 不允许 TEXT 带 DEFAULT，Python 层兜底）
     if "roles" not in cols:
         alters.append("ADD COLUMN roles TEXT")
+    # V5.5 用例库资产化：评审状态（draft/reviewed），存量任务统一默认草稿
+    if "review_status" not in cols:
+        alters.append("ADD COLUMN review_status VARCHAR(16) NOT NULL DEFAULT 'draft'")
     if alters:
         with engine.connect() as conn:
             for a in alters:

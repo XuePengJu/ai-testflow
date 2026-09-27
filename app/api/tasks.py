@@ -17,7 +17,7 @@ from app.models.automation import TestTarget, encrypt_credential
 from app.models.conversation import Conversation, Message
 from app.models.task import Task, StepLog
 from app.models.user import User
-from app.schemas.task import TaskOut, StepLogOut
+from app.schemas.task import TaskOut, StepLogOut, TaskPatchIn
 from app.services.doc_extract import SUPPORTED_EXTS
 from app.workflow.iterate import run_iterate
 from src.models.testcase import ensure_case_ids, ensure_compound_titles
@@ -106,7 +106,8 @@ def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
     ).scalars().all()
     return TaskOut(
         id=task.id, name=task.name, kind=task.kind, source_type=task.source_type,
-        status=task.status, cases_count=task.cases_count, duration_ms=task.duration_ms,
+        status=task.status, review_status=task.review_status or "draft",
+        cases_count=task.cases_count, duration_ms=task.duration_ms,
         formats=task.formats, roles=task.roles or '["qa"]',
         category_id=task.category_id,
         parent_task_id=task.parent_task_id,
@@ -306,6 +307,31 @@ def get_task(task_id: str, db: Session = Depends(get_db),
     task = _own_task(db, task_id, user)
     _resolve_conversation(db, task)
     return _to_out(db, task, include_cases=True)
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskOut)
+def patch_task(task_id: str,
+               payload: TaskPatchIn,
+               db: Session = Depends(get_db),
+               user: User = Depends(get_current_user)):
+    """V5.5 用例库资产化：更新用例集元数据（名称 / 评审状态）。
+
+    - 归类（category_id）走既有 PUT /categories/move-task/{task_id}，本接口不重复提供
+    - review_status 仅 draft/reviewed；生成过程状态（status）由工作流管理，不可手工改
+    """
+    t = _own_task(db, task_id, user)
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="名称不能为空")
+        t.name = name[:255]
+    if payload.review_status is not None:
+        if payload.review_status not in ("draft", "reviewed"):
+            raise HTTPException(status_code=400, detail="review_status 仅支持 draft / reviewed")
+        t.review_status = payload.review_status
+    db.commit()
+    db.refresh(t)
+    return _to_out(db, t)
 
 
 @router.delete("/tasks/{task_id}")

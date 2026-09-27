@@ -42,10 +42,11 @@ page.on("response", (r) => {
   if (r.status() >= 400) errors.push(`HTTP ${r.status()} ${r.url()}`);
 });
 
-/** 稳定打开任务抽屉：列表有进行中任务时会在轮询中重渲染，点击可能被"外部点击关闭"吞掉 → 验证抽屉持续可见，最多重试 3 次 */
+/** 稳定打开任务抽屉：列表有进行中任务时会在轮询中重渲染，点击可能被"外部点击关闭"吞掉 → 验证抽屉持续可见，最多重试 3 次
+ *  V5.5：入口改为用例库页表格行的用例集名称 */
 const openDrawerStable = async (idx = 0) => {
   for (let i = 0; i < 3; i++) {
-    await page.click(`.task-panel .task-item.completed >> nth=${idx}`);
+    await page.locator(".cases-page tbody tr .cl-name").nth(idx).click();
     const stayed = await page
       .waitForSelector(".task-drawer.show", { timeout: 8000 })
       .then(async () => {
@@ -80,13 +81,11 @@ try {
   // reload 以 test 身份全新加载，彻底脱离访客态。
   await page.reload({ waitUntil: "networkidle" });
   await page.waitForSelector(".rail-user", { timeout: 10000 });
-  await page.waitForFunction(
-    () => (document.querySelectorAll(".task-panel .task-item.completed") || []).length >= 1,
-    null,
-    { timeout: 20000 },
-  );
-  const taskCount = await page.$$eval(".task-panel .task-item", (els) => els.length);
-  ok(`① 任务列表 ${taskCount} 条（含已完成）`);
+  // V5.5：任务列表资产化为用例库页，改在用例库断言
+  await page.click('button[aria-label^="用例库"]');
+  await page.waitForSelector(".cases-page tbody tr", { timeout: 20000 });
+  const taskCount = await page.locator(".cases-page tbody tr").count();
+  ok(`① 用例库 ${taskCount} 条用例集`);
 
   // ② 点击已完成任务 → 弹窗默认思维导图 Tab
   const drawerOpened = await openDrawerStable(0);
@@ -238,16 +237,19 @@ try {
       { timeout: 60000 },
     );
     await page.click(".irc-gen");
-    // 任务列表渲染版本链：迭代子任务顶替父任务条目显示为「xxx (vN)」——列表数量不变，
-    // 断言改为首项出现 (vN) 且进入已完成态
+    // 切到用例库页断言迭代版本（V5.5：右栏任务列表已移除）
+    await page.click('button[aria-label^="用例库"]');
+    await page.waitForSelector(".cases-page", { timeout: 8000 });
+    // 用例库渲染版本链：迭代子任务聚合进同一行，版本徽章升为 vN（N≥2）且非生成中——
+    // 断言改为首行出现 vN 徽章（V5.5：原任务列表「xxx (vN)」断言迁移）
     const iterAppeared = await page
       .waitForFunction(() => {
-        const s = document.querySelector(".task-panel .task-item")?.textContent || "";
-        return /\(v\d+\)/.test(s) && s.includes("已完成");
+        const s = document.querySelector(".cases-page tbody tr")?.textContent || "";
+        return /\bv[2-9]\d*\b/.test(s) && !s.includes("生成中") && !s.includes("排队中");
       }, null, { timeout: 60000, polling: 1000 })
       .then(() => true)
       .catch(() => false);
-    if (iterAppeared) ok("⑥ 任务列表出现迭代版本（vN 已完成）");
+    if (iterAppeared) ok("⑥ 用例库出现迭代版本（vN 徽章）");
     else fail("⑥ 迭代子任务未出现", "60s 内首任务项未变为 (vN) 已完成");
   } else {
     fail("⑥ 迭代按钮不可用", "任务未终态或未关联会话");

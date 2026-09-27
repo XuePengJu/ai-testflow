@@ -21,6 +21,9 @@ class Task(Base):
     formats: Mapped[str | None] = mapped_column(String(64), default="xlsx,json")
     roles: Mapped[str | None] = mapped_column(Text, default='["qa"]')  # 多角色协作（V3.1）：pm/qa/dev JSON 数组
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    # 用例库资产化（V5.5）：评审状态 draft=草稿 / reviewed=已评审。
+    # 与「生成过程状态」status（pending/running/…）分离：库页只看资产状态，过程状态留在会话流。
+    review_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     is_sample: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     category_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)

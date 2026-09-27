@@ -107,6 +107,8 @@ export interface Task {
   kind: string;
   source_type: string;
   status: string;
+  /** V5.5 用例库资产化：评审状态 draft/reviewed（与生成过程状态 status 分离） */
+  review_status?: string;
   cases_count: number;
   duration_ms: number;
   formats: string;

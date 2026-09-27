@@ -23,6 +23,8 @@ class TaskOut(BaseModel):
     kind: str
     source_type: str
     status: str
+    # V5.5 用例库资产化：评审状态 draft/reviewed（与生成过程状态 status 分离）
+    review_status: str = "draft"
     cases_count: int
     duration_ms: float
     formats: str = "xlsx,json,xmind"
@@ -45,3 +47,9 @@ class TaskOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TaskPatchIn(BaseModel):
+    """V5.5 用例库：任务（用例集）部分更新入参。全部可选，只更新提供的字段。"""
+    name: Optional[str] = None
+    review_status: Optional[str] = None  # draft / reviewed

@@ -42,10 +42,10 @@ try {
   // ① 进入首页（默认访客态）→ 退出 → test 账户登录
   await page.goto(URL, { waitUntil: "networkidle" });
   await page.waitForSelector(".rail-user", { timeout: 10000 });
-  for (const sel of [".conv-panel", ".chat-panel", ".task-panel"]) {
+  for (const sel of [".conv-panel", ".chat-panel"]) {
     await page.waitForSelector(sel, { timeout: 8000 });
   }
-  ok("① 三栏布局渲染（历史会话 | 对话流 | 任务列表）");
+  ok("① 两栏布局渲染（历史会话 | 对话流）—— V5.5 右栏任务列表已移除");
   await page.click('button[aria-label="退出登录"]');
   await page.waitForSelector(".auth-modal", { timeout: 8000 });
   await page.fill('.auth-modal input[placeholder="用户名"]', "test");
@@ -69,6 +69,14 @@ try {
   await page.waitForSelector(".chat-panel .welcome", { timeout: 8000 });
   ok("① 新建会话，空白欢迎页");
 
+  // ①c 记录用例库基线行数（V5.5：新用例集入库断言用）
+  await page.click('button[aria-label^="用例库"]');
+  await page.waitForSelector(".cases-page", { timeout: 8000 });
+  const libRowsBefore = await page.locator(".cases-page tbody tr").count();
+  ok(`①c 用例库基线 ${libRowsBefore} 条`);
+  await page.click('button[aria-label^="AI 会话"]');
+  await page.waitForSelector(".chat-panel .welcome", { timeout: 8000 });
+
   // ② 发消息 → mock 流式回复 → 生成用例确认按钮
   await page.fill(".chat-panel textarea", "测试一个登录页面：输入正确的用户名和密码后跳转首页");
   await page.click(".chat-panel .send-btn");
@@ -79,7 +87,6 @@ try {
   await page.screenshot({ path: `${SHOT_DIR}/2-reply.png`, fullPage: true });
 
   // ③ 点击生成 → 任务卡 → 轮询到完成
-  const taskCountBefore = await page.locator(".task-panel .task-item").count();
   await page.click(".qtag.confirm-btn");
   // 任务卡：mock 链路渲染 .task / .tsc-io；平台池真实链路渲染 .task-steps-card
   await page.waitForSelector(".msg-ai .task, .msg-ai .tsc-io, .msg-ai .task-steps-card", { timeout: 20000 });
@@ -92,20 +99,24 @@ try {
   ok("③ 任务轮询到「✓ 已完成」");
   await page.screenshot({ path: `${SHOT_DIR}/3-task-card.png`, fullPage: true });
 
-  // ④ 任务列表出现新任务 → 打开详情抽屉
+  // ④ 用例库出现新用例集 → 打开详情抽屉（V5.5：右栏任务列表移除，断言迁到用例库页）
+  await page.click('button[aria-label^="用例库"]');
+  await page.waitForSelector(".cases-page", { timeout: 8000 });
   await page.waitForFunction(
-    (n) => document.querySelectorAll(".task-panel .task-item").length > n,
-    taskCountBefore,
-    { timeout: 15000 },
+    (n) => document.querySelectorAll(".cases-page tbody tr").length > n,
+    libRowsBefore,
+    { timeout: 30000 },
   );
-  ok("④ 任务列表出现新任务");
-  await page.click(".task-panel .task-item >> nth=0");
+  ok("④ 用例库出现新生成的用例集");
+  await page.locator(".cases-page tbody tr").first().locator(".cl-name").click();
   await page.waitForSelector(".drawer-head .drawer-title", { timeout: 10000 });
-  ok("④ 点击任务打开详情抽屉");
+  ok("④ 点击用例集打开详情抽屉");
   await page.screenshot({ path: `${SHOT_DIR}/4-drawer.png`, fullPage: false });
   await page.keyboard.press("Escape"); // 关抽屉，避免遮挡后续步骤
 
-  // ⑤ 新建会话 → 切回旧会话回放历史
+  // ⑤ 回 AI 会话 → 新建会话 → 切回旧会话回放历史
+  await page.click('button[aria-label^="AI 会话"]');
+  await page.waitForSelector(".conv-panel", { timeout: 8000 });
   await page.click(".conv-panel .side-head .qtag");
   await page.waitForSelector(".chat-panel .welcome", { timeout: 8000 });
   ok("⑤ 新建会话回到空白欢迎页");

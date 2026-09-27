@@ -7,7 +7,7 @@
  *   ④ 调度摘要生效 + 池条目测连通返回结果
  *   ⑤ admin 登录 → 用户管理页：统计卡 3 项 + 用户表
  *   ⑥ 平台默认模型池添加（admin · 平台默认 Tab）
- *   ⑦ 视图切换：用例设计三栏保留
+ *   ⑦ 视图切换：AI 会话两栏保留（V5.5 用例库承接原任务列表）
  *   ⑧ 分类树：新建顶级/子分类 → 树渲染
  *   ⑨ 任务归类（🏷 菜单 → cat-move）→ 分类计数
  *   ⑩ 分类过滤任务列表
@@ -219,24 +219,26 @@ try {
   ok(`④b 测连通链路返回：${(testMsg || "").trim().slice(0, 60)}`);
   await page.screenshot({ path: `${SHOT_DIR}/2-settings-llm.png`, fullPage: true });
 
-  // ⑦ 视图切换回工作台（V5.3：用例设计）
-  await page.click('.rail-btn:has-text("用例设计")');
-  for (const sel of [".conv-panel", ".chat-panel", ".task-panel"]) {
+  // ⑦ 视图切换回工作台（V5.5：改名 AI 会话；右栏任务列表移除）
+  await page.click('.rail-btn:has-text("AI 会话")');
+  for (const sel of [".conv-panel", ".chat-panel"]) {
     await page.waitForSelector(sel, { timeout: 8000 });
   }
-  ok("⑦ 切回工作台：三栏完整");
+  ok("⑦ 切回 AI 会话：两栏完整");
 
-  // ⑧⑨⑩ 分类树（V5.x：分类树收在「分类」按钮弹出层里，先点开）
+  // ⑧⑨⑩ 分类树（V5.5：分类管理弹层迁到用例库页工具栏）
   // 注意：新账号被 sample_seeder 预置 3 个种子分类，树里不止 电商测试，
   // 所有断言必须按 cat-name 精确锚定「电商测试」行，不能用"第一个 .cat-row"
+  await page.click('button[aria-label^="用例库"]');
+  await page.waitForSelector(".cases-page", { timeout: 8000 });
   const openCatPopover = async () => {
     if (await page.$("[data-testid='category-tree']")) return;
-    await page.click('.task-panel button:has-text("分类")');
+    await page.click("[data-testid='cat-toggle']");
     await page.waitForSelector("[data-testid='category-tree']", { timeout: 8000 });
   };
   const closeCatPopover = async () => {
     if (!(await page.$("[data-testid='category-tree']"))) return;
-    await page.click('.task-panel button:has-text("分类")');
+    await page.click("[data-testid='cat-toggle']");
     await page.waitForSelector("[data-testid='category-tree']", { state: "detached", timeout: 8000 });
   };
   await openCatPopover();
@@ -258,16 +260,17 @@ try {
   );
   ok("⑧b 新建子分类「购物车」");
 
-  // ⑨ 任务归类（先收起弹出层，避免遮挡任务列表 hover）
-  await page.waitForSelector(".task-panel .task-item", { timeout: 30000 });
+  // ⑨ 任务归类（先收起弹出层，避免遮挡行操作）
+  await page.waitForSelector(".cases-page tbody tr", { timeout: 30000 });
   await closeCatPopover();
-  const firstTaskId = await page.getAttribute(".task-panel .task-item >> nth=0", "data-task-id");
+  const firstRowId = await page.getAttribute(".cases-page tbody tr >> nth=0", "data-testid");
+  const firstTaskId = firstRowId ? String(firstRowId).replace(/^case-row-/, "") : null;
   if (firstTaskId) {
-    await page.hover(".task-panel .task-item >> nth=0");
+    await page.hover(".cases-page tbody tr >> nth=0");
     await page.click(`[data-testid='cat-menu-${firstTaskId}'] >> nth=0`);
     await page.waitForSelector(`[data-testid='cat-move-${firstTaskId}']`, { timeout: 5000 });
     await page.click(`[data-testid='cat-move-${firstTaskId}'] button:has-text('电商测试')`);
-    ok("⑨ 任务归类：🏷 菜单 → 电商测试（PUT move-task 200）");
+    ok("⑨ 用例集归类：🏷 菜单 → 电商测试（PUT move-task 200）");
 
     // ⑩ 分类过滤（重开弹出层：计数断言 + 点行过滤）
     await openCatPopover();
@@ -279,16 +282,16 @@ try {
     ok("⑨b 分类计数生效（电商测试 = 1）");
     await page.click(`.cat-row[data-cat-id='${catId}']`);
     await page.waitForFunction(
-      () => document.querySelector(".task-panel .side-head")?.textContent?.includes("电商测试"),
+      () => document.querySelectorAll(".cases-page tbody tr").length === 1,
       null,
       { timeout: 5000 },
     ).catch(() => {});
-    const filtered = await page.$$eval(".task-panel .task-item", (els) => els.length);
-    ok(`⑩ 分类过滤生效：列表 ${filtered} 条`);
+    const filtered = await page.$$eval(".cases-page tbody tr", (els) => els.length);
+    ok(`⑩ 分类过滤生效：用例库 ${filtered} 条`);
     await page.click("[data-testid='cat-all']"); // 还原
     await page.screenshot({ path: `${SHOT_DIR}/3-category-tree.png`, fullPage: true });
   } else {
-    fail("⑨ 任务归类", "无任务可归类");
+    fail("⑨ 用例集归类", "无用例集可归类");
   }
 
   // ⑤ admin 登录 → 用户管理页（V5.3 改名）

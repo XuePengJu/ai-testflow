@@ -98,7 +98,7 @@ export default function E2EPage() {
     const ts = useTaskStore.getState();
     void ts.refresh();
     ts.startPolling(task.id);
-    // 跳回用例设计视图：任务卡在会话流里实时可见
+    // 跳回 AI 会话视图（V5.5 改名）：任务卡在会话流里实时可见
     window.dispatchEvent(new CustomEvent("nav-to", { detail: "main" }));
   }
 

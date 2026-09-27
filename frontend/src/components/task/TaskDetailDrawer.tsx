@@ -68,11 +68,12 @@ export default function TaskDetailDrawer() {
   const chain = t ? buildChain(tasks, t.id) : [];
   const curVer = chain.find((n) => n.id === t?.id)?.version ?? 0;
 
-  /** 继续优化：关闭抽屉 → 回到任务所属会话 → 挂载迭代引用 chip（输入框聚焦） */
+  /** 继续优化：关闭抽屉 → 跳回 AI 会话（V5.5：抽屉可从用例库页打开）→ 回到任务所属会话 → 挂载迭代引用 chip（输入框聚焦） */
   async function onContinueOptimize(): Promise<void> {
     if (!t) return;
     const { useChatStore } = await import("../../store/chatStore");
     closeDetail();
+    window.dispatchEvent(new CustomEvent("nav-to", { detail: "main" }));
     await useChatStore.getState().openIterate(t);
   }
 
