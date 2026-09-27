@@ -12,11 +12,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles, Globe } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
-import { useUiStore } from "../../store/uiStore";
 import { toast } from "../../api/client";
 import type { ChatDraft } from "../../types";
 import MessageView from "./MessageView";
-import E2ETaskModal from "./E2ETaskModal";
 
 function fmtSize(b: number): string {
   return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(2) + " MB";
@@ -100,10 +98,6 @@ export default function ChatPanel({
   const fileRef = useRef<HTMLInputElement>(null);
   /** 用户上滚后暂停自动跟随，回到底部恢复 */
   const stickBottom = useRef(true);
-  /** M1 全链路测试发起弹窗：状态提升到 uiStore（V5.4 侧栏入口与输入框图标共用） */
-  const e2eOpen = useUiStore((s) => s.e2eModalOpen);
-  const setE2eOpen = (v: boolean) =>
-    v ? useUiStore.getState().openE2eModal() : useUiStore.getState().closeE2eModal();
 
   // 自动滚底：消息变化 + 流式增量
   useEffect(() => {
@@ -241,7 +235,7 @@ export default function ChatPanel({
                 <span className="qc-title">输入场景</span>
                 <span className="qc-desc">直接描述你的业务场景</span>
               </button>
-              <button className="quick-card" type="button" onClick={() => setE2eOpen(true)}>
+              <button className="quick-card" type="button" onClick={() => window.dispatchEvent(new CustomEvent("nav-to", { detail: "e2e" }))}>
                 <Globe size={18} />
                 <span className="qc-title">全链路测试</span>
                 <span className="qc-desc">输入网址自动抓取生成用例</span>
@@ -319,8 +313,7 @@ export default function ChatPanel({
               className="icon-btn"
               type="button"
               title="🌐 全链路测试：输入网址，AI 自动抓取页面并生成用例"
-              disabled={streaming}
-              onClick={() => setE2eOpen(true)}
+              onClick={() => window.dispatchEvent(new CustomEvent("nav-to", { detail: "e2e" }))}
             >
               <Globe size={20} />
             </button>
@@ -409,8 +402,6 @@ export default function ChatPanel({
           </div>
         </div>
       </div>
-      {/* M1 全链路测试发起弹窗 */}
-      <E2ETaskModal open={e2eOpen} onClose={() => setE2eOpen(false)} />
     </div>
   );
 }

@@ -20,7 +20,7 @@ import { useTaskStore } from "./store/taskStore";
 import { useSettingsStore } from "./store/settingsStore";
 import { useCategoryStore } from "./store/categoryStore";
 import ChatPanel from "./components/chat/ChatPanel";
-import { useUiStore } from "./store/uiStore";
+import E2EPage from "./pages/E2EPage";
 import ConversationPicker from "./components/chat/ConversationPicker";
 import SelfCheckToast from "./components/SelfCheckToast";
 import TaskList from "./components/task/TaskList";
@@ -31,7 +31,7 @@ import AdminPage from "./pages/AdminPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import QualityPage from "./pages/QualityPage";
 
-type View = "main" | "settings" | "models" | "admin" | "knowledge" | "quality";
+type View = "main" | "settings" | "models" | "admin" | "knowledge" | "quality" | "e2e";
 
 const GITHUB_REPO = "https://github.com/XuePengJu/ai-testflow";
 
@@ -105,7 +105,7 @@ export default function App() {
   useEffect(() => {
     const h = (e: Event) => {
       const d = (e as CustomEvent<string>).detail;
-      if (d === "main" || d === "settings" || d === "models" || d === "admin" || d === "knowledge" || d === "quality") setView(d);
+      if (d === "main" || d === "settings" || d === "models" || d === "admin" || d === "knowledge" || d === "quality" || d === "e2e") setView(d);
     };
     window.addEventListener("nav-to", h);
     return () => window.removeEventListener("nav-to", h);
@@ -168,9 +168,10 @@ export default function App() {
 
         <div className="rl-group">工作区</div>
         {railBtn("main", <MessageSquare />, "用例设计", true, { active: view === "main", onClick: () => setView("main"), aria: "用例设计 · 测试工作台", ico: "i-chat" })}
-        {/* V5.4：全链路测试入口从聊天输入框小图标提升到侧栏（辨识度）；先切回主视图再弹窗 */}
+        {/* V5.4：全链路测试升为独立整页入口（原聊天输入框弹窗废弃）；全角色可见 */}
         {railBtn("e2e", <Globe />, "全链路测试", true, {
-          onClick: () => { setView("main"); useUiStore.getState().openE2eModal(); },
+          active: view === "e2e",
+          onClick: () => setView("e2e"),
           aria: "全链路测试 · 输入网址 AI 自动生成用例", ico: "i-e2e",
         })}
         {railBtn("knowledge", <BookOpen />, "知识库", canKb, { active: view === "knowledge", onClick: () => setView("knowledge"), aria: role === "guest" ? "知识库（访客 · 只读共享库）" : "知识库 · 文档与问答", ico: "i-kb" })}
@@ -261,6 +262,7 @@ export default function App() {
         )}
         {view === "knowledge" && <KnowledgePage />}
         {view === "quality" && <QualityPage />}
+        {view === "e2e" && <E2EPage />}
         {view === "models" && <ModelConfigPage />}
         {view === "settings" && <SettingsPage />}
         {view === "admin" && <AdminPage />}

@@ -1,14 +1,15 @@
 /**
- * M1 全链路测试发起弹窗：输入被测系统 URL（可选登录账密）→ kind=e2e / kind=explore 任务。
- * M5 增量：任务类型切换（全链路测试 e2e 默认 / 探索式测试 explore），复用 url/账密字段。
- * 自包含组件：类型 inline 定义（client.ts/types.ts 为共享文件，本 Modal 不改），
- * 请求走现有 apiJson 通用封装；需要新增的共享条目见 docs/handoff-M1-frontend-shared.md。
+ * V5.4 全链路测试页：原 M1/M5 发起弹窗升级为独立整页（老板拍板：不做弹窗，做新入口）。
+ * - 表单逻辑与原 E2ETaskModal 一致：类型切换（e2e/explore）→ 任务名 → 已存被测系统或手填
+ *   网址 + 可选账密 → POST /tasks → 跳回用例设计视图看任务进度。
+ * - 全角色可用（访客受后端任务配额约束）。
+ * - 自包含 inline 类型定义（原 Modal 惯例，不动共享 types.ts）。
  */
 import { useEffect, useState } from "react";
-import { Globe, X } from "lucide-react";
-import { API, apiJson, toast } from "../../api/client";
-import { useTaskStore } from "../../store/taskStore";
-import { useChatStore } from "../../store/chatStore";
+import { Globe } from "lucide-react";
+import { API, apiJson, toast } from "../api/client";
+import { useTaskStore } from "../store/taskStore";
+import { useChatStore } from "../store/chatStore";
 
 /** 与后端 TargetOut 对齐（inline 最小集） */
 interface TargetItem {
@@ -32,7 +33,18 @@ const KIND_OPTIONS: { value: string; label: string; hint: string }[] = [
   { value: "explore", label: "探索式测试", hint: "AI Agent 自主探索页面 → 生成用例" },
 ];
 
-export default function E2ETaskModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+const inputStyle = {
+  padding: "11px 12px",
+  border: "1px solid #dcdfe6",
+  borderRadius: 8,
+  fontSize: 14,
+  background: "#fff",
+  outline: "none",
+  width: "100%",
+  boxSizing: "border-box",
+} as const;
+
+export default function E2EPage() {
   const [targets, setTargets] = useState<TargetItem[]>([]);
   const [targetId, setTargetId] = useState("");
   const [name, setName] = useState("");
@@ -45,13 +57,10 @@ export default function E2ETaskModal({ open, onClose }: { open: boolean; onClose
   // 当前会话 id：非空时随任务提交，任务与消息落进该会话（左侧列表立即可见）
   const conversationId = useChatStore((s) => s.conversationId);
 
-  // 每次打开拉一次已保存的被测系统列表（新→旧）
+  // 进页拉一次已保存的被测系统列表（新→旧）
   useEffect(() => {
-    if (!open) return;
     void apiJson<TargetItem[]>(`${API}/targets`).then((rows) => setTargets(rows || []));
-  }, [open]);
-
-  if (!open) return null;
+  }, []);
 
   function reset(): void {
     setTargetId("");
@@ -86,42 +95,26 @@ export default function E2ETaskModal({ open, onClose }: { open: boolean; onClose
     toast(kind === "explore" ? "探索式任务已提交：AI Agent 将自主探索页面并生成用例" : "全链路任务已提交：抓取页面 → 生成用例");
     void useChatStore.getState().refreshConversations();
     reset();
-    onClose();
     const ts = useTaskStore.getState();
     void ts.refresh();
     ts.startPolling(task.id);
+    // 跳回用例设计视图：任务卡在会话流里实时可见
+    window.dispatchEvent(new CustomEvent("nav-to", { detail: "main" }));
   }
 
   return (
-    <div className="auth-overlay" onClick={onClose}>
-      <div
-        className="auth-modal"
-        style={{ width: 420 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h2 style={{ margin: 0 }}>
-            <Globe size={18} style={{ verticalAlign: "-3px", marginRight: 6 }} />
-            全链路测试
-          </h2>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="关闭"
-            onClick={onClose}
-            style={{ border: "none", background: "transparent", cursor: "pointer" }}
-          >
-            <X size={18} />
-          </button>
-        </div>
-        <p className="m1-hint" style={{ margin: 0 }}>
-          {kind === "explore"
-            ? "AI Agent 将自主打开被测系统、逐步探索页面功能并生成测试用例（可选登录账密）。"
-            : "填入被测 Web 系统地址，AI 自动抓取页面结构、拆解测试点并生成测试用例（可选登录账密）。"}
-        </p>
+    <div className="page-wrap" data-testid="e2e-page">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <Globe size={20} aria-hidden="true" />
+        <h2 style={{ margin: 0 }}>全链路测试</h2>
+      </div>
+      <div className="sub" style={{ marginBottom: 18 }}>
+        填入被测 Web 系统地址，AI 自动抓取页面结构、拆解测试点并生成测试用例（可选登录账密）。
+      </div>
 
+      <div style={{ maxWidth: 560, display: "flex", flexDirection: "column", gap: 12 }}>
         {/* 任务类型切换（M5：explore 复用同一套 url/账密字段，默认仍为 e2e） */}
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 10 }}>
           {KIND_OPTIONS.map((opt) => {
             const active = kind === opt.value;
             return (
@@ -132,19 +125,19 @@ export default function E2ETaskModal({ open, onClose }: { open: boolean; onClose
                 onClick={() => setKind(opt.value)}
                 style={{
                   flex: 1,
-                  padding: "8px 10px",
-                  borderRadius: 8,
+                  padding: "12px 14px",
+                  borderRadius: 10,
                   border: active ? "1.5px solid #165dff" : "1px solid #dcdfe6",
                   background: active ? "#e8f3ff" : "#fff",
                   color: active ? "#165dff" : "#4e5969",
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: active ? 600 : 400,
                   cursor: "pointer",
                   textAlign: "left",
                 }}
               >
                 {opt.label}
-                <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: active ? "#165dff" : "#8f959e" }}>
+                <div style={{ fontSize: 12, fontWeight: 400, marginTop: 3, color: active ? "#165dff" : "#8f959e" }}>
                   {opt.hint}
                 </div>
               </button>
@@ -156,16 +149,14 @@ export default function E2ETaskModal({ open, onClose }: { open: boolean; onClose
           placeholder="任务名称（可选，默认取网址）"
           value={name}
           onChange={(e) => setName(e.target.value)}
+          style={inputStyle}
         />
 
         {!!targets.length && (
           <select
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
-            style={{
-              padding: "10px 12px", border: "1px solid #dcdfe6", borderRadius: 8,
-              fontSize: 14, background: "#fff", outline: "none",
-            }}
+            style={inputStyle}
           >
             <option value="">— 手动填写网址 —</option>
             {targets.map((t) => (
@@ -183,12 +174,14 @@ export default function E2ETaskModal({ open, onClose }: { open: boolean; onClose
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") void doSubmit(); }}
+              style={inputStyle}
             />
             <input
               placeholder="登录账号（可选）"
               value={username}
               autoComplete="off"
               onChange={(e) => setUsername(e.target.value)}
+              style={inputStyle}
             />
             <input
               placeholder="登录密码（可选）"
@@ -196,11 +189,18 @@ export default function E2ETaskModal({ open, onClose }: { open: boolean; onClose
               value={password}
               autoComplete="new-password"
               onChange={(e) => setPassword(e.target.value)}
+              style={inputStyle}
             />
           </>
         )}
 
-        <button className="auth-btn" type="button" disabled={submitting} onClick={() => void doSubmit()}>
+        <button
+          className="auth-btn"
+          type="button"
+          disabled={submitting}
+          style={{ maxWidth: 240 }}
+          onClick={() => void doSubmit()}
+        >
           {submitting ? "提交中…" : kind === "explore" ? "🧭 开始探索式测试" : "🌐 开始全链路测试"}
         </button>
       </div>
