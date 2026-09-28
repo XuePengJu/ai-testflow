@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from sqlalchemy.orm import Session
 
 from app.models.knowledge import Chunk, Knowledge, KnowledgeBase
@@ -20,6 +21,72 @@ logger = logging.getLogger("knowledge.ingest")
 
 class IngestError(RuntimeError):
     """入库失败（内容已部分写入时调用方负责清理）。"""
+
+
+# LLM 偶尔会给摘要裹 ```json 代码围栏，解析前剥掉
+_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+# 截断修复：非法 JSON 但明确是 {"summary": " 开头的形状
+_SUMMARY_PREFIX_RE = re.compile(r'^\{\s*"summary"\s*:\s*"')
+
+
+def _repair_truncated_summary(s: str) -> str:
+    """修复被截断的 {"summary": "...} 形状 JSON（LLM 输出被 max_tokens 截断的存量脏数据）。
+
+    仅当原文以 {"summary": " 开头且 JSON 解析已失败时才走这里；剥掉前缀/残缺
+    收尾并反转义，剥完为空则返回原文（宁可多不可丢）。
+    """
+    m = _SUMMARY_PREFIX_RE.match(s)
+    if not m:
+        return s
+    body = s[m.end():].rstrip()
+    if body.endswith("}"):
+        body = body[:-1].rstrip()
+    if body.endswith('"'):
+        body = body[:-1]
+    # 反转义 JSON 字符串中的常见转义（截断文本里可能残留）
+    body = (body.replace("\\/", "/").replace('\\"', '"')
+                .replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\"))
+    return body if body.strip() else s
+
+
+def extract_summary_text(raw: str | None) -> str:
+    """从 LLM 返回的摘要原文中提取纯文本摘要（入库前兜底清洗）。
+
+    问题背景：LLM 有时把摘要包成 ``{"summary": "..."}`` 形状的 JSON 字符串
+    整段返回，直接入库后前端会把原始 JSON 当摘要展示。
+
+    规则：
+    - 空值 → 空串；
+    - 非 JSON 形状（不以 ``{`` 开头）→ 原文返回；
+    - 是 ``{"summary": ...}`` 形状 → 取 summary 字段；
+      - summary 值还是字符串且本身又是 ``{"summary": ...}``（双重编码）→ 递归剥壳；
+      - summary 值是其他 dict/list → 序列化为可读 JSON 文本；
+    - JSON 解析失败：
+      - 若是 ``{"summary": "`` 开头的截断形状 → 修复剥壳（_repair_truncated_summary）；
+      - 否则兜底返回原文（宁可多不可丢）。
+    """
+    if not raw:
+        return ""
+    s = _FENCE_RE.sub("", raw.strip()).strip()
+    if not (s.startswith("{") and s.endswith("}")) and not _SUMMARY_PREFIX_RE.match(s):
+        return s
+    try:
+        data = json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        return _repair_truncated_summary(s)
+    if not isinstance(data, dict) or "summary" not in data:
+        return s
+    val = data["summary"]
+    if isinstance(val, str):
+        # 双重编码：值本身可能又是一个 {"summary": ...} JSON 字符串
+        return extract_summary_text(val)
+    if isinstance(val, dict) and "summary" in val:
+        return extract_summary_text(json.dumps(val, ensure_ascii=False))
+    if val is None:
+        return ""
+    if isinstance(val, (dict, list)):
+        return json.dumps(val, ensure_ascii=False)
+    return str(val)
 
 
 def _update_status(db: Session, knowledge: Knowledge, status: str,

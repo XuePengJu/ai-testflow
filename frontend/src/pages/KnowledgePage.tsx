@@ -39,6 +39,35 @@ interface Hit { id: string; score: number; document: string; metadata: Record<st
 
 const cleanTitle = (t: string) => (t || "").replace(/^\d+[_\-\s]*/, "").replace(/\.[^.]+$/, "");
 
+/**
+ * 摘要展示兜底：存量数据里 wiki_summary 可能存的是 {"summary": "..."} 形状的
+ * 原始 JSON（LLM 返回整段入库的历史脏数据），展示前解析取纯文本。
+ * 与后端 app/services/knowledge/ingest.py:extract_summary_text 同口径。
+ */
+function extractSummaryText(raw?: string | null): string {
+  const s = (raw || "").trim();
+  if (!s.startsWith("{")) return s;
+  try {
+    const data = JSON.parse(s) as { summary?: unknown };
+    if (data && typeof data === "object" && "summary" in data) {
+      const v = data.summary;
+      if (typeof v === "string") return extractSummaryText(v);
+      if (v == null) return "";
+      if (typeof v === "object") return extractSummaryText(JSON.stringify(v));
+      return String(v);
+    }
+  } catch {
+    /* 截断/非法 JSON：剥 {"summary": " 前缀做尽力修复，失败原文展示 */
+    const m = s.match(/^\{\s*"summary"\s*:\s*"(.*)$/s);
+    if (m) {
+      const body = m[1].replace(/\s*\}\s*$/, "").replace(/"\s*$/, "")
+        .replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      if (body.trim()) return body;
+    }
+  }
+  return s;
+}
+
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   ready: { label: "已入库", cls: "ok" },
   failed: { label: "失败", cls: "err" },
@@ -341,7 +370,7 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
               </div>
               {d.parse_status === "failed" && d.error_message
                 ? <div className="dc-summary err-text" title={d.error_message}>{d.error_message.slice(0, 90)}</div>
-                : d.wiki_summary && <div className="dc-summary">{d.wiki_summary}</div>}
+                : d.wiki_summary && <div className="dc-summary">{extractSummaryText(d.wiki_summary)}</div>}
               <div className="dc-meta">
                 <span>{d.chunk_count} 片段</span>
                 <span>{(d.file_type || "—").toUpperCase()}</span>
@@ -364,9 +393,9 @@ function DocMetaPanel({ doc }: { doc: Doc }) {
     Object.entries(d.custom_meta || {}).map(([key, value]) => ({ key, value: String(value) }));
   const [metaFields, setMetaFields] = useState<{ key: string; value: string }[]>(() => toFields(doc));
   const [metaEditing, setMetaEditing] = useState(false);
-  const [summary, setSummary] = useState(doc.wiki_summary || "");
+  const [summary, setSummary] = useState(() => extractSummaryText(doc.wiki_summary));
   const [summaryEditing, setSummaryEditing] = useState(false);
-  const [summaryText, setSummaryText] = useState(doc.wiki_summary || "");
+  const [summaryText, setSummaryText] = useState(() => extractSummaryText(doc.wiki_summary));
   const [busy, setBusy] = useState(false);
 
   const fmtTime = (t?: string | null) => (t ? t.replace("T", " ").slice(0, 16) : "—");
@@ -384,14 +413,14 @@ function DocMetaPanel({ doc }: { doc: Doc }) {
     setBusy(true); toast("正在用文本模型生成摘要…");
     const r = await apiJson<{ wiki_summary?: string }>(`/api/knowledge/documents/${doc.id}/summary`, { method: "POST" });
     setBusy(false);
-    if (r) { setSummary(r.wiki_summary || ""); setSummaryText(r.wiki_summary || ""); toast("摘要已生成"); }
+    if (r) { const t = extractSummaryText(r.wiki_summary); setSummary(t); setSummaryText(t); toast("摘要已生成"); }
   };
   const saveSummary = async () => {
     setBusy(true);
     const r = await apiJson<{ wiki_summary?: string }>(`/api/knowledge/documents/${doc.id}/summary`,
       { method: "PUT", body: JSON.stringify({ summary: summaryText }) });
     setBusy(false);
-    if (r) { setSummary(r.wiki_summary || summaryText); setSummaryEditing(false); toast("摘要已保存"); }
+    if (r) { setSummary(extractSummaryText(r.wiki_summary) || summaryText); setSummaryEditing(false); toast("摘要已保存"); }
   };
 
   return (
@@ -735,7 +764,7 @@ function WikiTab({ kb }: { kb: KB }) {
                   <div className="wiki-item-title">{cleanTitle(s.title)}</div>
                   <span className="wiki-cat-tag" style={{ background: (catColor(c)) + "1a", color: catColor(c) }}>{c}</span>
                 </div>
-                <div className="wiki-item-summary">{s.summary || "（暂无摘要，点「重新生成 Wiki 索引」生成）"}</div>
+                <div className="wiki-item-summary">{extractSummaryText(s.summary) || "（暂无摘要，点「重新生成 Wiki 索引」生成）"}</div>
                 <div className="wiki-item-foot">
                   <span>{s.chunk_count} 个片段</span>
                   {s.file_type && <span className="ft">{s.file_type.toUpperCase()}</span>}

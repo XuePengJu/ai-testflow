@@ -32,6 +32,7 @@ from app.services.knowledge.ingest import (
     IngestError,
     delete_document_vectors,
     doc_summary,
+    extract_summary_text,
     ingest_document,
     visible_kb_ids,
 )
@@ -457,7 +458,8 @@ async def regen_doc_summary(
         raise HTTPException(status_code=400, detail="文档暂无分块，无法生成摘要")
     text = "\n".join((c.content or "")[:500] for c in chunks[:10])
     ai = await _llm_summarize(db, user, text, doc.title)
-    doc.wiki_summary = ai.get("summary", "")
+    # 兜底清洗：LLM 可能返回 {"summary": "..."} 形状的 JSON 字符串，入库前剥壳
+    doc.wiki_summary = extract_summary_text(ai.get("summary", ""))
     doc.wiki_category = ai.get("category") or doc.wiki_category or "未分类"
     db.commit()
     return doc_summary(doc)
@@ -751,15 +753,16 @@ async def wiki_index_kb(kb_id: str, db: Session = Depends(get_db), user: User = 
         # 清洗标题：去掉 01_、02_ 前缀
         import re
         clean_title = re.sub(r'^\d+[_\-\s]*', '', doc.title or doc.file_name or "")
-        # 落库（摘要 + AI 主题分类）
-        doc.wiki_summary = ai["summary"]
+        # 落库（摘要 + AI 主题分类）；extract_summary_text 兜底剥 {"summary":...} 壳
+        summary_text = extract_summary_text(ai["summary"])
+        doc.wiki_summary = summary_text
         doc.wiki_category = ai.get("category") or "未分类"
         db.commit()
         results.append({
             "doc_id": doc.id,
             "title": clean_title,
             "raw_title": doc.title,
-            "summary": ai["summary"],
+            "summary": summary_text,
             "category": ai["category"],
             "chunk_count": len(chunks),
         })
