@@ -5,7 +5,8 @@
  *   ③ 退出 → 弹登录框
  *   ④ admin 登录（明文直通角色）→ rail 显示管理员
  *   ⑤ 退出 → 注册新 user（注册接口返回密文，加密链路）→ rail 显示用户
- *   ⑥ 全程 0 JS 错误
+ *   ⑥ 清理钩子：admin API 删除本次注册的测试账号（防 e2e 残留累积）
+ *   ⑦ 全程 0 JS 错误
  * 截图落档 /tmp/e2e-m1/
  *
  * 运行：node scripts/e2e-m1-browser.mjs（M1_URL 默认 http://localhost:8000，需后端已启动）
@@ -54,6 +55,7 @@ async function railIdentity(timeout = 10000) {
 
 // ⑤ 注册时标记已有响应数，注册后的新增响应用于 user 加密断言
 let apiCountBeforeRegister = 0;
+let uname = ""; // 本次注册的测试账号名（⑥ 清理钩子用）
 const regP = Promise.resolve(null);
 
 try {
@@ -96,7 +98,7 @@ try {
   await page.waitForSelector(".auth-modal", { timeout: 8000 });
   apiCountBeforeRegister = apiBodies.length;
   await page.click(".auth-tabs button >> nth=1"); // 注册 tab
-  const uname = "m1verify" + Date.now().toString(36);
+  uname = "m1verify" + Date.now().toString(36); // 本次注册的测试账号名（⑥ 清理钩子用）
   await page.fill('.auth-modal input[placeholder="用户名"]', uname);
   await page.fill('.auth-modal input[placeholder="邮箱"]', `${uname}@163.com`);
   await page.fill('.auth-modal input[placeholder="密码"]', "Passw0rd123");
@@ -121,6 +123,28 @@ try {
   if (encUser) ok("⑤ user 登录态业务接口返回 enc 密文（加密链路）");
   else fail("⑤ user 加密链路异常", "注册后响应无 enc 密文");
   await page.screenshot({ path: `${SHOT_DIR}/5-user-crypto-check.png`, fullPage: true });
+
+  // ⑥ 清理钩子：admin API 删除本次注册的测试账号（注册→测完→删号，不残留）
+  try {
+    const lr = await fetch(`${URL}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ username: "admin", password: "Admin@123" }),
+    });
+    if (!lr.ok) throw new Error("admin 登录失败 HTTP " + lr.status);
+    const auth = "Bearer " + ((await lr.json()).access_token || "");
+    const users = await (await fetch(`${URL}/api/users`, { headers: { Authorization: auth } })).json();
+    const target = (Array.isArray(users) ? users : []).find((u) => u.username === uname);
+    if (!target) throw new Error("未找到本次注册的账号 " + uname);
+    const dr = await fetch(`${URL}/api/users/${target.id}`, {
+      method: "DELETE",
+      headers: { Authorization: auth },
+    });
+    if (dr.ok) ok(`⑥ 清理钩子：测试账号 ${uname}（id=${target.id}）已删除`);
+    else fail("⑥ 清理钩子失败", `删除 HTTP ${dr.status}`);
+  } catch (e) {
+    fail("⑥ 清理钩子异常", String(e));
+  }
 
   if (errors.length) fail("JS 错误", errors.slice(0, 3).join(" | "));
   else ok("全程 0 JS 错误");
