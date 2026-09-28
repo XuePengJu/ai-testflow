@@ -8,7 +8,7 @@
  *   分组，可点击展开；当前正在使用的会话不归档，避免丢失入口。
  * V5.9：hover 操作组扩为 3 个——✏️ 重命名（行内编辑）/ ✨ AI 总结标题 / 🗑 删除。
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useChatStore } from "../../store/chatStore";
 import { useAuth } from "../../hooks/useAuth";
 import { Trash2, Plus, ChevronDown, ChevronRight, Pencil, Sparkles } from "lucide-react";
@@ -96,16 +96,44 @@ export default function ConversationPicker() {
 
   const startEdit = (c: Conv) => {
     // 编辑草稿取「展示标题」对应的原标题：低信息量标题时直接用原标题改
+    cancelRef.current = false;
     setEditingId(c.id);
     setEditTitle(c.title || "");
   };
 
+  /** 防双提交锁：Enter 提交进行中又触发 blur 时不再重复 PATCH */
+  const savingRef = useRef(false);
+  /** Esc 取消标记：输入框卸载瞬间若仍触发 blur，跳过提交 */
+  const cancelRef = useRef(false);
+
   const saveEdit = async () => {
     const id = editingId;
-    if (!id) return;
-    const ok = await renameConversation(id, editTitle);
-    if (ok) toast("已重命名");
-    setEditingId(null);
+    if (!id || savingRef.current) return;
+    savingRef.current = true;
+    try {
+      const ok = await renameConversation(id, editTitle);
+      if (ok) toast("已重命名");
+      setEditingId(null);
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  /**
+   * V5.9.2 blur 即提交：点击行外空白 / 切换会话 = 确认修改（同 Enter）。
+   * 空标题静默取消（不保留编辑态、不打扰）；Esc 取消走 onKeyDown 分支不经此。
+   */
+  const commitOnBlur = () => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      return;
+    }
+    if (!editingId || savingRef.current) return;
+    if (!editTitle.trim()) {
+      setEditingId(null);
+      return;
+    }
+    void saveEdit();
   };
 
   const aiRename = async (c: Conv) => {
@@ -153,8 +181,12 @@ export default function ConversationPicker() {
             onKeyDown={(e) => {
               e.stopPropagation();
               if (e.key === "Enter") void saveEdit();
-              if (e.key === "Escape") setEditingId(null);
+              if (e.key === "Escape") {
+                cancelRef.current = true;
+                setEditingId(null);
+              }
             }}
+            onBlur={commitOnBlur}
             onClick={(e) => e.stopPropagation()}
             maxLength={80}
             autoFocus
