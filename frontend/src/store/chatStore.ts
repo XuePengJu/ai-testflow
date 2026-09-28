@@ -119,6 +119,10 @@ interface ChatState {
   loadConversation: (id: string) => Promise<void>;
   newConversation: () => void;
   deleteConversation: (id: string) => Promise<void>;
+  /** V5.9 手动重命名会话（侧栏行内编辑） */
+  renameConversation: (id: string, title: string) => Promise<boolean>;
+  /** V5.9 AI 总结会话内容生成标题；返回 null=失败（toast 已提示），string=新标题 */
+  aiRenameConversation: (id: string) => Promise<string | null>;
   /** 打开任务所属会话并挂载迭代引用（详情页「继续优化」入口） */
   openIterate: (task: Task) => Promise<void>;
   clearIterRef: () => void;
@@ -332,6 +336,55 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await get().refreshConversations();
     const { useTaskStore } = await import("./taskStore");
     useTaskStore.getState().refresh();
+  },
+
+  async renameConversation(id, title) {
+    const t = title.trim();
+    if (!t) {
+      toast("标题不能为空");
+      return false;
+    }
+    const r = await api(API + "/conversations/" + id, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: t.slice(0, 80) }),
+    }).catch(() => null);
+    if (!r || !r.ok) {
+      toast("重命名失败");
+      return false;
+    }
+    const c = (await r.json()) as Conversation;
+    // 本地直接更新，避免整表刷新闪烁
+    set({
+      conversations: get().conversations.map((x) => (x.id === id ? { ...x, title: c.title } : x)),
+    });
+    return true;
+  },
+
+  async aiRenameConversation(id) {
+    const r = await api(API + "/conversations/" + id + "/ai-title", { method: "POST" }).catch(() => null);
+    if (!r || !r.ok) {
+      // 403/400 带业务提示（未配模型 / 空会话），读 detail 给准确反馈
+      let msg = "AI 生成标题失败";
+      try {
+        if (r) {
+          const j = (await r.json()) as { detail?: string };
+          if (j?.detail) msg = j.detail;
+        }
+      } catch { /* 忽略解析失败，用默认提示 */ }
+      toast(msg);
+      return null;
+    }
+    const j = (await r.json()) as { title?: string };
+    const title = j.title || "";
+    if (!title) {
+      toast("AI 未返回有效标题");
+      return null;
+    }
+    set({
+      conversations: get().conversations.map((x) => (x.id === id ? { ...x, title } : x)),
+    });
+    return title;
   },
 
   async send(text, draft) {

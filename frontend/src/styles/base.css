@@ -138,18 +138,32 @@ body {
 .hist-empty {
   color: #8f959e; font-size: 12px; text-align: center; padding: 32px 12px; line-height: 2;
 }
-.hist-item {
-  position: relative; padding: 8px 26px 8px 10px; border-radius: 8px; cursor: pointer;
-  border: 1px solid transparent;
-}
+.hist-item { position: relative; padding: 8px 64px 8px 10px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; }
 .hist-item:hover { background: #f5f7fa; }
 .hist-item.active { background: #e8f3ff; border-color: #bedaff; }
 .h-del {
   position: absolute; top: 8px; right: 6px; border: none; background: none; cursor: pointer;
   font-size: 12px; opacity: 0; padding: 2px;
 }
-.hist-item:hover .h-del, .task-item:hover .h-del { opacity: 0.7; }
-.h-del:hover { opacity: 1 !important; }
+/* V5.9 会话行 hover 操作组：✏️ 重命名 + ✨ AI 标题（与 .h-del 同风格，hover 淡入） */
+.h-op {
+  position: absolute; top: 8px; border: none; background: none; cursor: pointer;
+  font-size: 12px; opacity: 0; padding: 2px; color: inherit;
+}
+.h-op.h-ren { right: 27px; }
+.h-op.h-ai { right: 48px; }
+.hist-item:hover .h-op, .hist-item:hover .h-del, .task-item:hover .h-del { opacity: 0.7; }
+.h-op:hover, .h-del:hover { opacity: 1 !important; }
+.h-op.h-ai.busy { opacity: 1; pointer-events: none; }
+.h-op.h-ai.busy svg { animation: h-ai-spin 0.9s linear infinite; }
+@keyframes h-ai-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+/* V5.9 行内重命名输入框（覆盖标题行位置） */
+.h-edit {
+  width: 100%; box-sizing: border-box; padding: 2px 6px; font-size: 13px;
+  border: 1px solid #bedaff; border-radius: 6px; outline: none; background: #fff;
+}
+.hist-item:hover .h-edit, .hist-item:has(.h-edit) .h-op, .hist-item:has(.h-edit) .h-del { opacity: 0; }
 .h-name {
   font-size: 13px; color: #1f2329; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }

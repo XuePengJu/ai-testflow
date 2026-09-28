@@ -6,11 +6,13 @@
  *   （仅当前已加载会话有消息缓存）→ 语义化兜底名；
  * - 简短会话（总消息数 < 4，不足 2 轮）自动折叠进底部「已归档 · N 个简短会话」
  *   分组，可点击展开；当前正在使用的会话不归档，避免丢失入口。
+ * V5.9：hover 操作组扩为 3 个——✏️ 重命名（行内编辑）/ ✨ AI 总结标题 / 🗑 删除。
  */
 import { useState } from "react";
 import { useChatStore } from "../../store/chatStore";
 import { useAuth } from "../../hooks/useAuth";
-import { Trash2, Plus, ChevronDown, ChevronRight } from "lucide-react";
+import { Trash2, Plus, ChevronDown, ChevronRight, Pencil, Sparkles } from "lucide-react";
+import { toast } from "../../api/client";
 import { parseServerTime } from "../../utils/time";
 
 function fmtTime(s?: string | null): string {
@@ -81,9 +83,42 @@ export default function ConversationPicker() {
   const messages = useChatStore((s) => s.messages);
   const loadConversation = useChatStore((s) => s.loadConversation);
   const deleteConversation = useChatStore((s) => s.deleteConversation);
+  const renameConversation = useChatStore((s) => s.renameConversation);
+  const aiRenameConversation = useChatStore((s) => s.aiRenameConversation);
   const newConversation = useChatStore((s) => s.newConversation);
   const { token } = useAuth();
   const [archivedOpen, setArchivedOpen] = useState(false);
+  /** V5.9 行内重命名的会话 id 与草稿值 */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  /** V5.9 AI 生成标题中的会话 id（按钮转圈防重复点击） */
+  const [aiBusyId, setAiBusyId] = useState<string | null>(null);
+
+  const startEdit = (c: Conv) => {
+    // 编辑草稿取「展示标题」对应的原标题：低信息量标题时直接用原标题改
+    setEditingId(c.id);
+    setEditTitle(c.title || "");
+  };
+
+  const saveEdit = async () => {
+    const id = editingId;
+    if (!id) return;
+    const ok = await renameConversation(id, editTitle);
+    if (ok) toast("已重命名");
+    setEditingId(null);
+  };
+
+  const aiRename = async (c: Conv) => {
+    if (aiBusyId) return;
+    if (!c.message_count) {
+      toast("会话还没有内容，先发条消息再生成标题");
+      return;
+    }
+    setAiBusyId(c.id);
+    const t = await aiRenameConversation(c.id);
+    setAiBusyId(null);
+    if (t) toast(`已生成标题：${t}`);
+  };
 
   /**
    * 展示标题：低信息量标题时优先取首条用户消息摘要（当前会话有消息缓存时
@@ -103,12 +138,55 @@ export default function ConversationPicker() {
 
   const renderItem = (c: Conv) => {
     const shownTitle = displayTitle(c);
+    const editing = editingId === c.id;
     return (
       <div
         key={c.id}
         className={`hist-item ${c.id === currentId ? "active" : ""}`}
         onClick={() => void loadConversation(c.id)}
       >
+        {editing ? (
+          <input
+            className="h-edit"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") void saveEdit();
+              if (e.key === "Escape") setEditingId(null);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            maxLength={80}
+            autoFocus
+            aria-label="重命名会话"
+          />
+        ) : (
+          <div className="h-name" title={c.title && c.title !== shownTitle ? `原标题：${c.title}` : undefined}>
+            {shownTitle}
+          </div>
+        )}
+        <button
+          className="h-op h-ren"
+          title="重命名"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            startEdit(c);
+          }}
+        >
+          <Pencil size={13} />
+        </button>
+        <button
+          className={`h-op h-ai ${aiBusyId === c.id ? "busy" : ""}`}
+          title="AI 总结生成标题"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void aiRename(c);
+          }}
+        >
+          <Sparkles size={13} />
+        </button>
         <button
           className="h-del"
           title="删除会话"
@@ -124,9 +202,6 @@ export default function ConversationPicker() {
         >
           <Trash2 size={14} />
         </button>
-        <div className="h-name" title={c.title && c.title !== shownTitle ? `原标题：${c.title}` : undefined}>
-          {shownTitle}
-        </div>
         <div className="h-meta">
           <span>{c.message_count || 0} 条消息</span>
           {c.task_count ? (

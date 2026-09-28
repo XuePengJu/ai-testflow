@@ -4,8 +4,10 @@
 - 会话详情按 task_id 回填关联任务的节点步骤（StepLog）与用例（cases_json）
 - V4.1：会话带 mode（workflow/kb_qa）与 kb_id，列表支持 ?mode= 过滤，
   知识库问答会话与首页工作流会话互不污染
+- V5.9：PATCH 手动重命名 + POST ai-title（AI 总结生成标题，覆盖不准的首条截断标题）
 """
 import json
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,6 +41,11 @@ class MessageIn(BaseModel):
     # V4.5.2：可选引用溯源（JSON 数组，原样存文本）
     citations: list[dict] | None = None
     task_id: str | None = None
+
+
+class ConversationRenameIn(BaseModel):
+    """V5.9 手动重命名（长度在端点内 strip + 截断，超长不报 422 直接截）。"""
+    title: str = Field(min_length=1)
 
 
 def _own_conversation(db: Session, user: User, conv_id: str) -> Conversation:
@@ -149,6 +156,95 @@ def get_conversation(conv_id: str, user: User = Depends(get_current_user),
                      db: Session = Depends(get_db)):
     c = _own_conversation(db, user, conv_id)
     return _to_out(db, c, include_messages=True)
+
+
+@router.patch("/{conv_id}", response_model=ConversationOut)
+def rename_conversation(conv_id: str, body: ConversationRenameIn,
+                        user: User = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    """V5.9 手动重命名会话（侧栏行内编辑入口）。"""
+    c = _own_conversation(db, user, conv_id)
+    t = body.title.strip()[:80]
+    if not t:
+        raise HTTPException(status_code=400, detail="标题不能为空")
+    c.title = t
+    c.updated_at = utcnow()
+    db.commit()
+    db.refresh(c)
+    return _to_out(db, c)
+
+
+# ---- V5.9 AI 总结标题 ----
+
+# 标题清洗：去掉包裹引号 / 换行 / 句号结尾；截断到 30 字防侧栏溢出
+_TITLE_JUNK_RE = re.compile(r"[「」『』\"'“”‘’`*_#\n\r\t]")
+_TITLE_TRAIL_RE = re.compile(r"[。．.！!？?，,；;：:\s]+$")
+_TITLE_MAX = 30
+
+
+def _clean_title(raw: str) -> str:
+    t = _TITLE_JUNK_RE.sub("", raw or "").strip()
+    t = _TITLE_TRAIL_RE.sub("", t)
+    return t[:_TITLE_MAX]
+
+
+def _build_title_prompt(msgs: list[Message]) -> str:
+    """把前几轮消息压成紧凑 transcript（每条截 300 字），控制 token 花销。"""
+    lines = []
+    for m in msgs[:8]:
+        content = re.sub(r"\s+", " ", (m.content or "")).strip()[:300]
+        if not content:
+            continue
+        role = "用户" if m.role == "user" else "AI"
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
+@router.post("/{conv_id}/ai-title")
+def ai_title_conversation(conv_id: str,
+                          user: User = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """V5.9 AI 总结会话内容生成标题并直接覆盖（标题不准的根治入口）。
+
+    - 取该会话前 8 条消息（每条截 300 字）→ LLM 生成 ≤15 字中文标题
+    - enable_thinking=False：结构化短输出，思考只会拖慢且退化正文（项目实测结论）
+    - 未配模型 / mock → 400 提示；无消息 → 400 提示
+    """
+    c = _own_conversation(db, user, conv_id)
+    msgs = db.execute(
+        select(Message).where(Message.conversation_id == conv_id).order_by(Message.id)
+    ).scalars().all()
+    if not msgs:
+        raise HTTPException(status_code=400, detail="会话还没有内容，先发条消息再生成标题")
+
+    from app.services.llm_service import resolve_effective
+    from app.services.langchain_client import LangChainClient, LLMError
+
+    eff = resolve_effective(db, user)
+    text_cfg = eff.get("text")
+    if not text_cfg or not text_cfg.get("api_key"):
+        raise HTTPException(status_code=400, detail="未配置可用模型，请先到【模型配置】设置")
+
+    prompt = (
+        "根据以下测试平台的会话对话内容，总结一个简洁准确的中文标题。\n"
+        "要求：不超过15个字；不加引号、句号或任何前后缀；"
+        "概括用户要做的事情（如「采购入库单库存校验测试」）。\n\n"
+        f"对话内容：\n{_build_title_prompt(msgs)}\n\n只输出标题本身，不要任何解释。"
+    )
+    try:
+        client = LangChainClient(text_cfg["base_url"], text_cfg["api_key"], text_cfg["model"])
+        raw = client.chat(
+            [{"role": "user", "content": prompt}],
+            temperature=0.2, max_tokens=64, timeout=30, enable_thinking=False,
+        )
+    except LLMError as e:
+        raise HTTPException(status_code=502, detail=f"模型调用失败：{e}")
+
+    title = _clean_title(raw) or c.title or "新会话"
+    c.title = title
+    c.updated_at = utcnow()
+    db.commit()
+    return {"ok": True, "title": title}
 
 
 @router.post("/{conv_id}/messages", response_model=MessageOut, status_code=201)
