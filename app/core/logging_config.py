@@ -10,6 +10,7 @@
 - 幂等：root 上已挂同一个日志文件 handler 时直接返回，重复调用无副作用。
 """
 import logging
+import os
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
@@ -48,18 +49,20 @@ def _existing_file_handler(root: logging.Logger, log_dir: Path) -> TimedRotating
     return None
 
 
-def setup_logging(log_dir: str | Path = "logs", level: str | None = None) -> None:
+def setup_logging(log_dir: str | Path | None = None, level: str | None = None) -> None:
     """初始化应用日志（幂等，可在进程生命周期内重复调用）。
 
     Args:
-        log_dir: 日志目录，默认项目根下 `logs/`（单测传临时目录隔离）。
+        log_dir: 日志目录。缺省依次读环境变量 AITF_LOG_DIR（测试进程重定向用，
+                 见根目录 conftest.py）、再回落项目根下 `logs/`；
+                 单测可显式传临时目录隔离。
         level:   日志级别名（DEBUG/INFO/...），缺省读 LOG_LEVEL 环境变量，
                  再缺省 INFO。非法值回落 INFO。
     """
     level_name = (level or LOG_LEVEL or "INFO").strip().upper()
     numeric_level = getattr(logging, level_name, logging.INFO)
 
-    log_path = Path(log_dir)
+    log_path = Path(log_dir or os.environ.get("AITF_LOG_DIR", "logs"))
     root = logging.getLogger()  # root logger（不带名字参数）
 
     # 幂等：app.log 已挂 handler → 只同步级别，不再追加（避免测试/热重载双写）
