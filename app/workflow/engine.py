@@ -384,9 +384,14 @@ def run_task(task_id: str) -> None:
                         )
                         db.commit()
 
+                    # V5.10：任务属主在「提示词」弹窗自定义的生成模板 → 注入优先于内置
+                    def _template_loader(kind: str, role: str) -> str | None:
+                        from app.services import prompt_service
+                        return prompt_service.get_gen_override(db, task.user_id, kind, role)
+
                     out, summary, details = fn(
                         data["units"], llm_client, model_desc, _progress,
-                        getattr(task, "roles", None))
+                        getattr(task, "roles", None), template_loader=_template_loader)
                 elif name == "reviewer":
                     out, summary, details = fn(data["cases"], llm_client)
                 elif name == "scripter":

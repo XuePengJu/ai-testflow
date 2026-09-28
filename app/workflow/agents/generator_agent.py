@@ -13,12 +13,13 @@ from src.generator.case_generator import ROLE_LABELS, parse_roles
 
 
 def run_generator(units: list[RequirementUnit], client=None, model_desc: str = "",
-                  progress_cb=None, roles=None):
+                  progress_cb=None, roles=None, template_loader=None):
     role_list = parse_roles(roles)
     role_note = "、".join(ROLE_LABELS.get(r, r) for r in role_list)
     meta: dict = {}
     cases: list[TestCase] = lib_generate(units, client=client, progress_cb=progress_cb,
-                                         roles=role_list, out_meta=meta)
+                                         roles=role_list, out_meta=meta,
+                                         template_loader=template_loader)
     model_note = model_desc or "未配置可用模型，当前为模拟生成，请到【模型设置】配置真实模型"
     # 统计每个测试点生成多少条用例
     case_count_by_unit = Counter()

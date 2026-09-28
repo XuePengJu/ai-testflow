@@ -26,6 +26,7 @@ from app.services.langchain_client import (
     _NO_THINKING_PARAM,
 )
 from app.services import llm_pool  # V5.0 P1 多模型池（llm_pool 内部延迟 import 本模块，无循环）
+from app.services import prompt_service  # V5.10 提示词自定义（prompt_service 引用本模块的默认提示词，仅函数内调用，无循环）
 
 # 服务器环境变量兜底（兼容老部署：.env 里的 DASHSCOPE_API_KEY）
 _BAILIAN_COMPAT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -326,15 +327,19 @@ def _system_prompt_for(role: str, want_thinking: bool) -> str:
 
 
 def _build_messages(user_text: str, history: list | None, attached_text: str,
-                    want_thinking: bool = True, role: str = "qa") -> list:
+                    want_thinking: bool = True, role: str = "qa",
+                    db: Session | None = None, user_id: int | None = None) -> list:
     """组装 messages：system + history + 当前用户消息（附加上下文拼在消息里）。
 
     attached_text 承载两类内容：迭代任务摘要、用户上传文档的正文。
     上限 6000 字与解析链路（_ai_parse_business）保持一致，避免长文档把上下文打爆。
     want_thinking=False 时换用不含思考要求的系统提示词（光靠参数关不掉标签输出）。
     role：AI 回复身份（qa/pm/dev），默认 qa。
+    V5.10：用户在「提示词」弹窗自定义了该角色变体 → 整段覆盖内置默认。
     """
-    msgs = [{"role": "system", "content": _system_prompt_for(role, want_thinking)}]
+    override = prompt_service.get_chat_override(db, user_id, role, want_thinking)
+    system_prompt = override if override else _system_prompt_for(role, want_thinking)
+    msgs = [{"role": "system", "content": system_prompt}]
     if history:
         msgs.extend(history[-10:])  # 截断最多 10 轮避免超 token
     user_content = user_text or "（用户仅发送了附件，请结合下方的文档内容作答）"
@@ -515,7 +520,8 @@ async def chat_stream(
         role = "kb"
     else:
         role = next((r for r in (roles or []) if r in _ROLE_IDENTITY), "qa")
-    messages = _build_messages(user_text or "", history, attached_text, enable_thinking, role=role)
+    messages = _build_messages(user_text or "", history, attached_text, enable_thinking,
+                               role=role, db=db, user_id=user.id if user else None)
     if not use_real:
         # 演示模式（AITF_ALLOW_DEMO=1）才走旧演示话术；默认不静默兜底
         if config.AITF_ALLOW_DEMO:

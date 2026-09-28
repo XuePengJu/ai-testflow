@@ -104,19 +104,27 @@ def parse_cases_detailed(text: str) -> tuple[list[TestCase], dict]:
 
 
 class CaseGenerator:
-    def __init__(self, client=None, roles=None):
+    def __init__(self, client=None, roles=None, template_loader=None):
         """client：平台注入的 LLM 客户端（OpenAI 兼容）。
 
         未注入（无可用模型）时：AITF_ALLOW_DEMO=1 → mock 演示兜底；
         否则抛 NoModelError，绝不自动调用环境里的百炼 Key（避免无效 Key 直接 401 报错）。
-        roles：参与生成的角色列表（pm/qa/dev），默认 ["qa"]。"""
+        roles：参与生成的角色列表（pm/qa/dev），默认 ["qa"]。
+        template_loader：可选自定义模板加载器 callable(kind, role) -> str | None（V5.10）。
+        返回非空字符串则用作用例生成模板（用户在平台「提示词」弹窗自定义），
+        返回 None/空则回落内置 prompts 文件默认模板。"""
         self.injected = client
         self.roles = parse_roles(roles)
+        self.template_loader = template_loader
         # 「模型调用成功但没解析出用例」的测试点清单（供上层显性提示，不再静默丢）
         self.parse_failures: list[dict] = []
         self.last_diag: dict = {}
 
     def _load_template(self, kind: str, role: str = "qa") -> str:
+        if self.template_loader:
+            custom = self.template_loader(kind, role)
+            if custom and custom.strip():
+                return custom
         suffix = _ROLE_TPL_SUFFIX.get(role, "")
         fname = f"api_case{suffix}.txt" if kind in ("api", "action") else f"requirement_case{suffix}.txt"
         return (settings.PROMPTS_DIR / fname).read_text(encoding="utf-8")

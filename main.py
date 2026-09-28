@@ -28,7 +28,7 @@ class NoCacheStaticFiles(StaticFiles):
         response.headers["Cache-Control"] = "no-cache"
         return response
 
-from app.api import auth, automation, categories, chat, conversations, files, guest, knowledge, llm_config, llm_pool, quality, tasks, users
+from app.api import auth, automation, categories, chat, conversations, files, guest, knowledge, llm_config, llm_pool, prompts, quality, tasks, users
 from app.core.config import STATIC_DIR, jwt_secret_is_placeholder, ENV
 from app.core.db import init_db, engine
 from app.core.logging_config import setup_logging
@@ -110,6 +110,7 @@ app.include_router(conversations.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
 app.include_router(quality.router, prefix="/api")
 app.include_router(automation.router, prefix="/api")
+app.include_router(prompts.router, prefix="/api")
 
 
 @app.get("/health")

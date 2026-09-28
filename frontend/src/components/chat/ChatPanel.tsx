@@ -10,12 +10,13 @@
  *        无 chip 时为新建任务；chip 由详情页「继续优化」或会话内任务卡挂载。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Paperclip, Lightbulb, Send, Square, Globe, Library, BookCheck } from "lucide-react";
+import { Bot, Paperclip, Lightbulb, Send, Square, Globe, Library, BookCheck, PenLine } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
 import { useTaskStore } from "../../store/taskStore";
 import { api, API, toast } from "../../api/client";
 import type { ChatDraft } from "../../types";
 import MessageView from "./MessageView";
+import PromptEditorModal from "./PromptEditorModal";
 import { statusBadge } from "../chat/TaskStepsCard";
 import { groupByChain } from "../../utils/taskChain";
 
@@ -118,6 +119,8 @@ export default function ChatPanel({
   const [formats] = useState<string[]>(["xlsx", "json", "xmind"]);
   /** 多角色协作（V3.1）：参与生成用例的视角（pm/qa/dev），默认仅测试 */
   const [roles, setRoles] = useState<string[]>(["qa"]);
+  /** V5.10 提示词定制弹窗（角色 pill 旁 ✎ 入口） */
+  const [promptOpen, setPromptOpen] = useState(false);
   /** 「总是深度思考」：默认关＝按需 —— 简单问题直接答，复杂问题（排查/分析/报错等）
    *  由后端自动判定是否推理。开启后每轮都先推理再作答。本地记忆，未表态时后端走自动判定。 */
   const [alwaysThink, setAlwaysThink] = useState<boolean>(() => {
@@ -456,6 +459,17 @@ export default function ChatPanel({
                 </button>
               ))}
             </span>
+            {/* V5.10 提示词定制入口：编辑角色口吻与生成模板的系统提示词 */}
+            <button
+              className="prompt-btn"
+              type="button"
+              title="定制提示词：修改 AI 角色口吻与用例生成模板"
+              aria-label="定制提示词"
+              disabled={streaming}
+              onClick={() => setPromptOpen(true)}
+            >
+              <PenLine size={14} />
+            </button>
           </div>
           <div className="input-body">
             <textarea
@@ -492,6 +506,8 @@ export default function ChatPanel({
           </div>
         </div>
       </div>
+      {/* V5.10 提示词定制弹窗（访客打开时后端 403，弹窗内提示注册） */}
+      <PromptEditorModal open={promptOpen} onClose={() => setPromptOpen(false)} />
     </div>
   );
 }
