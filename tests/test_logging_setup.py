@@ -1,14 +1,14 @@
-"""M10 日志落盘单测：setup_logging() 的落盘、格式与幂等行为。
+"""M10.1 日志配置单测：小时切片、error.log 单独成档、uvicorn.access 静默。
 
 覆盖点：
-1. 调用 setup_logging(tmp) 后 logs/app.log 存在，且写入一条测试日志可见；
-2. 日志行符合约定格式（asctime | LEVEL | name | message）；
-3. 重复调用幂等（root 上不重复挂 handler，文件不双写）；
-4. 级别过滤：ERROR 级别的 LOG_LEVEL 下 INFO 日志不落盘；
-5. uvicorn 接管：propagate 置 True，uvicorn 日志沿层级汇入 root 文件。
+1. setup_logging(tmp) 后 logs/app.log 与 logs/error.log 同时存在，INFO 入 app.log 不入 error.log；
+2. ERROR 同时写 app.log 与 error.log（排障只看 error.log 即可）；
+3. 切片策略：TimedRotatingFileHandler when="H"，全量保留 72 份 / 错误 168 份；
+4. 重复调用幂等（app.log 只挂 1 个 handler，不双写）；
+5. uvicorn/uvicorn.error propagate=True；uvicorn.access propagate=False（裸访问行由 api.access 替代）。
 """
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 
 import pytest
 
@@ -21,78 +21,96 @@ def log_dir(tmp_path):
     return tmp_path / "logs"
 
 
-def _file_handler_of(log_dir):
-    """从 root logger 上找到指向 log_dir/app.log 的文件 handler。"""
-    target = str((log_dir / "app.log").resolve())
+def _handler_of(log_dir, filename):
+    """从 root logger 上找到指向 log_dir/<filename> 的文件 handler。"""
+    target = str((log_dir / filename).resolve())
     for h in logging.getLogger().handlers:
-        if isinstance(h, RotatingFileHandler) and h.baseFilename == target:
+        if isinstance(h, TimedRotatingFileHandler) and h.baseFilename == target:
             return h
     return None
 
 
-def test_setup_logging_creates_file_and_writes(log_dir):
-    """调用后 app.log 存在，测试日志可见，格式符合约定。"""
+def test_setup_creates_app_and_error_logs(log_dir):
+    """app.log 与 error.log 同时创建；INFO 只进 app.log，ERROR 两边都有。"""
     setup_logging(log_dir=log_dir)
 
-    assert (log_dir / "app.log").exists(), "setup_logging 应创建 logs/app.log"
+    assert (log_dir / "app.log").exists()
+    assert (log_dir / "error.log").exists()
 
-    logging.getLogger("test.m10").info("hello-m10-log")
+    logging.getLogger("test.m101").info("info-only-line")
+    logging.getLogger("test.m101").error("error-both-line")
 
-    # RotatingFileHandler 默认有缓冲，flush 后再读
-    _file_handler_of(log_dir).flush()
-    content = (log_dir / "app.log").read_text(encoding="utf-8")
-    assert "hello-m10-log" in content, "测试日志应写入 app.log"
-    # 格式：asctime | LEVEL(左对齐7位) | logger名 | message
-    assert " | INFO    | test.m10 | hello-m10-log" in content
+    _handler_of(log_dir, "app.log").flush()
+    _handler_of(log_dir, "error.log").flush()
+
+    app_text = (log_dir / "app.log").read_text(encoding="utf-8")
+    err_text = (log_dir / "error.log").read_text(encoding="utf-8")
+    assert "info-only-line" in app_text
+    assert "info-only-line" not in err_text, "INFO 不应进 error.log"
+    assert "error-both-line" in app_text and "error-both-line" in err_text
+
+
+def test_hourly_rotation_policy(log_dir):
+    """切片策略：按小时滚动；app.log 保留 72 份、error.log 保留 168 份。"""
+    setup_logging(log_dir=log_dir)
+
+    app_h = _handler_of(log_dir, "app.log")
+    err_h = _handler_of(log_dir, "error.log")
+    assert isinstance(app_h, TimedRotatingFileHandler)
+    assert app_h.when == "H", "全量日志应按小时滚动"
+    assert app_h.backupCount == 72
+    assert app_h.suffix == "%Y-%m-%d_%H"
+    assert err_h.when == "H"
+    assert err_h.backupCount == 168
+    assert err_h.level == logging.ERROR, "error.log handler 只收 ERROR+"
 
 
 def test_setup_logging_idempotent(log_dir):
-    """重复调用不重复挂 handler，日志不双写。"""
+    """重复调用不重复挂 handler，app.log 不双写。"""
     setup_logging(log_dir=log_dir)
     setup_logging(log_dir=log_dir)
     setup_logging(log_dir=log_dir)
 
-    handlers = _file_handlers_on_root(log_dir)
-    assert len(handlers) == 1, f"同一日志文件只应有 1 个 handler，实际 {len(handlers)}"
+    handlers = [h for h in logging.getLogger().handlers
+                if isinstance(h, TimedRotatingFileHandler)
+                and h.baseFilename == str((log_dir / "app.log").resolve())]
+    assert len(handlers) == 1
 
-    logging.getLogger("test.m10").info("idempotent-check")
+    logging.getLogger("test.m101").info("idempotent-check")
     handlers[0].flush()
     content = (log_dir / "app.log").read_text(encoding="utf-8")
-    assert content.count("idempotent-check") == 1, "同一条日志不应写入两次"
+    assert content.count("idempotent-check") == 1
 
 
-def _file_handlers_on_root(log_dir):
-    target = str((log_dir / "app.log").resolve())
-    return [h for h in logging.getLogger().handlers
-            if isinstance(h, RotatingFileHandler) and h.baseFilename == target]
+def test_uvicorn_access_silenced(log_dir):
+    """uvicorn/uvicorn.error propagate=True；uvicorn.access 静默（裸访问行由 api.access 替代）。"""
+    setup_logging(log_dir=log_dir)
+
+    assert logging.getLogger("uvicorn").propagate is True
+    assert logging.getLogger("uvicorn.error").propagate is True
+    access = logging.getLogger("uvicorn.access")
+    assert access.propagate is False, "uvicorn.access 应静默，避免与 api.access 双份"
+
+    logging.getLogger("uvicorn.access").info("bare-access-should-not-appear")
+    logging.getLogger("uvicorn.error").info("uvicorn-error-merged")
+    _handler_of(log_dir, "app.log").flush()
+    content = (log_dir / "app.log").read_text(encoding="utf-8")
+    assert "bare-access-should-not-appear" not in content
+    assert "uvicorn-error-merged" in content
 
 
 def test_setup_logging_respects_level(log_dir):
     """LOG_LEVEL=ERROR 时 INFO 日志不落盘（级别经参数显式传入）。"""
     setup_logging(log_dir=log_dir, level="ERROR")
 
-    logging.getLogger("test.m10").info("should-not-appear")
-    logging.getLogger("test.m10").error("should-appear")
+    logging.getLogger("test.m101").info("should-not-appear")
+    logging.getLogger("test.m101").error("should-appear")
 
-    h = _file_handler_of(log_dir)
+    h = _handler_of(log_dir, "app.log")
     h.flush()
     content = (log_dir / "app.log").read_text(encoding="utf-8")
     assert "should-not-appear" not in content
     assert "should-appear" in content
-
-
-def test_setup_logging_takes_over_uvicorn(log_dir):
-    """uvicorn 系 logger propagate=True，日志沿层级汇入 root 的文件 handler。"""
-    setup_logging(log_dir=log_dir)
-
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-        lg = logging.getLogger(name)
-        assert lg.propagate is True, f"{name} 应 propagate 进 root"
-
-    logging.getLogger("uvicorn.error").info("uvicorn-merged-check")
-    _file_handler_of(log_dir).flush()
-    content = (log_dir / "app.log").read_text(encoding="utf-8")
-    assert "uvicorn-merged-check" in content, "uvicorn 日志应落进同一个 app.log"
 
 
 @pytest.fixture(autouse=True)
@@ -101,6 +119,6 @@ def _restore_root_logger():
     yield
     root = logging.getLogger()
     for h in list(root.handlers):
-        if isinstance(h, RotatingFileHandler):
+        if isinstance(h, TimedRotatingFileHandler):
             h.close()
             root.removeHandler(h)

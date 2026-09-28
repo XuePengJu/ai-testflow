@@ -88,6 +88,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 接口出入参访问日志（M10.1）：注册在加密中间件**之前** = 位于其内层，
+# 看到的是解密后的入参与加密前的明文出参（加密层在外侧加解密，本层只管如实记录）
+from app.core.access_log import AccessLogMiddleware  # noqa: E402
+app.add_middleware(AccessLogMiddleware)
+
 # API 分级加密（admin 明文 / user+guest AES-256-GCM）——最后注册 = 最外层
 from app.core.middleware import ApiCryptoMiddleware  # noqa: E402
 app.add_middleware(ApiCryptoMiddleware)
