@@ -4,6 +4,7 @@
 > 状态：**待老板确认，业务代码一行未动**（本文件是分支上第一个 commit）
 > V1.1：补入本次会话对齐的 5 项页面/交互重构（M5~M9）
 > V1.2：新增「并发执行编排」——多子 Agent 并行 + 主 Agent 统筹
+> V1.3：新增 M10 日志落盘与 LLM 调用记录（波次 1 第 4 路并发）
 
 ## 0. 背景（本次会话对齐的共识）
 
@@ -27,6 +28,7 @@
 | M2 | 结构化护栏（页面白名单 + 步数预算） | 后端 |
 | M3 | 计划先行（探索计划生成 → 前端确认 → 按计划执行） | 后端 + 前端 |
 | M4 | 实时画面开关（截图轮播，已批） | 后端 + 前端 |
+| M10 | 日志落盘 + LLM 调用记录（AI 问答/用例生成/探索当前无任何日志文件） | 后端 |
 
 ### M1 视图指纹判重（后端，~0.5 天）
 
@@ -64,6 +66,19 @@
 - 后端：`GET /tasks/{id}/live-shot` → `out_dir/explore/` 最新 `step-NNN.png`（FileResponse 非 JSON 不加密，无需中间件豁免；`_own_task` 归属校验）
 - 前端：`TaskStepsCard` 探索步骤 running 时「实时画面」勾选框（默认不勾 = 零开销）；勾选后 3s 轮询 blob 刷新 `<img>` + 当前动作摘要；任务结束自动停
 - `frontend/src/api/client.ts` 加 `fetchTaskLiveShot(taskId)`
+
+### M10 日志落盘 + LLM 调用记录（后端，~0.5~1 天，零侵入为主）
+
+- 现状：全项目无任何日志文件配置；8 个 service 模块已有 logger 但根 logger 无 handler，INFO 级业务日志全部静默丢弃，后台跑 uvicorn 连 stderr 都不可见；DB 仅有 step_logs（前端进度用），LLM 调用无持久化记录
+- **第 1 层：全局日志落盘（零侵入）**
+  - 新文件 `app/core/logging_config.py`：`setup_logging()` = RotatingFileHandler 写 `logs/app.log`（10MB 轮转，保留 14 个备份），格式 `时间 | 级别 | 模块 | 消息`，root INFO，接管 uvicorn access log
+  - `main.py` 启动时调用；`logs/` 进 `.gitignore`；`LOG_LEVEL` env 可调（默认 INFO）
+  - 效果：8 个现成 logger 的 INFO 立即全部落盘，业务代码不用改
+- **第 2 层：关键链路补点**
+  - LLM 统一调用出口加 INFO：provider / model / 耗时 / 成功失败 / 摘要（**不记 prompt 全文**——体积与隐私）
+  - 探索每步补 `logger.info`：动作 + URL + 视图指纹（step_logs 继续走 DB 不变）
+  - `/chat/stream` 问答记录：user_id / 模型 / 耗时
+- 新增单测：setup_logging 后日志文件生成、轮转参数生效
 
 ---
 
@@ -142,6 +157,7 @@ M4 实时画面（已批小改） → M5 P0 快赢 → M1 → M2 → M3（探索
 | 会话列表组件 | 仅 M5 | 独占，可并行 |
 | `App.tsx` / Rail / 路由 | M8 / M9 | 同链串行，与其他模块零交叉 |
 | e2e 脚本 m1~m5 | M8 / M9 适配 | 跟随导航链，放最后 |
+| `logging_config.py`（新）/ `main.py` / `chat.py` | 仅 M10 | 独占，可并行；`decision_provider.py` 补点划归探索 Agent（M1/M3 反正要动它） |
 
 ### 子 Agent 分工与波次
 
@@ -149,9 +165,10 @@ M4 实时画面（已批小改） → M5 P0 快赢 → M1 → M2 → M3（探索
 
 | 波次 | 子 Agent | 任务 | 触碰文件域 |
 |------|----------|------|-----------|
-| **波次 1**（3 路并发） | 探索 Agent | M1 视图指纹 | view_fingerprint.py（新）+ explorer_agent.py |
+| **波次 1**（4 路并发） | 探索 Agent | M1 视图指纹（+ decision_provider 日志补点） | view_fingerprint.py（新）+ explorer_agent.py + decision_provider.py |
 | | UI-知识库 Agent | M5 P0 快赢 | knowledge 后端摘要 + 存量脚本 + 会话列表组件 |
 | | UI-任务 Agent | M4 实时画面 | automation.py + client.ts + TaskStepsCard |
+| | 日志 Agent | M10 日志落盘 | logging_config.py（新）+ main.py + chat.py + .gitignore |
 | **波次 2**（2 路并发，前序完成后启动） | 探索 Agent | M2 护栏 → M3 计划先行 | explorer_agent.py + engine + TaskStepsCard 计划卡 |
 | | UI-知识库 Agent | M6 主页重构 → M7 分类降级 | 知识库页组件 + 解析打标链路 |
 | **波次 3**（2 路并发） | UI-导航 Agent | M8 导航收敛 → M9 测试中心 | App.tsx / Rail / 路由 / 首页 + m1~m5 e2e 适配 |
@@ -194,6 +211,6 @@ M4 实时画面（已批小改） → M5 P0 快赢 → M1 → M2 → M3（探索
 
 | 批次 | 模块 | 预估 |
 |------|------|------|
-| 探索改造 | M1 + M2 + M3 + M4 | 2.5~3.5 天 |
+| 探索改造 | M1 + M2 + M3 + M4 + M10 | 3~4.5 天 |
 | 页面重构 | M5~M9 | 4~5.5 天 |
-| **合计** | | **6.5~9 天**（每模块独立 commit，可分批交付/暂停） |
+| **合计** | | **7~10 天**（并发编排压缩至 **~4~4.5 天**，每模块独立 commit，可分批交付/暂停） |
