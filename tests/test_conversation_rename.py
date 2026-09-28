@@ -167,3 +167,85 @@ class TestAiTitle:
                         headers=_auth_header(accounts))
         assert r.status_code == 502
         assert "模型调用失败" in r.json()["detail"]
+
+
+# ===== V5.10.1 回归：重新生成索引不清掉已有分类 =====
+
+class TestWikiIndexCategoryGuard:
+    """wiki_index_kb：LLM 未分出有效类别时保留 doc.wiki_category 原值。"""
+
+    def _make_doc(self, username: str, category: str) -> tuple[str, str]:
+        """建库 + 文档（带 1 个分块），预置已有分类。返回 (kb_id, doc_id)。"""
+        import uuid as _uuid
+        from app.models.knowledge import KnowledgeBase, Knowledge, Chunk
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.username == username).first()
+            kb = KnowledgeBase(id="kb" + _uuid.uuid4().hex[:8], user_id=u.id, name="wiki守护测试库")
+            db.add(kb)
+            doc = Knowledge(id="kd" + _uuid.uuid4().hex[:8], user_id=u.id,
+                            knowledge_base_id=kb.id, type="document",
+                            title="采购入库单需求", wiki_category=category)
+            db.add(doc)
+            db.add(Chunk(id="kc" + _uuid.uuid4().hex[:8], user_id=u.id,
+                         knowledge_base_id=kb.id, knowledge_id=doc.id,
+                         chunk_index=0, content="采购入库单支持关联采购订单、质检、上架。"))
+            db.commit()
+            return kb.id, doc.id
+        finally:
+            db.close()
+
+    def _cleanup(self, kb_id: str):
+        from sqlalchemy import delete as sa_delete
+        from app.models.knowledge import KnowledgeBase, Knowledge, Chunk
+        db = SessionLocal()
+        try:
+            db.execute(sa_delete(Chunk).where(Chunk.knowledge_base_id == kb_id))
+            db.execute(sa_delete(Knowledge).where(Knowledge.knowledge_base_id == kb_id))
+            db.execute(sa_delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+            db.commit()
+        finally:
+            db.close()
+
+    def test_regen_index_keeps_category_on_llm_miss(self, client, accounts, monkeypatch):
+        """LLM 返回「未知」（拒答）→ 已有分类「测试设计」不被清成未分类。"""
+        import app.api.knowledge as kmod
+        kb_id, doc_id = self._make_doc("alice", "测试设计")
+        try:
+            async def _fake_summarize(db, user, text, title):
+                return {"summary": "采购入库单摘要", "category": "未知"}
+            monkeypatch.setattr(kmod, "_llm_summarize", _fake_summarize)
+            r = client.post(f"/api/knowledge/bases/{kb_id}/wiki/index",
+                            headers=HDR(accounts["user"]["token"]))
+            assert r.status_code == 200, r.text
+            db = SessionLocal()
+            try:
+                from app.models.knowledge import Knowledge
+                doc = db.get(Knowledge, doc_id)
+                assert doc.wiki_category == "测试设计", f"分类被清掉了：{doc.wiki_category!r}"
+                assert doc.wiki_summary == "采购入库单摘要"  # 摘要正常更新
+            finally:
+                db.close()
+        finally:
+            self._cleanup(kb_id)
+
+    def test_regen_index_overwrites_with_valid_category(self, client, accounts, monkeypatch):
+        """LLM 给出有效新分类 → 正常覆盖（重新索引 = 重新分类）。"""
+        import app.api.knowledge as kmod
+        kb_id, doc_id = self._make_doc("alice", "测试设计")
+        try:
+            async def _fake_summarize(db, user, text, title):
+                return {"summary": "新摘要", "category": "需求分析"}
+            monkeypatch.setattr(kmod, "_llm_summarize", _fake_summarize)
+            r = client.post(f"/api/knowledge/bases/{kb_id}/wiki/index",
+                            headers=HDR(accounts["user"]["token"]))
+            assert r.status_code == 200, r.text
+            db = SessionLocal()
+            try:
+                from app.models.knowledge import Knowledge
+                doc = db.get(Knowledge, doc_id)
+                assert doc.wiki_category == "需求分析"
+            finally:
+                db.close()
+        finally:
+            self._cleanup(kb_id)

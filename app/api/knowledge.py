@@ -843,7 +843,11 @@ async def wiki_index_kb(kb_id: str, db: Session = Depends(get_db), user: User = 
         # 落库（摘要 + AI 主题分类）；extract_summary_text 兜底剥 {"summary":...} 壳
         summary_text = extract_summary_text(ai["summary"])
         doc.wiki_summary = summary_text
-        doc.wiki_category = normalize_category(ai.get("category"))
+        # V5.10.1 分类保护：LLM 本次未分出有效类别（空/拒答/未知 → 归一化为「未分类」）
+        # 时保留原有分类，不清掉用户已有归类；LLM 给出有效新分类则正常覆盖。
+        # 与 _bg_summarize_doc / regen_doc_summary / wiki_classify_kb 三处既有保护对齐。
+        doc.wiki_category = normalize_category(
+            ai.get("category"), fallback=doc.wiki_category or DEFAULT_UNCLASSIFIED)
         db.commit()
         results.append({
             "doc_id": doc.id,
