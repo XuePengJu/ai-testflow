@@ -2,10 +2,9 @@
  * W3 M9 测试中心 · 顶部指标卡（3 张）：本周通过率 / 本周运行次数 / 未修复失败数。
  *
  * 数据口径（无新后端，全部来自质量报告现有 API 聚合）：
- * - 本周通过率：/api/quality/history 中本周（周一起）最新一个数据点的 pass_rate；
- *   本周无数据时回退最新一次聚合的通过率；
+ * - 最新通过率：/api/quality/summary 的展示口径通过率（核心接口 + e2e，平台自测单测已过滤）；
  * - 本周运行次数：history 中落在本周的数据点条数（每次聚合 = 一次运行）；
- * - 未修复失败数：/api/quality/summary 的 pytest 失败数 + e2e 未通过套件数。
+ * - 未修复失败数：summary 展示口径内 pytest 失败数 + e2e 未通过套件数。
  * 所有登录角色可见（含访客）；「运行测试」按钮的 admin-only 规则在 QualityBoard 内保持不变。
  * 铁律不变：数字全部来自后端实测聚合，禁止写死展示值。
  */
@@ -43,10 +42,10 @@ export default function TestCenterMetrics() {
     const t = new Date(p.ts).getTime();
     return Number.isFinite(t) && t >= start;
   });
-  const latest = weekPts.length ? weekPts[weekPts.length - 1] : history[history.length - 1];
-  const passRate = latest ? `${latest.pass_rate}%` : "—";
+  // 通过率用展示口径（后端 /quality/summary 已过滤为核心接口 + e2e，平台自测单测不入展示面）
+  const passRate = summary ? `${summary.pytest.pass_rate}%` : "—";
   const runCount = String(weekPts.length);
-  // 未修复失败 = pytest 失败用例 + e2e 未通过套件（无数据时显示 —）
+  // 未修复失败 = 展示口径内 pytest 失败用例 + e2e 未通过套件（无数据时显示 —）
   const broken = summary
     ? String(summary.pytest.failed + Math.max(0, summary.e2e.total - summary.e2e.passed))
     : "—";
@@ -57,7 +56,7 @@ export default function TestCenterMetrics() {
         <div className="stat-icon green"><CheckCircle2 size={22} /></div>
         <div className="stat-body">
           <div className="s-num">{passRate}</div>
-          <div className="s-label">本周通过率{!weekPts.length && history.length ? "（最近一次）" : ""}</div>
+          <div className="s-label">最新通过率（核心接口 + e2e）</div>
         </div>
       </div>
       <div className="stat-card">

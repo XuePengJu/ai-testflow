@@ -1,7 +1,8 @@
 /**
  * 质量看板（M0）：平台自身 pytest + Node e2e 实测结果可视化。
  *
- * - 顶部 4 枚汇总卡：pytest 用例数 / 通过率 / 覆盖率 / e2e 套件通过率
+ * - 顶部 3 枚汇总卡：核心接口用例数 / 核心接口通过率 / e2e 套件通过率
+ *   （展示口径收敛：平台自测的单测与非核心接口不入展示面，覆盖率卡已移除，见后端 _apply_display_scope）
  * - 功能模块 × 用例明细（按测试文件映射中文模块名，可展开逐条用例 + 关键字搜索）+ 历史趋势折线（纯 SVG/div，不引图表库）
  * - 「▶ 运行测试」→ POST /quality/run（scope 范围复选：单测/接口/e2e 套件子集，默认全部）
  *   → 2s 轮询 status → 阶段 stepper + pytest 进度条 + e2e 套件状态 + 日志尾部（仅 canRun，admin）
@@ -9,7 +10,7 @@
  * 铁律：所有数字来自后端实测聚合 JSON（/api/quality/*），禁止写死展示值。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FlaskConical, CheckCircle2, ShieldCheck, Globe, Play, Search, ChevronDown, ChevronRight } from "lucide-react";
+import { FlaskConical, CheckCircle2, Globe, Play, Search, ChevronDown, ChevronRight } from "lucide-react";
 import {
   getQualityHistory,
   getQualityRunStatus,
@@ -97,7 +98,7 @@ export default function QualityBoard({ canRun = false }: { canRun?: boolean }) {
   const [running, setRunning] = useState(false);
   const [query, setQuery] = useState("");
   const [trendHover, setTrendHover] = useState<{ i: number; k: (typeof PCT_KEYS)[number] } | null>(null);   // 趋势图悬浮（点下标 + 线）
-  const [kindFilter, setKindFilter] = useState<"" | "ui" | "api" | "unit">("");
+  const [kindFilter, setKindFilter] = useState<"" | "ui" | "api">("");
   const [openOverrides, setOpenOverrides] = useState<Record<string, boolean>>({});
   // 运行范围复选（默认全选 = 全量运行）
   const [scopeOpen, setScopeOpen] = useState(false);
@@ -214,7 +215,7 @@ export default function QualityBoard({ canRun = false }: { canRun?: boolean }) {
         desc: meta?.desc ?? file,
         list: (q
           ? list.filter((c) =>
-              `${caseLabel(c.name)} ${c.name} ${c.param} ${c.kind === "api" ? "接口测试 api" : "单元测试 unit"}`
+              `${caseLabel(c.name)} ${c.name} ${c.param} ${c.kind === "api" ? "核心接口 api" : "单元测试 unit"}`
                 .toLowerCase()
                 .includes(q),
             )
@@ -271,8 +272,7 @@ export default function QualityBoard({ canRun = false }: { canRun?: boolean }) {
           <div className="stat-body">
             <div className="s-num">{p.total}</div>
             <div className="s-label">
-              pytest 用例 · 通过 {p.passed} / 失败 {p.failed}
-              {p.api_cases != null && ` · 接口 ${p.api_cases} / 单测 ${p.unit_cases}`}
+              核心接口用例 · 通过 {p.passed} / 失败 {p.failed}
             </div>
           </div>
         </div>
@@ -280,14 +280,7 @@ export default function QualityBoard({ canRun = false }: { canRun?: boolean }) {
           <div className="stat-icon green"><CheckCircle2 size={22} /></div>
           <div className="stat-body">
             <div className="s-num">{p.pass_rate}%</div>
-            <div className="s-label">pytest 通过率</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon purple"><ShieldCheck size={22} /></div>
-          <div className="stat-body">
-            <div className="s-num">{p.coverage_pct}%</div>
-            <div className="s-label">代码覆盖率（app/）</div>
+            <div className="s-label">核心接口通过率</div>
           </div>
         </div>
         <div className="stat-card">
@@ -377,8 +370,7 @@ export default function QualityBoard({ canRun = false }: { canRun?: boolean }) {
                 {`上次聚合：${summary.generated_at.slice(0, 19).replace("T", " ")} · pytest 耗时 ${(p.duration_ms / 1000).toFixed(1)}s`}
                 {p.segments && (
                   <span style={{ color: "#86909c" }}>
-                    {" · 分段采集：单测 "}{segTime(p.segments.unit)}
-                    {" · 接口 "}{segTime(p.segments.api)}
+                    {" · 分段采集：核心接口 "}{segTime(p.segments.api)}
                     {" · e2e "}{segTime(e2eLastCollected)}
                   </span>
                 )}
@@ -481,8 +473,7 @@ export default function QualityBoard({ canRun = false }: { canRun?: boolean }) {
           [
             ["", "全部"],
             ["ui", "UI 测试（浏览器 e2e）"],
-            ["api", `接口测试${p.api_cases != null ? ` ${p.api_cases}` : ""}`],
-            ["unit", `单元测试${p.unit_cases != null ? ` ${p.unit_cases}` : ""}`],
+            ["api", `核心接口${p.api_cases != null ? ` ${p.api_cases}` : ""}`],
           ] as const
         ).map(([v, label]) => {
           const active = kindFilter === v;
@@ -506,7 +497,7 @@ export default function QualityBoard({ canRun = false }: { canRun?: boolean }) {
       {/* 真实浏览器操作验证（e2e）——置顶展示，老板关注的是真实操作链路 */}
       <section
         className="set-card"
-        style={{ marginTop: 14, display: kindFilter === "api" || kindFilter === "unit" ? "none" : undefined }}
+        style={{ marginTop: 14, display: kindFilter === "api" ? "none" : undefined }}
         data-testid="quality-e2e"
       >
         <h3 style={{ margin: 0 }}>真实操作验证（浏览器 e2e）</h3>
@@ -579,9 +570,8 @@ export default function QualityBoard({ canRun = false }: { canRun?: boolean }) {
           )}
         </div>
         <div className="sub" style={{ marginTop: 6 }}>
-          全部 {p.total} 条 pytest 用例按功能模块分组，点模块展开看每条用例在测什么{q ? "（搜索中，自动展开命中项）" : ""}。
-          <span style={{ marginLeft: 6, color: "#165dff" }}>接口</span> = 走 HTTP 接口的测试，
-          <span style={{ color: "#86909c" }}>单测</span> = 函数 / 服务层单元测试。
+          核心链路接口用例（登录鉴权 / 任务生成 / 知识库 / AI 问答）按功能模块分组，点模块展开看每条用例在测什么{q ? "（搜索中，自动展开命中项）" : ""}。
+          <span style={{ marginLeft: 6, color: "#165dff" }}>接口</span> = 走 HTTP 接口的核心链路验证。
         </div>
         {cases.length === 0 ? (
           <div className="hint-line" style={{ marginTop: 10 }}>

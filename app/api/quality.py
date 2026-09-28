@@ -72,6 +72,47 @@ _LOG_TAIL_MAX = 12
 _PYTEST_PCT_RE = re.compile(r"\[\s*(\d+)%\]")
 _E2E_SUITE_RE = re.compile(r"\[e2e\]\s+(\S+?):\s+(\w+)\s+\((\d+)ms\)")
 
+# 展示面收敛（2026-09-28）：质量报告对外只呈现「UI 浏览器 e2e + 核心链路接口用例」，
+# 平台自测的函数级单测与非核心接口用例不再进入展示清单。
+# 口径 = 接口用例且测试文件命中核心前缀；运行能力不受影响（admin 仍可全量执行，
+# 原始聚合文件 quality-summary.json 不改动，过滤只发生在 /quality/summary 响应层）。
+_DISPLAY_CORE_API_PREFIXES = (
+    "test_auth",        # 登录鉴权 / Token / AES 加密通道
+    "test_task",        # 任务创建与用例生成主流程
+    "test_knowledge",   # 知识库管理与检索
+    "test_chat",        # AI 问答 / RAG / 降级链路
+)
+
+
+def _is_core_api_case(item: dict) -> bool:
+    """用例/失败项是否属于展示口径：接口用例且文件命中核心前缀。"""
+    base = str(item.get("file", "")).rsplit("/", 1)[-1]
+    return item.get("kind") == "api" and base.startswith(_DISPLAY_CORE_API_PREFIXES)
+
+
+def _apply_display_scope(summary: dict) -> dict:
+    """对聚合结果做展示层过滤：cases/failures 只留核心接口用例，并重算计数与通过率。"""
+    py = summary.get("pytest")
+    if not isinstance(py, dict):
+        return summary
+    cases = py.get("cases") or []
+    shown = [c for c in cases if _is_core_api_case(c)]
+    passed = sum(1 for c in shown if c.get("outcome") == "passed")
+    failed = sum(1 for c in shown if c.get("outcome") not in ("passed", "skipped"))
+    skipped = sum(1 for c in shown if c.get("outcome") == "skipped")
+    py["cases"] = shown
+    py["failures"] = [f for f in (py.get("failures") or []) if _is_core_api_case(f)]
+    py["total"] = len(shown)
+    py["passed"] = passed
+    py["failed"] = failed
+    py["skipped"] = skipped
+    py["pass_rate"] = round(passed / len(shown) * 100, 1) if shown else 100.0
+    py["api_cases"] = len(shown)
+    py["unit_cases"] = 0
+    # 覆盖率是平台自测指标，不进对外展示口径：置 None，前端不再渲染覆盖率卡
+    py["coverage_pct"] = None
+    return summary
+
 
 def _set_state(**kwargs) -> None:
     with _state_lock:
@@ -313,15 +354,20 @@ def _now() -> str:
 
 @router.get("/quality/summary")
 def get_summary(user: User = Depends(get_current_user)):
-    """最新聚合结果；尚未运行过时返回空态提示（前端据此渲染引导）。任意登录角色可见。"""
+    """最新聚合结果；尚未运行过时返回空态提示（前端据此渲染引导）。任意登录角色可见。
+
+    响应层应用展示口径过滤（_apply_display_scope）：只留 UI e2e + 核心链路接口用例，
+    原始聚合文件不改动，admin 全量运行能力不受影响。
+    """
     f = QUALITY_DATA_DIR / "quality-summary.json"
     if not f.exists():
         return {"exists": False, "summary": None,
                 "message": "尚未运行平台测试，点击「运行测试」生成质量数据"}
     try:
-        return {"exists": True, "summary": json.loads(f.read_text(encoding="utf-8"))}
+        summary = json.loads(f.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         raise HTTPException(500, detail="quality-summary.json 损坏，请重新运行测试")
+    return {"exists": True, "summary": _apply_display_scope(summary)}
 
 
 @router.post("/quality/run")
