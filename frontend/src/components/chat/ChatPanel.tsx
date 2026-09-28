@@ -82,6 +82,23 @@ export default function ChatPanel({
   const clearKbs = useChatStore((s) => s.clearKbs);
   const [kbOpen, setKbOpen] = useState(false);
   const [kbList, setKbList] = useState<KbItem[]>([]);
+  /** kb 弹层容器：点击外部 / Escape 关闭 */
+  const kbPickerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!kbOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (kbPickerRef.current && !kbPickerRef.current.contains(e.target as Node)) setKbOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setKbOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [kbOpen]);
 
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -298,7 +315,7 @@ export default function ChatPanel({
               onChange={(e) => onPickFile(e.target.files?.[0] || null)}
             />
             {/* V5.8 知识库多选检索：不选 = 不检索；按钮徽章显示已选数量 */}
-            <div className="kb-picker">
+            <div className="kb-picker" ref={kbPickerRef}>
               <button
                 className={`icon-btn ${kbIds.length ? "kb-active" : ""}`}
                 type="button"
