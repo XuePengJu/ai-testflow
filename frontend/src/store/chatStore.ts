@@ -110,12 +110,10 @@ interface ChatState {
   /** 输入框聚焦定位：递增序号触发 ChatPanel 自动聚焦 textarea */
   inputFocusSeq: number;
 
-  /** V4.1 会话上下文：kb_qa=知识库问答（绑定 kbId）；workflow=首页工作流。切换由 ChatTab 挂载/卸载驱动 */
-  chatMode: "workflow" | "kb_qa";
-  kbId: string | null;
-  /** V4.1 知识库问答会话列表（refreshConversations 时按 mode 与首页会话分组隔离） */
-  kbConversations: Conversation[];
-  setChatContext: (mode: "workflow" | "kb_qa", kbId: string | null) => void;
+  /** V5.8 知识库多选检索：勾选的库 id 列表（空 = 不检索）；跨会话保留，由 ChatPanel 知识库选择器驱动 */
+  kbIds: string[];
+  toggleKb: (id: string) => void;
+  clearKbs: () => void;
 
   refreshConversations: () => Promise<void>;
   loadConversation: (id: string) => Promise<void>;
@@ -148,40 +146,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
   iterFile: null,
   iterGenerating: false,
   inputFocusSeq: 0,
-  chatMode: "workflow",
-  kbId: null,
-  kbConversations: [],
+  kbIds: [],
 
-  setChatContext(mode, kbId) {
-    set({ chatMode: mode, kbId });
+  toggleKb(id) {
+    const cur = get().kbIds;
+    set({ kbIds: cur.includes(id) ? cur.filter((k) => k !== id) : [...cur, id] });
+  },
+
+  clearKbs() {
+    set({ kbIds: [] });
   },
 
   async refreshConversations() {
     const snap = getAuthSnapshot();
     if (!snap.token) {
-      set({ conversations: [], kbConversations: [] });
+      set({ conversations: [] });
       return;
     }
     try {
-      // V4.5.2：知识库问答页按当前库取会话（后端 kb_id 过滤），避免 50 条截断漏历史
-      const kbId = get().kbId;
       const r = await api(API + "/conversations");
       if (!r.ok) return;
       const list = (await r.json()) as Conversation[];
       const all = Array.isArray(list) ? list : [];
-      let kbList: Conversation[] = all.filter((c) => c.mode === "kb_qa").slice(0, 50);
-      if (kbId) {
-        const rk = await api(`${API}/conversations?mode=kb_qa&kb_id=${encodeURIComponent(kbId)}`);
-        if (rk.ok) {
-          const kl = (await rk.json()) as Conversation[];
-          kbList = Array.isArray(kl) ? kl.slice(0, 50) : [];
-        }
-      }
-      // V4.1 会话按 mode 分组隔离：kb_qa 只在知识库页显示，不串首页
-      set({
-        conversations: all.filter((c) => (c.mode || "workflow") !== "kb_qa").slice(0, 50),
-        kbConversations: kbList,
-      });
+      // V5.8：kb_qa 历史会话（已下线的知识库问答）继续按 mode 隔离，不在首页列表出现
+      set({ conversations: all.filter((c) => (c.mode || "workflow") !== "kb_qa").slice(0, 50) });
     } catch {
       /* 网络异常静默，侧栏下次轮询再刷 */
     }
@@ -219,7 +207,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 历史消息恢复：最后一条无任务的 assistant 消息补 draft，触发「✨ 生成测试用例」按钮
       // （confirmCreateTask 会自动拼接所有用户消息作为任务文本，draft 本身无需带 text）
       const lastAiNoTask = [...messages].reverse().find((m) => m.role === "assistant" && !m.task);
-      if (lastAiNoTask && conv.mode !== "kb_qa") {  // V4.1：知识库问答历史不补生成草稿
+      if (lastAiNoTask) {
         const idx = messages.indexOf(lastAiNoTask);
         messages[idx] = {
           ...lastAiNoTask,
@@ -365,9 +353,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             title: (text || "新对话").slice(0, 40),
-            // V4.1：会话归属（kb_qa=知识库问答 + 绑定库 id），后端落库用于列表隔离
-            mode: get().chatMode,
-            kb_id: get().kbId || undefined,
           }),
         });
         if (r.ok) {
@@ -396,8 +381,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
     const aiMsg: ChatMsg = {
       id: nextId(), role: "assistant", content: "", thinking: "", state: "streaming",
-      // V4.2.2：kb_qa 用「知识库助手」标签；工作流取第一个选中角色（多选时第一个生效）
-      persona: get().chatMode === "kb_qa" ? "kb" : (draft.roles?.[0] || "qa"),
+      // 回复身份取第一个选中角色（多选时第一个生效）
+      persona: draft.roles?.[0] || "qa",
     };
     const convId = get().conversationId || "";
     set({
@@ -461,9 +446,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           thinking: draft.thinking ?? null,
           // 角色选择：决定 AI 回复身份（qa测试/pm产品/dev开发），取第一个选中的角色
           roles: draft.roles?.length ? draft.roles : undefined,
-          // V4.1：知识库问答限定检索范围（当前库）；mode 标记会话归属（后端 _ensure_conversation 落库）
-          kb_id: get().kbId || undefined,
-          mode: get().chatMode,
+          // V5.8：勾选的知识库多选检索（空 = 不检索，后端跳过 RAG）
+          kb_ids: get().kbIds.length ? get().kbIds : undefined,
         },
         aborter.signal,
         {
@@ -504,8 +488,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               patchAi({
                 state: "done",
                 source: typeof ev.data.source === "string" ? ev.data.source : undefined,
-                // V4.1：知识库问答不挂生成草稿（无「生成测试用例」动作）
-                draft: get().chatMode === "kb_qa" ? null : { ...draft, text: draft.text || text },
+                draft: { ...draft, text: draft.text || text },
               });
             }
           },

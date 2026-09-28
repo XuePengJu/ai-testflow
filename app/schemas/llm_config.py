@@ -24,5 +24,6 @@ class ChatIn(BaseModel):
     file_id: str | None = None       # 对话附件 id（POST /api/files 返回），AI 读取文档内容后作答
     thinking: bool | None = None     # 「总是深度思考」开关：True=每轮都推理；None=按需自动（复杂问题才推理）
     roles: list[str] | None = None   # 参与角色（pm/qa/dev），决定 AI 回复身份；空则默认测试工程师
-    kb_id: str | None = None         # V4.0 RAG：限定知识库检索；空则检索当前用户全部可见库
-    mode: str | None = None          # V4.1 会话模式：workflow(默认)/kb_qa，标记会话归属
+    kb_id: str | None = None         # V4.0 RAG：单库检索（V4.1 kb_qa 遗留；兼容保留）
+    kb_ids: list[str] = []           # V5.8 多选检索：勾选的知识库 id 列表；空 = 不检索（不再全库搜）
+    mode: str | None = None          # V4.1 会话模式：workflow(默认)/kb_qa（kb_qa 前端已下线，兼容历史）

@@ -200,9 +200,14 @@ def _build_rag_context(db: Session, user: User | None, body: ChatIn) -> tuple[st
     vids = visible_kb_ids(db, user.id, admin=user.role == "admin")
     if not vids:
         return "", []
-    kb_filter = body.kb_id if body.kb_id and body.kb_id in vids else None
+    # V5.8 检索语义：不选知识库 = 不检索（旧行为"全库搜"已废除，避免无关库噪音挤占 top_k）；
+    # kb_ids 多选 = 所选库联合检索；kb_id 单库字段为 kb_qa 遗留，兼容读取。
+    # 选中但无权限的库静默剔除（不报错，检索范围仅限有权可见的库）。
+    picked = [k for k in (body.kb_ids or ([] if not body.kb_id else [body.kb_id])) if k in vids]
+    if not picked:
+        return "", []
     hits = vectorstore.search(
-        body.message, [kb_filter] if kb_filter else vids,
+        body.message, picked,
         top_k=6 if not body.file_id else 4,  # 有附件时少检索几块，给附件正文留空间
     )
     if not hits:
@@ -262,7 +267,7 @@ async def _run(db: Session, user: User | None, body: ChatIn, source: str):
     if citations:
         yield _sse("citations", {
             "items": citations,
-            "kb_id": body.kb_id or "",
+            "kb_ids": body.kb_ids or ([] if not body.kb_id else [body.kb_id]),
             "top_k": len(citations),
         })
     try:

@@ -10,11 +10,18 @@
  *        无 chip 时为新建任务；chip 由详情页「继续优化」或会话内任务卡挂载。
  */
 import { useEffect, useRef, useState } from "react";
-import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles, Globe } from "lucide-react";
+import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles, Globe, Library } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
-import { toast } from "../../api/client";
+import { api, API, toast } from "../../api/client";
 import type { ChatDraft } from "../../types";
 import MessageView from "./MessageView";
+
+/** V5.8 知识库选择器条目（/api/knowledge/bases 返回的精简字段） */
+interface KbItem {
+  id: string;
+  name: string;
+  doc_count?: number;
+}
 
 function fmtSize(b: number): string {
   return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(2) + " MB";
@@ -46,20 +53,12 @@ const ROLE_OPTIONS: { id: string; label: string; title: string }[] = [
 export default function ChatPanel({
   showCitations = false,
   onCiteClick,
-  kbName,
-  suggests,
 }: {
-  /** V4.1：知识库问答传 true → 渲染引用溯源 chips；首页不传，界面零变化 */
+  /** V5.8：AI 会话勾选知识库后渲染引用溯源 chips（不选库不检索、无 citations） */
   showCitations?: boolean;
-  /** 引用 chip 点击回调（知识库页切 tab + 高亮定位） */
+  /** 引用 chip 点击回调（跳知识库页定位原文） */
   onCiteClick?: (knowledgeId: string) => void;
-  /** V4.1：知识库问答模式下欢迎语展示的库名 */
-  kbName?: string;
-  /** V4.2：知识库问答的建议问题（来自该库 Wiki 索引标题），点击填入输入框 */
-  suggests?: string[];
 }) {
-  const chatMode = useChatStore((s) => s.chatMode);
-  const kbMode = chatMode === "kb_qa";
   const messages = useChatStore((s) => s.messages);
   const conversationId = useChatStore((s) => s.conversationId);
   const streamingByConversation = useChatStore((s) => s.streamingByConversation);
@@ -77,6 +76,12 @@ export default function ChatPanel({
   const requestIterate = useChatStore((s) => s.requestIterate);
   const clearIterRef = useChatStore((s) => s.clearIterRef);
   const inputFocusSeq = useChatStore((s) => s.inputFocusSeq);
+  // V5.8 知识库多选检索
+  const kbIds = useChatStore((s) => s.kbIds);
+  const toggleKb = useChatStore((s) => s.toggleKb);
+  const clearKbs = useChatStore((s) => s.clearKbs);
+  const [kbOpen, setKbOpen] = useState(false);
+  const [kbList, setKbList] = useState<KbItem[]>([]);
 
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -127,6 +132,15 @@ export default function ChatPanel({
     inputRef.current?.focus();
   }, [inputFocusSeq]);
 
+  // V5.8：知识库选择 popover 打开时拉取可见库列表（后端按权限过滤）
+  useEffect(() => {
+    if (!kbOpen) return;
+    void api(API + "/knowledge/bases")
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((d) => setKbList(Array.isArray(d?.items) ? d.items : []))
+      .catch(() => setKbList([]));
+  }, [kbOpen]);
+
   function onScroll(): void {
     const el = streamRef.current;
     if (!el) return;
@@ -142,7 +156,6 @@ export default function ChatPanel({
     const txt = text.trim();
     if (!txt && !file) return;
     if (streaming) return;
-    // V4.2.2：kb_qa 模式不传 roles——避免 QA 人设污染知识问答（回答不再带用例生成话术）
     // thinking：true=总是深度思考；null=未表态 → 后端按需自动判定（llm_service.should_deep_think）
     const draft: ChatDraft = {
       text: txt,
@@ -150,7 +163,7 @@ export default function ChatPanel({
       kind,
       formats,
       thinking: alwaysThink ? true : null,
-      roles: kbMode ? undefined : roles,
+      roles,
     };
     // 只传附件不打字时正文保持为空（气泡显示 📎 文件名徽标），不再写「(仅附加文档)」占位符
     void send(txt, draft);
@@ -197,33 +210,10 @@ export default function ChatPanel({
           <div className="welcome">
             <h2>
               <Bot size={24} style={{ verticalAlign: "-4px", marginRight: 6 }} />
-              {kbMode ? (
-                <>Hi，我是<em style={{ fontStyle: "normal", color: "var(--itf-p600, #4f46e5)" }}>{kbName || "知识库"}助手</em></>
-              ) : (
-                "我是 Buddy"
-              )}
+              我是 Buddy
             </h2>
-            {kbMode ? (
-              <p>
-                基于{kbName ? `「${kbName}」` : "当前知识库"}回答问题，回答附引用来源，点引用可跳转到原文。
-              </p>
-            ) : (
-              <p>把你的测试需求告诉我，我来拆解需求、生成用例、质量校验、导出文件。</p>
-            )}
+            <p>把你的测试需求告诉我，我来拆解需求、生成用例、质量校验、导出文件。</p>
 
-            {/* V4.2：建议问题（设计稿 .suggest）—— 来自该库 Wiki 索引，点击填入输入框 */}
-            {kbMode && !!suggests?.length && (
-              <div className="kb-suggest">
-                {suggests.map((s) => (
-                  <button key={s} className="kb-sug" type="button" onClick={() => { setText(s); inputRef.current?.focus(); }}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {!kbMode && (
-              <>
             <div className="quick-cards">
               <button className="quick-card" type="button" onClick={() => fileRef.current?.click()}>
                 <FileUp size={18} />
@@ -253,8 +243,6 @@ export default function ChatPanel({
               <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_LOGIN)}>用户登录注册</button>
               <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_DBERP)}>DBERP 采购入库</button>
             </div>
-              </>
-            )}
           </div>
         ) : (
           messages.map((m) => (
@@ -309,6 +297,54 @@ export default function ChatPanel({
               accept={ACCEPT}
               onChange={(e) => onPickFile(e.target.files?.[0] || null)}
             />
+            {/* V5.8 知识库多选检索：不选 = 不检索；按钮徽章显示已选数量 */}
+            <div className="kb-picker">
+              <button
+                className={`icon-btn ${kbIds.length ? "kb-active" : ""}`}
+                type="button"
+                title={
+                  kbIds.length
+                    ? `已选 ${kbIds.length} 个知识库参与检索（点击调整）`
+                    : "选择知识库参与检索（不选则不检索）"
+                }
+                aria-expanded={kbOpen}
+                onClick={() => setKbOpen((v) => !v)}
+              >
+                <Library size={20} />
+                {kbIds.length > 0 && <span className="kb-badge">{kbIds.length}</span>}
+              </button>
+              {kbOpen && (
+                <div className="kb-pop" role="dialog" aria-label="选择检索知识库">
+                  <div className="kb-pop-head">
+                    <span>检索知识库</span>
+                    {kbIds.length > 0 && (
+                      <button type="button" className="kb-pop-clear" onClick={clearKbs}>清空</button>
+                    )}
+                  </div>
+                  <p className="kb-pop-hint">勾选后 AI 回答将参考所选库内容；不选 = 不检索</p>
+                  <div className="kb-pop-list">
+                    {kbList.length === 0 && (
+                      <div className="kb-pop-empty">暂无可选知识库（可在「知识库」页创建）</div>
+                    )}
+                    {kbList.map((k) => {
+                      const on = kbIds.includes(k.id);
+                      return (
+                        <button
+                          key={k.id}
+                          type="button"
+                          className={`kb-pop-row ${on ? "on" : ""}`}
+                          onClick={() => toggleKb(k.id)}
+                        >
+                          <span className={`kb-check ${on ? "on" : ""}`} aria-hidden="true">{on ? "✓" : ""}</span>
+                          <span className="kb-pop-name">{k.name}</span>
+                          <span className="kb-pop-count">{k.doc_count ?? 0} 篇</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               className="icon-btn"
               type="button"
@@ -341,29 +377,21 @@ export default function ChatPanel({
               <Lightbulb size={16} />
               <span className="tt-text">总是深度思考</span>
             </button>
-            {/* 角色选择器仅工作流模式展示：RAG 问答与用例视角无关（V4.2.2） */}
-            {!kbMode && (
-              <span className="role-picker" title="多角色协作：以多个视角分别生成用例后合并去重">
-                {ROLE_OPTIONS.map((r) => (
-                  <button
-                    key={r.id}
-                    className={`role-chip ${roles.includes(r.id) ? "active" : ""}`}
-                    type="button"
-                    title={r.title}
-                    disabled={streaming}
-                    onClick={() => toggleRole(r.id)}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </span>
-            )}
-            {/* V4.2：检索范围 pill（设计稿 .scope）—— kb_qa 固定检索当前库，状态展示 */}
-            {kbMode && (
-              <span className="kb-scope" title="知识库问答固定检索当前知识库">
-                📚 检索范围：{kbName || "当前知识库"}
-              </span>
-            )}
+            {/* 角色选择器：生成用例的视角（多选合并去重） */}
+            <span className="role-picker" title="多角色协作：以多个视角分别生成用例后合并去重">
+              {ROLE_OPTIONS.map((r) => (
+                <button
+                  key={r.id}
+                  className={`role-chip ${roles.includes(r.id) ? "active" : ""}`}
+                  type="button"
+                  title={r.title}
+                  disabled={streaming}
+                  onClick={() => toggleRole(r.id)}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </span>
           </div>
           <div className="input-body">
             <textarea
@@ -374,9 +402,7 @@ export default function ChatPanel({
                   ? "生成中…"
                   : iterTaskId
                     ? `和 Buddy 沟通《${iterTaskName}》要补充什么…（确认后点「⚡ 生成用例」）`
-                    : kbMode
-                      ? `基于${kbName ? "「" + kbName + "」" : "知识库"}提问，如“退货超过5000元怎么处理？”…`
-                      : "把你的测试需求告诉 Buddy…"
+                    : "把你的测试需求告诉 Buddy…"
               }
               disabled={streaming}
               onChange={(e) => {

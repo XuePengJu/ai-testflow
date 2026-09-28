@@ -458,7 +458,7 @@ def should_deep_think(user_text: str, attach_name: str = "", kb_mode: bool = Fal
 
     ⚠️ 第二个参数只看「用户主动上传的附件名」，**不能**改成 chat_stream 收到的
     attached_text：那个值是「任务摘要 + RAG 检索结果 + 附件正文」的拼接体，而 RAG
-    默认开启（kb_id 为空即检索全部可见库）、几乎总是非空 —— 拿它当判据会让本函数
+    在勾选了知识库时（V5.8 起不选 = 不检索）几乎总是非空 —— 拿它当判据会让本函数
     恒返回 True，按需判定形同虚设。实测踩过：传 null 的「你好」也开了 272 个 think 事件。
     """
     t = (user_text or "").strip()

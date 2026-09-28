@@ -5,18 +5,17 @@
  * 右栏：选中库 → 文档 Tab（上传/列表/详情/分块编辑/修订/回滚/重建/删除）
  *        + 检索 Tab（RAG 检索测试台，展示相似度与来源）
  * 权限：global 库非创建者只读（写操作按 403 由后端拦截，前端隐藏编辑按钮）
+ * V5.8：AI 问答 Tab 下线（问答统一走首页 AI 会话的知识库多选检索）
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FileText, RefreshCw, Search, Trash2, Upload, Plus,
   History, Undo2, X, Pencil, Check,
-  BookOpen, Network, MessageSquare,
+  BookOpen, Network,
 } from "lucide-react";
 import { api, apiJson, toast } from "../api/client";
 import ReactECharts from "echarts-for-react";
-import ChatPanel from "../components/chat/ChatPanel";
 import KbSelector from "../components/knowledge/KbSelector";
-import { useChatStore } from "../store/chatStore";
 import { useAuth } from "../hooks/useAuth";
 import { parseServerTime } from "../utils/time";
 
@@ -54,12 +53,14 @@ export default function KnowledgePage() {
   const readOnly = role === "guest"; // V4.2：访客只读（仅共享库，无新建/上传/删除，写操作后端 403 兜底）
   const [bases, setBases] = useState<KB[]>([]);
   const [sel, setSel] = useState<KB | null>(null);
-  const [tab, setTab] = useState<"chat" | "docs" | "wiki" | "graph" | "search">(
-    () => (localStorage.getItem("aitf_kb_tab") as "chat" | "docs" | "wiki" | "graph" | "search") || "docs"
+  const [tab, setTab] = useState<"docs" | "wiki" | "graph" | "search">(
+    () => {
+      const saved = localStorage.getItem("aitf_kb_tab");
+      // V5.8："chat" Tab 已下线，老记忆值回落到文档 Tab
+      return saved && saved !== "chat" ? (saved as "docs" | "wiki" | "graph" | "search") : "docs";
+    }
   );
   const [showCreate, setShowCreate] = useState(false);
-  // V4.1：AI 问答引用 chip 点击 → 跳到文档 Tab 并高亮定位该条目（seq 递增保证同 id 重复可触发）
-  const [focusDoc, setFocusDoc] = useState<{ id: string; seq: number } | null>(null);
 
   const load = useCallback(async () => {
     const data = await apiJson<{ items: KB[] }>("/api/knowledge/bases");
@@ -99,7 +100,7 @@ export default function KnowledgePage() {
   }, [embShown]);
 
   return (
-    <main className={"app-main kb-page kb-no-aside" + (tab === "chat" ? " kb-page-chat" : "")}>
+    <main className="app-main kb-page kb-no-aside">
       {/* V4.4：知识库列表移到顶栏下拉选择器（KbSelector），左侧不再占用一列 */}
       <section className="kb-main">
         {!sel ? (
@@ -124,9 +125,6 @@ export default function KnowledgePage() {
                 onNew={() => setShowCreate(true)}
               />
               <nav className="pill-tabs" role="tablist" aria-label="视图切换">
-                <button className={"ptab " + (tab === "chat" ? "on" : "")} onClick={() => setTab("chat")}>
-                  <MessageSquare size={14} /> AI 问答
-                </button>
                 <button className={"ptab " + (tab === "docs" ? "on" : "")} onClick={() => setTab("docs")}>
                   <FileText size={14} /> 文档
                 </button>
@@ -144,17 +142,7 @@ export default function KnowledgePage() {
                 {!readOnly && <KbActions kb={sel} onChanged={load} />}
               </div>
             </header>
-            {tab === "chat" && (
-              <ChatTab
-                kb={sel}
-                onCite={(kid) => {
-                  // 引用跳转：切到文档 Tab 并高亮定位（找不到对应行时静默，仅切 Tab）
-                  setTab("docs");
-                  setFocusDoc((p) => ({ id: kid, seq: (p?.seq || 0) + 1 }));
-                }}
-              />
-            )}
-            {tab === "docs" && <DocsTab kb={sel} focusDoc={focusDoc} readOnly={readOnly} />}
+            {tab === "docs" && <DocsTab kb={sel} readOnly={readOnly} />}
             {tab === "wiki" && <WikiTab kb={sel} />}
             {tab === "graph" && <GraphTab kb={sel} />}
             {tab === "search" && <SearchTab kb={sel} />}
@@ -164,74 +152,6 @@ export default function KnowledgePage() {
 
       {showCreate && <CreateDialog onClose={() => setShowCreate(false)} onCreated={load} />}
     </main>
-  );
-}
-
-/* ---------------- AI 问答 Tab（V4.1：知识库内对话 + 引用溯源；V4.2：建议问题对齐设计稿） ---------------- */
-function ChatTab({ kb, onCite }: { kb: KB; onCite: (kid: string) => void }) {
-  const kbConversations = useChatStore((s) => s.kbConversations);
-  const conversationId = useChatStore((s) => s.conversationId);
-  const refreshConversations = useChatStore((s) => s.refreshConversations);
-  const loadConversation = useChatStore((s) => s.loadConversation);
-  const newConversation = useChatStore((s) => s.newConversation);
-  const setChatContext = useChatStore((s) => s.setChatContext);
-  // 建议问题：从该库 Wiki 索引标题生成（真实数据，点击即按此问题检索）
-  const [suggests, setSuggests] = useState<string[]>([]);
-
-  useEffect(() => {
-    // 进入知识库问答：绑定当前库 + 从新会话开始（与首页工作流会话隔离）
-    setChatContext("kb_qa", kb.id);
-    newConversation();
-    void refreshConversations();
-    // 离开问答 Tab：复位为工作流模式，避免残留 kb 上下文串味到首页对话
-    return () => setChatContext("workflow", null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kb.id]);
-
-  useEffect(() => {
-    let alive = true;
-    apiJson<{ items: { title: string }[] }>(`/api/knowledge/bases/${kb.id}/wiki`).then((d) => {
-      if (!alive) return;
-      const titles = (d?.items ?? []).map((it) => cleanTitle(it.title)).filter(Boolean).slice(0, 4);
-      setSuggests(titles.map((t) => `${t}的要点是什么？`));
-    }).catch(() => {});
-    return () => { alive = false; };
-  }, [kb.id]);
-
-  return (
-    <div className="kb-chat-wrap">
-      <aside className="kb-chat-side">
-        <button
-          className="btn ghost btn-sm"
-          onClick={() => { newConversation(); void refreshConversations(); }}
-          title="开始一段新的问答会话"
-        >
-          <Plus size={14} /> 新会话
-        </button>
-        <div className="kb-chat-list">
-          {kbConversations.length === 0 && (
-            <div className="muted" style={{ padding: "8px 4px", fontSize: 12 }}>暂无问答会话</div>
-          )}
-          {kbConversations.map((c) => (
-            <button
-              key={c.id}
-              className={"kb-chat-item" + (conversationId === c.id ? " on" : "")}
-              onClick={() => void loadConversation(c.id)}
-              title={c.title}
-            >
-              <span className="kci-title">{c.title || "新会话"}</span>
-              <span className="muted kci-meta">{c.message_count} 条</span>
-            </button>
-          ))}
-        </div>
-        <div className="muted" style={{ fontSize: 11, padding: "6px 4px" }}>
-          提问只检索「{kb.name}」内的知识
-        </div>
-      </aside>
-      <div className="kb-chat-main">
-        <ChatPanel showCitations onCiteClick={onCite} kbName={kb.name} suggests={suggests} />
-      </div>
-    </div>
   );
 }
 
@@ -282,7 +202,7 @@ function KbActions({ kb, onChanged }: { kb: KB; onChanged: () => void }) {
 }
 
 /* ---------------- 文档 Tab ---------------- */
-function DocsTab({ kb, focusDoc, readOnly = false }: { kb: KB; focusDoc?: { id: string; seq: number } | null; readOnly?: boolean }) {
+function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [detail, setDetail] = useState<{ doc: Doc; chunks: ChunkRow[] } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -296,17 +216,6 @@ function DocsTab({ kb, focusDoc, readOnly = false }: { kb: KB; focusDoc?: { id: 
     setDocs(data?.items ?? []);
   }, [kb.id]);
   useEffect(() => { void load(); }, [load]);
-
-  // V4.1：AI 问答引用跳转——滚动定位并高亮对应文档行（等文档列表渲染后再定位）
-  useEffect(() => {
-    if (!focusDoc?.id || !docs.length) return;
-    const el = document.querySelector(`[data-doc-id="${focusDoc.id}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("flash");
-      setTimeout(() => el.classList.remove("flash"), 1600);
-    }
-  }, [focusDoc, docs]);
 
   const upload = async (f: File) => {
     setBusy(true);

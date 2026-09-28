@@ -58,7 +58,7 @@ export interface Conversation {
   message_count: number;
   task_count: number;
   messages?: ConvMessage[];
-  mode?: string;            // V4.1：workflow=首页工作流；kb_qa=知识库问答
+  mode?: string;            // workflow=首页工作流；kb_qa=已下线的知识库问答（仅历史数据）
   kb_id?: string | null;    // V4.1：知识库问答绑定的库
 }
 
