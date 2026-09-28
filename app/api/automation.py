@@ -12,6 +12,7 @@ M2 执行引擎（contract-m2 3）：
 - GET  /api/executions/{run_id}/files/{path}：失败截图 / trace 附件（白名单前缀）
 - GET  /api/tasks/{task_id}/pages：页面探索结果（crawler 落盘的 pages.json）
 - GET  /api/tasks/{task_id}/pages/screenshot/{name}：页面探索截图（文件名白名单）
+- GET  /api/tasks/{task_id}/live-shot：探索实时画面（explore/ 下序号最大的 step-NNN.png）
 
 路由注册由统筹者在 main.py 合并（见 docs/handoff-M1-frontend-shared.md）。
 """
@@ -340,6 +341,47 @@ def get_task_page_screenshot(task_id: str, name: str, db: Session = Depends(get_
     if not shot.is_file():
         raise HTTPException(status_code=404, detail="截图不存在")
     return FileResponse(shot)
+
+
+@router.get("/tasks/{task_id}/live-shot")
+def get_task_live_shot(task_id: str, db: Session = Depends(get_db),
+                       user: User = Depends(get_current_user)):
+    """探索实时画面：explore/ 下序号最大的 step-NNN.png（M4 全链路实时开关轮询用）。
+
+    - 归属校验与 pages 一致（非本人且非 admin → 404，不暴露存在性）
+    - 取最大序号：目录列出后按正则白名单过滤出 step-NNN.png，解析 NNN 取 max
+      （不信任字典序：跨位数 9 < 10 时字典序会取错，数值比较才稳）
+    - running 中文件可能正被写入：返回前 stat 校验存在且 size > 0，
+      任何 OSError（文件被截断/临时消失）兜底 404，前端下一轮轮询自然恢复
+    - 尚无任何截图（探索未出第一步 / 静态降级）→ 404
+    """
+    task = _own_task(db, task_id, user)
+    explore_dir = _task_out_dir(db, task) / "explore"
+    latest: Path | None = None
+    latest_n = -1
+    try:
+        entries = list(explore_dir.iterdir())
+    except OSError:
+        entries = []  # 目录不存在（还没跑到探索步骤）等异常一律视为无截图
+    for f in entries:
+        name = f.name
+        if not _PAGE_SHOT_RE.fullmatch(name) or not name.startswith("step-"):
+            continue
+        try:
+            n = int(name[len("step-"):-len(".png")])
+        except ValueError:
+            continue
+        if n > latest_n:
+            latest_n = n
+            latest = f
+    if latest is None:
+        raise HTTPException(status_code=404, detail="暂无探索截图")
+    try:
+        if not latest.is_file() or latest.stat().st_size <= 0:
+            raise HTTPException(status_code=404, detail="暂无探索截图")
+    except OSError:
+        raise HTTPException(status_code=404, detail="暂无探索截图")
+    return FileResponse(latest, media_type="image/png")
 
 
 @router.get("/tasks/{task_id}/video")

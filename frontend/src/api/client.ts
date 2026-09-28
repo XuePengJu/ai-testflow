@@ -276,6 +276,22 @@ export async function fetchPageScreenshot(taskId: string, name: string): Promise
 }
 
 /**
+ * 探索实时画面取流（GET /api/tasks/{task_id}/live-shot，返回 explore/ 下序号最大的 step-NNN.png）。
+ * 与 fetchPageScreenshot 同模式：<img> 无法带 Bearer，fetch blob → objectURL。
+ * 404（尚无截图：探索未出第一步 / 任务未跑）等失败返回 null，由调用方渲染占位并等下一轮轮询。
+ * 返回的 objectURL 由调用方负责 URL.revokeObjectURL 释放（LiveShotView 每轮刷新前释放上一张）。
+ */
+export async function fetchTaskLiveShot(taskId: string): Promise<string | null> {
+  try {
+    const r = await api(`${API}/tasks/${taskId}/live-shot`);
+    if (!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 探索录屏取流（GET /api/tasks/{task_id}/video，webm blob → objectURL，同截图鉴权模式）。
  * 404（无录屏：静态抓取 / 旧任务）等失败返回 null，由调用方隐藏播放入口。
  */

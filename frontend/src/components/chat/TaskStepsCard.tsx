@@ -3,9 +3,9 @@
  * 数据源：chatStore 消息上的 task（taskStore 轮询回写）。
  * 方案 B：每个步骤可折叠，默认展开，展开区显示该步思考详情（输入/输出/错误）。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Task, TaskPagesResp } from "../../types";
-import { fetchTaskPages, fetchTaskVideo } from "../../api/client";
+import { fetchTaskLiveShot, fetchTaskPages, fetchTaskVideo } from "../../api/client";
 import { PageShot } from "../task/ExecutionPanel";
 import ExploreTimeline from "./ExploreTimeline";
 import { useTaskStore } from "../../store/taskStore";
@@ -210,6 +210,90 @@ interface StepInfo {
   error?: string | null;
 }
 
+/**
+ * M4 全链路测试实时画面：探索步骤 running 时的可选截图轮询视图。
+ * - 「实时画面」checkbox 默认不勾：不勾 = 不轮询，零请求零开销
+ * - 勾选后每 3s 轮询 GET /tasks/{id}/live-shot（blob → objectURL，<img> 鉴权同 PageShot 模式）
+ * - 每轮刷新前 revoke 上一张 objectURL、卸载时 revoke 当前一张，杜绝 blob 泄漏
+ * - 显示探索步骤实时 progress 摘要与最近刷新时间；轮询开关由父级渲染条件控制
+ *   （kind === "explore" 且探索步骤 running 才挂载，任务结束自动隐藏并停止）
+ */
+function LiveShotView({ taskId, progress }: { taskId: string; progress?: string | null }) {
+  const [enabled, setEnabled] = useState(false);
+  const [shotUrl, setShotUrl] = useState<string | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
+  // objectURL 用 ref 记账：interval 回调里也要能释放上一张，不能只靠 state
+  const urlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    const tick = (): void => {
+      void fetchTaskLiveShot(taskId).then((u) => {
+        if (cancelled) {
+          // 组件已卸载/已停轮询但响应迟到：直接释放，不进 state
+          if (u) URL.revokeObjectURL(u);
+          return;
+        }
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = u;
+        setShotUrl(u);
+        setMissing(!u);
+        if (u) setRefreshedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+      });
+    };
+    tick(); // 勾选立即拉一次，不等第一个 3s
+    const id = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current);
+        urlRef.current = null;
+      }
+    };
+  }, [enabled, taskId]);
+
+  return (
+    <div className="tsc-io" style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#1f2329", userSelect: "none" }}
+          title="每 3 秒刷新探索 Agent 的最新页面截图（仅探索进行中可用）"
+        >
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          📺 实时画面
+        </label>
+        {enabled && refreshedAt && (
+          <span style={{ fontSize: 11, color: "#8f959e" }}>最近刷新 {refreshedAt}</span>
+        )}
+      </div>
+      {enabled && (
+        <div style={{ marginTop: 6 }}>
+          {shotUrl ? (
+            <img
+              src={shotUrl}
+              alt="探索实时画面"
+              style={{ maxWidth: "100%", maxHeight: 320, borderRadius: 8, border: "1px solid #e5e6eb", display: "block", background: "#fafafa" }}
+            />
+          ) : (
+            <div
+              className="hint-line"
+              style={{ height: 96, borderRadius: 6, border: "1px dashed #e5e6eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#8f959e" }}
+            >
+              {missing ? "暂无探索截图，等 Agent 出第一步画面…" : "画面加载中…"}
+            </div>
+          )}
+          {progress && (
+            <div className="tsc-io-text tsc-muted" style={{ marginTop: 4 }}>🧭 {progress}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** showIterate：会话内任务卡传 true（挂「继续优化」→ 挂 chip）；详情页 running 卡不传（避免重复入口） */
 export default function TaskStepsCard({ task, showIterate = false }: { task: Task; showIterate?: boolean }) {
   const tasks = useTaskStore((s) => s.tasks);
@@ -328,6 +412,9 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
           const isCrawlerDone = live.kind === "e2e" && title === "抓取页面" && st === "completed";
           // M5 explore 探索步骤完成后 → 就地可视化（探索时间线：每步动作/理由/结果 + 截图），失败回退 JSON
           const isExploreDone = live.kind === "explore" && title === "探索式测试" && st === "completed";
+          // M4 实时画面：explore 探索步骤 running 时挂 LiveShotView（卸载即停轮询，任务结束/中断自动消失）
+          const isExploreRunning =
+            live.kind === "explore" && title === "探索式测试" && st === "running" && live.status === "running";
           return (
             <div key={title} className={`tsc-step tsc-${st}`}>
               <button type="button" className="tsc-step-head" onClick={() => toggle(title)}>
@@ -350,8 +437,11 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
               </button>
               {open && (
                 <div className="tsc-step-detail">
-                  {st === "running" && live.status !== "failed" && (
+                  {st === "running" && live.status !== "failed" && !isExploreRunning && (
                     <div className="tsc-io-text tsc-muted">{s?.progress || RUNNING_HINTS[title]}</div>
+                  )}
+                  {isExploreRunning && (
+                    <LiveShotView taskId={live.id} progress={s?.progress || RUNNING_HINTS[title]} />
                   )}
                   {st === "running" && live.status === "failed" && (
                     <div className="tsc-io-text tsc-muted">任务已中断，可点击上方「🔄 重试」从断点继续</div>
