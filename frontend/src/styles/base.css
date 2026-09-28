@@ -2076,3 +2076,76 @@ button.cl-select:hover { background: #f5f7fa; }
   background: #fff; color: #1f2329; font-weight: 600;
   box-shadow: 0 1px 3px rgba(31, 35, 41, .12);
 }
+
+/* ==================================================================
+   V5.9 知识库主页重构（M6 拖拽上传 + 轻行列表 · M7 Wiki 分类降级）
+   ================================================================== */
+
+/* ---- M6 库头：库名 + 可见性徽章 + 聚合统计 ---- */
+.kb-lib-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 2px 2px 0; }
+.kb-lib-name { margin: 0; font-size: 17px; font-weight: 700; color: var(--itf-ink900, #0f172a); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-lib-head .kb-vis { align-self: center; }
+.kb-lib-stats { font-size: 12.5px; }
+
+/* ---- M6 上传拖拽区 ---- */
+.kb-dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 18px 12px; border: 1.5px dashed var(--itf-line200, #e2e8f0); border-radius: 12px;
+  background: var(--itf-bg, #f8fafc); cursor: pointer; text-align: center;
+  font-size: 13px; color: var(--itf-ink700, #334155);
+  transition: border-color .15s, background .15s;
+}
+.kb-dropzone:hover, .kb-dropzone.drag { border-color: var(--itf-p500, #6366f1); background: var(--itf-p50, #eef2ff); }
+.kb-dropzone .kb-dz-icon { color: var(--itf-p500, #6366f1); }
+.kb-dropzone .kb-dz-link { color: var(--itf-p600, #4f46e5); }
+.kb-dropzone .kb-dz-hint { font-size: 11.5px; }
+.kb-dropzone.drag { border-style: solid; }
+
+/* ---- M6 工具栏 ---- */
+.kb-search { flex: none; }
+.kb-type-select { flex: none; padding: 6px 8px; }
+
+/* ---- M6 文档轻行列表（重卡片 → 轻行） ---- */
+.doc-rows { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+.doc-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 12px; border-radius: 10px; border: 1px solid transparent;
+  background: #fff; cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.doc-row:hover { background: var(--gray-50, #f9fafb); border-color: var(--itf-line200, #e2e8f0); }
+.doc-row:hover .doc-row-ops { opacity: 1; }
+/* 异常态整行浅色高亮：失败浅红 / 处理中浅蓝 */
+.doc-row.row-err { background: var(--danger-50, #fef2f2); }
+.doc-row.row-err:hover { background: #fde3e3; }
+.doc-row.row-run { background: var(--itf-p50, #eef2ff); }
+.doc-row.row-run:hover { background: #e0e7ff; }
+.doc-type-ic {
+  flex: none; width: 40px; height: 40px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .3px;
+}
+.doc-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.doc-row-titleline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.doc-row-title { font-size: 13.5px; font-weight: 600; color: var(--itf-ink900, #0f172a); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-row-cat { flex: none; font-size: 10.5px; font-weight: 500; color: var(--itf-ink500, #64748b); background: var(--itf-line100, #f1f5f9); border-radius: 8px; padding: 1px 7px; white-space: nowrap; }
+.doc-row-summary { font-size: 12px; color: var(--itf-ink500, #64748b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-row-summary.err-text { max-width: none; margin: 0; }
+.doc-row-meta { flex: none; display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--itf-ink400, #94a3b8); white-space: nowrap; }
+.doc-row-ops { flex: none; display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+
+/* ---- M7 Wiki 分类 chips（左栏侧栏降级为顶部筛选） ---- */
+.wiki-chips-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.wiki-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.wiki-chip-f {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 16px; border: 1px solid var(--itf-line200, #e2e8f0);
+  background: #fff; font-size: 12.5px; color: var(--itf-ink700, #334155); cursor: pointer;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.wiki-chip-f:hover { border-color: var(--itf-p500, #6366f1); color: var(--itf-p600, #4f46e5); }
+.wiki-chip-f.on { background: var(--itf-p50, #eef2ff); border-color: var(--itf-p500, #6366f1); color: var(--itf-p600, #4f46e5); font-weight: 600; }
+.wiki-chip-f b { font-weight: 700; }
+.wiki-fix-btn { border-radius: 16px; }
+.spin { animation: kb-spin 1s linear infinite; }
+@keyframes kb-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
