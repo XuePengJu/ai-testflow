@@ -226,22 +226,12 @@ try {
   }
   ok("⑦ 切回 AI 会话：两栏完整");
 
-  // ⑧⑨⑩ 分类树（V5.5：分类管理弹层迁到用例库页工具栏）
+  // ⑧⑨⑩ 分类树（V5.6：CategoryTree 常驻用例库左栏，点行即筛选，无弹层开关）
   // 注意：新账号被 sample_seeder 预置 3 个种子分类，树里不止 电商测试，
   // 所有断言必须按 cat-name 精确锚定「电商测试」行，不能用"第一个 .cat-row"
   await page.click('button[aria-label^="用例库"]');
   await page.waitForSelector(".cases-page", { timeout: 8000 });
-  const openCatPopover = async () => {
-    if (await page.$("[data-testid='category-tree']")) return;
-    await page.click("[data-testid='cat-toggle']");
-    await page.waitForSelector("[data-testid='category-tree']", { timeout: 8000 });
-  };
-  const closeCatPopover = async () => {
-    if (!(await page.$("[data-testid='category-tree']"))) return;
-    await page.click("[data-testid='cat-toggle']");
-    await page.waitForSelector("[data-testid='category-tree']", { state: "detached", timeout: 8000 });
-  };
-  await openCatPopover();
+  await page.waitForSelector(".cl-side [data-testid='category-tree']", { timeout: 8000 });
   await page.click("[data-testid='cat-new-btn']");
   await page.fill("[data-testid='cat-new-input']", "电商测试");
   await page.press("[data-testid='cat-new-input']", "Enter");
@@ -260,9 +250,8 @@ try {
   );
   ok("⑧b 新建子分类「购物车」");
 
-  // ⑨ 任务归类（先收起弹出层，避免遮挡行操作）
+  // ⑨ 用例集归类（树常驻左栏不遮挡行操作；行操作 hover 显示，先 hover 行）
   await page.waitForSelector(".cases-page tbody tr", { timeout: 30000 });
-  await closeCatPopover();
   const firstRowId = await page.getAttribute(".cases-page tbody tr >> nth=0", "data-testid");
   const firstTaskId = firstRowId ? String(firstRowId).replace(/^case-row-/, "") : null;
   if (firstTaskId) {
@@ -272,8 +261,7 @@ try {
     await page.click(`[data-testid='cat-move-${firstTaskId}'] button:has-text('电商测试')`);
     ok("⑨ 用例集归类：🏷 菜单 → 电商测试（PUT move-task 200）");
 
-    // ⑩ 分类过滤（重开弹出层：计数断言 + 点行过滤）
-    await openCatPopover();
+    // ⑩ 分类过滤（树常驻：计数断言 + 点行过滤）
     await page.waitForFunction(
       (cid) => document.querySelector(`.cat-row[data-cat-id='${cid}'] .cat-count`)?.textContent === "1",
       catId,

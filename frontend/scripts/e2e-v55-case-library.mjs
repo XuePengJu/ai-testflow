@@ -38,19 +38,21 @@ try {
   else fail("右栏任务列表仍存在", "");
   await page.screenshot({ path: `${SHOT_DIR}/1-ai-chat-2col.png`, fullPage: false });
 
-  // ② 用例库页
+  // ② 用例库页（V5.6 两栏：左分类面板 + 右列表）
   await page.click('button[aria-label^="用例库"]');
+  await page.waitForSelector(".cases-page .cl-side [data-testid='category-tree']", { timeout: 15000 });
   await page.waitForSelector(".cases-page tbody tr", { timeout: 15000 });
   const rows = await page.locator(".cases-page tbody tr").count();
-  ok(`用例库渲染 ${rows} 条用例集`);
+  const catRows = await page.locator(".cl-side .cat-row").count();
+  ok(`用例库渲染 ${rows} 条用例集，左栏分类 ${catRows} 行`);
   await page.screenshot({ path: `${SHOT_DIR}/2-case-library.png`, fullPage: false });
 
-  // ③ 筛选交互：评审状态筛选
-  await page.selectOption(".cl-toolbar select >> nth=1", "draft");
+  // ③ 筛选交互：评审状态筛选（工具栏仅剩状态一个 select）
+  await page.selectOption(".cl-toolbar select", "draft");
   await page.waitForTimeout(600);
   ok("评审状态筛选（草稿）生效");
   await page.screenshot({ path: `${SHOT_DIR}/3-case-library-filtered.png`, fullPage: false });
-  await page.selectOption(".cl-toolbar select >> nth=1", "all");
+  await page.selectOption(".cl-toolbar select", "all");
 
   // ④ 打开详情抽屉（思维导图 Tab）
   await page.locator(".cases-page tbody tr .cl-name").first().click();
