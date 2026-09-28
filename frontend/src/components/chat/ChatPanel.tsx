@@ -9,12 +9,15 @@
  * V2.10：输入框为唯一入口 —— 挂载「迭代引用 chip」时本次发送走 iterate（基于旧任务合并用例），
  *        无 chip 时为新建任务；chip 由详情页「继续优化」或会话内任务卡挂载。
  */
-import { useEffect, useRef, useState } from "react";
-import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles, Globe, Library } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Paperclip, Lightbulb, Send, Square, Globe, Library, BookCheck } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
+import { useTaskStore } from "../../store/taskStore";
 import { api, API, toast } from "../../api/client";
 import type { ChatDraft } from "../../types";
 import MessageView from "./MessageView";
+import { statusBadge } from "../chat/TaskStepsCard";
+import { groupByChain } from "../../utils/taskChain";
 
 /** V5.8 知识库选择器条目（/api/knowledge/bases 返回的精简字段） */
 interface KbItem {
@@ -61,6 +64,15 @@ export default function ChatPanel({
 }) {
   const messages = useChatStore((s) => s.messages);
   const conversationId = useChatStore((s) => s.conversationId);
+  // W3 M8 首页驾驶舱摘要：复用 taskStore 任务列表（App 层统一 5s 轮询），客户端聚合最近 2 条
+  const tasks = useTaskStore((s) => s.tasks);
+  /** 最近用例：任务按迭代链聚合（一行 = 一条用例集，展示最新版），取最近 2 条 */
+  const recentCases = useMemo(() => groupByChain(tasks).slice(0, 2), [tasks]);
+  /** 最近测试运行：按创建时间倒序取最近 2 次（名称 + 结果） */
+  const recentRuns = useMemo(
+    () => [...tasks].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")).slice(0, 2),
+    [tasks],
+  );
   const streamingByConversation = useChatStore((s) => s.streamingByConversation);
   // 按会话隔离的流式状态：当前会话在输出中才禁用输入框，其他会话不受影响
   const streaming = conversationId ? (streamingByConversation[conversationId] ?? false) : false;
@@ -225,40 +237,75 @@ export default function ChatPanel({
       <div className="chat-stream" ref={streamRef} onScroll={onScroll}>
         {messages.length === 0 ? (
           <div className="welcome">
+            {/* W3 M8 首页驾驶舱：一句话主线 + 副文案 + 示例 chips + 最近用例/最近测试运行摘要卡。
+                单输入框 = 下方现有聊天输入（功能与附加按钮全保留），不再摆 4 张功能卡分流。 */}
             <h2>
               <Bot size={24} style={{ verticalAlign: "-4px", marginRight: 6 }} />
-              我是 Buddy
+              输入需求，生成用例，一键全链路测试
             </h2>
-            <p>把你的测试需求告诉我，我来拆解需求、生成用例、质量校验、导出文件。</p>
-
-            <div className="quick-cards">
-              <button className="quick-card" type="button" onClick={() => fileRef.current?.click()}>
-                <FileUp size={18} />
-                <span className="qc-title">上传文档</span>
-                <span className="qc-desc">上传需求文档，AI 自动读取</span>
-              </button>
-              <button className="quick-card" type="button" onClick={() => inputRef.current?.focus()}>
-                <ClipboardList size={18} />
-                <span className="qc-title">输入场景</span>
-                <span className="qc-desc">直接描述你的业务场景</span>
-              </button>
-              <button className="quick-card" type="button" onClick={() => window.dispatchEvent(new CustomEvent("nav-to", { detail: "e2e" }))}>
-                <Globe size={18} />
-                <span className="qc-title">全链路测试</span>
-                <span className="qc-desc">输入网址自动抓取生成用例</span>
-              </button>
-              <button className="quick-card" type="button" onClick={() => setText(SAMPLE_ECOM)}>
-                <Sparkles size={18} />
-                <span className="qc-title">查看示例</span>
-                <span className="qc-desc">点下方示例一键填入</span>
-              </button>
-            </div>
+            <p className="welcome-sub">
+              把需求告诉 Buddy：自动拆解测试点、生成用例并沉淀到用例库；
+              也可以输入网址发起全链路测试，质量报告随时可查。
+            </p>
 
             <div className="sample-chips">
               <span className="sc-label">试试这些示例：</span>
               <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_ECOM)}>电商订单流程</button>
               <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_LOGIN)}>用户登录注册</button>
               <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_DBERP)}>DBERP 采购入库</button>
+            </div>
+
+            {/* 摘要卡两块：数据全部来自 taskStore 现有列表（App 层 5s 轮询），无新后端 */}
+            <div className="home-cards">
+              <div className="home-card" data-testid="home-recent-cases">
+                <div className="hc-title">
+                  <Library size={14} />
+                  最近用例
+                  <button
+                    type="button"
+                    className="hc-more"
+                    onClick={() => window.dispatchEvent(new CustomEvent("nav-to", { detail: "cases" }))}
+                  >
+                    查看全部
+                  </button>
+                </div>
+                {recentCases.length === 0 ? (
+                  <div className="hc-empty">暂无用例，输入需求即可生成</div>
+                ) : (
+                  recentCases.map((g) => (
+                    <div key={g.latest.id} className="hc-row">
+                      <span className="hc-name" title={g.latest.name}>{g.latest.name}</span>
+                      <span className="pill pill-sub">v{g.versions}</span>
+                      <span className={`pill ${(g.latest.review_status || "draft") === "reviewed" ? "rv-ok" : "rv-draft"}`}>
+                        {(g.latest.review_status || "draft") === "reviewed" ? "已评审" : "草稿"}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="home-card" data-testid="home-recent-runs">
+                <div className="hc-title">
+                  <BookCheck size={14} />
+                  最近测试运行
+                  <button
+                    type="button"
+                    className="hc-more"
+                    onClick={() => window.dispatchEvent(new CustomEvent("nav-to", { detail: "e2e" }))}
+                  >
+                    测试中心
+                  </button>
+                </div>
+                {recentRuns.length === 0 ? (
+                  <div className="hc-empty">暂无运行记录</div>
+                ) : (
+                  recentRuns.map((t) => (
+                    <div key={t.id} className="hc-row">
+                      <span className="hc-name" title={t.name}>{t.name}</span>
+                      <span className={`pill pill-${statusBadge(t.status).cls}`}>{statusBadge(t.status).text}</span>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
         ) : (

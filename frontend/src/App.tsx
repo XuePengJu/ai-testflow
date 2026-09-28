@@ -10,12 +10,18 @@
  * V5.5（2026-09-28）：用例库资产化 —— 新增一级「用例库」页（测试用例集管理）；
  * 「用例设计」改名「AI 会话」；会话页移除右侧「我的任务」栏（与用例库重复），
  * 任务列表轮询收归 App 层（会话任务卡实时刷新依赖同一份数据）。
+ * W3（2026-09-29）：M8 导航收敛 + M9 测试中心 ——
+ * - 一级导航收敛 4 项：AI 会话 / 用例库 / 测试中心（原「全链路测试」，并入质量报告）/ 知识库；
+ * - 模型配置 / 用户管理 / 被测系统 / 源码 / 系统自检 全部沉到底部「设置」组
+ *   （可见性规则不变：用户管理仍仅管理员可见）；
+ * - 旧 nav-to detail 值兼容重定向：quality → e2e（测试中心），避免死链接；
+ * - 左栏漂浮贴纸（.rail-sticker）移除；「DBERP 进销存」改名「被测系统 · DBERP」。
  */
 import { useEffect, useState } from "react";
 import {
   Shield, ShieldCheck, Loader2, LogOut, Cpu,
   BookOpen, MessageSquare, UserPlus, ChevronsLeft, ChevronsRight,
-  FlaskConical, Boxes, ChevronDown, ExternalLink, Globe, Library,
+  FlaskConical, Boxes, ChevronDown, ExternalLink, Library,
 } from "lucide-react";
 import { useAuth } from "./hooks/useAuth";
 import { useChatStore } from "./store/chatStore";
@@ -32,9 +38,20 @@ import SettingsPage from "./pages/SettingsPage";
 import ModelConfigPage from "./pages/ModelConfigPage";
 import AdminPage from "./pages/AdminPage";
 import KnowledgePage from "./pages/KnowledgePage";
-import QualityPage from "./pages/QualityPage";
 
-type View = "main" | "cases" | "settings" | "models" | "admin" | "knowledge" | "quality" | "e2e";
+type View = "main" | "cases" | "settings" | "models" | "admin" | "knowledge" | "e2e";
+
+/** 合法视图 id（M9：quality 独立视图移除，并入测试中心 e2e） */
+const VIEWS: View[] = ["main", "cases", "settings", "models", "admin", "knowledge", "e2e"];
+
+/**
+ * W3 M9 兼容重定向：旧视图标识 → 新视图。
+ * quality（独立质量报告）→ e2e（测试中心，质量报告已并入为 Tab）。
+ */
+function normalizeView(v: string | null): View {
+  if (v === "quality") return "e2e";
+  return (VIEWS as string[]).includes(v || "") ? (v as View) : "main";
+}
 
 const GITHUB_REPO = "https://github.com/XuePengJu/ai-testflow";
 
@@ -59,9 +76,7 @@ export default function App() {
   const refreshConversations = useChatStore((s) => s.refreshConversations);
   const newConversation = useChatStore((s) => s.newConversation);
   const refreshTasks = useTaskStore((s) => s.refresh);
-  const [view, setView] = useState<View>(
-    () => (localStorage.getItem("aitf_view") as View) || "main"
-  );
+  const [view, setView] = useState<View>(() => normalizeView(localStorage.getItem("aitf_view")));
   useEffect(() => { localStorage.setItem("aitf_view", view); }, [view]);
 
   // V4.3 侧边栏折叠态（默认展开，记忆用户选择）
@@ -71,8 +86,9 @@ export default function App() {
   useEffect(() => { localStorage.setItem("aitf_rail_collapsed", railCollapsed ? "1" : "0"); }, [railCollapsed]);
 
   // V4.5.3 被测系统子菜单：数据源数组，后续加链接只需在 TARGETS 里追加一行
+  // W3 M8：显示名规范为「被测系统 · DBERP」
   const TARGETS: { name: string; url: string }[] = [
-    { name: "DBERP 进销存", url: "https://erp.agentest.vip/" },
+    { name: "被测系统 · DBERP", url: "https://erp.agentest.vip/" },
   ];
   const [tOpen, setTOpen] = useState(
     () => localStorage.getItem("aitf_target_open") !== "0"
@@ -105,17 +121,16 @@ export default function App() {
     if (view === "settings" && ready && !me) setView("main");
     // V4.2：guest 也可进知识库（只读共享库，写操作后端 403 + 前端隐藏按钮）
     if (view === "knowledge" && ready && !me) setView("main");
-    // 方案 A：质量报告对所有登录角色开放（含访客），未登录回主视图
-    if (view === "quality" && ready && !me) setView("main");
     // V5.3：模型配置对所有登录角色开放（访客只读调度摘要，配置接口后端 403）
     if (view === "models" && ready && !me) setView("main");
   }, [view, ready, role, me]);
 
   // V4.0：跨页面跳转事件（如知识库创建后引导去设置页配置向量模型）
+  // W3 M9：旧 detail 值 quality 经 normalizeView 重定向到测试中心（e2e），避免死链接
   useEffect(() => {
     const h = (e: Event) => {
       const d = (e as CustomEvent<string>).detail;
-      if (d === "main" || d === "cases" || d === "settings" || d === "models" || d === "admin" || d === "knowledge" || d === "quality" || d === "e2e") setView(d);
+      setView(normalizeView(d));
     };
     window.addEventListener("nav-to", h);
     return () => window.removeEventListener("nav-to", h);
@@ -135,7 +150,7 @@ export default function App() {
    * 收起态隐藏文字，hover 弹出 CSS 浮层标签（.rl-tip）替代系统 title。
    */
   const railBtn = (
-    v: View | "selfcheck" | "github" | "logout" | "e2e",
+    v: View | "selfcheck" | "github" | "logout",
     icon: React.ReactNode,
     label: string,
     show: boolean,
@@ -180,24 +195,23 @@ export default function App() {
         {railBtn("main", <MessageSquare />, "AI 会话", true, { active: view === "main", onClick: () => setView("main"), aria: "AI 会话 · 测试工作台", ico: "i-chat" })}
         {/* V5.5：用例库升为一级入口（原会话页右栏「我的任务」的资产化形态），全角色可见 */}
         {railBtn("cases", <Library />, "用例库", true, { active: view === "cases", onClick: () => setView("cases"), aria: "用例库 · 测试用例资产管理", ico: "i-cases" })}
-        {/* V5.4：全链路测试升为独立整页入口（原聊天输入框弹窗废弃）；全角色可见 */}
-        {railBtn("e2e", <Globe />, "全链路测试", true, {
+        {/* W3 M9：全链路测试更名「测试中心」，质量报告并入为 Tab（视图 id 仍为 e2e，旧链接兼容） */}
+        {railBtn("e2e", <FlaskConical />, "测试中心", true, {
           active: view === "e2e",
           onClick: () => setView("e2e"),
-          aria: "全链路测试 · 输入网址 AI 自动生成用例", ico: "i-e2e",
+          aria: "测试中心 · 全链路测试 + 质量报告", ico: "i-e2e",
         })}
         {railBtn("knowledge", <BookOpen />, "知识库", canKb, { active: view === "knowledge", onClick: () => setView("knowledge"), aria: role === "guest" ? "知识库（访客 · 只读共享库）" : "知识库 · 文档与问答", ico: "i-kb" })}
-        {/* 方案 A：质量报告对所有登录角色开放（展示用途，运行按钮 admin 专属） */}
-        {railBtn("quality", <FlaskConical />, "质量报告", canKb, { active: view === "quality", onClick: () => setView("quality"), aria: "质量报告 · 平台测试量化数据", ico: "i-quality" })}
-        {/* V5.3：模型配置升为一级入口（原在设置页内）；全角色可见，访客只读调度摘要 */}
+
+        {/* W3 M8：贴纸残留（含绿色铅笔/烧杯 emoji）移除，spacer 仅作弹性占位 */}
+        <div className="rail-spacer" />
+
+        {/* W3 M8：模型配置/用户管理/被测系统/源码/系统自检 沉到「设置」组（可见性规则不变） */}
+        <div className="rl-group">设置</div>
+        {/* V5.3：模型配置（原一级入口下沉）；全角色可见，访客只读调度摘要 */}
         {railBtn("models", <Cpu />, "模型配置", canKb, { active: view === "models", onClick: () => setView("models"), aria: "模型配置 · 模型池与调度", ico: "i-models" })}
-        {/* V5.3：管理后台改名「用户管理」（页面现已只含用户管理与访客治理） */}
+        {/* V5.3：管理后台改名「用户管理」（页面现已只含用户管理与访客治理）；仅管理员可见 */}
         {railBtn("admin", <Shield />, "用户管理", role === "admin", { active: view === "admin", onClick: () => setView("admin"), aria: "用户管理（仅管理员）", ico: "i-admin" })}
-
-        <div className="rail-spacer"><span className="rail-sticker" aria-hidden="true">🧪</span></div>
-
-        <div className="rl-group">系统</div>
-        {railBtn("selfcheck", scShow ? <Loader2 className="spin" /> : <ShieldCheck />, "系统自检", true, { onClick: runSelfCheck, aria: "系统自检（验证加密链路）", ico: "i-check" })}
         {/* V4.5.3 被测系统：可折叠父项 + 子项外链（TARGETS 数组，后续追加即可） */}
         <div className={"rail-sub" + (tOpen ? " open" : "")}>
           <button
@@ -237,6 +251,7 @@ export default function App() {
           <span className="rl-txt">源码</span>
           <span className="rl-tip" aria-hidden="true">在 GitHub 上查看源码</span>
         </a>
+        {railBtn("selfcheck", scShow ? <Loader2 className="spin" /> : <ShieldCheck />, "系统自检", true, { onClick: runSelfCheck, aria: "系统自检（验证加密链路）", ico: "i-check" })}
         {/* V5.3：「设置」rail 按钮移除 —— 个人中心改由 rail 底部用户名区域进入 */}
         {!me || !role ? (
           <button className="rail-login" onClick={() => showLogin("login")} aria-label="登录 / 注册">
@@ -273,7 +288,6 @@ export default function App() {
         )}
         {view === "cases" && <CaseLibraryPage />}
         {view === "knowledge" && <KnowledgePage />}
-        {view === "quality" && <QualityPage />}
         {view === "e2e" && <E2EPage />}
         {view === "models" && <ModelConfigPage />}
         {view === "settings" && <SettingsPage />}
