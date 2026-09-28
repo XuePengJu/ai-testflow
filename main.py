@@ -28,11 +28,16 @@ class NoCacheStaticFiles(StaticFiles):
         response.headers["Cache-Control"] = "no-cache"
         return response
 
-from app.api import auth, categories, chat, conversations, files, guest, knowledge, llm_config, tasks, users
+from app.api import auth, automation, categories, chat, conversations, files, guest, knowledge, llm_config, llm_pool, prompts, quality, tasks, users
 from app.core.config import STATIC_DIR, jwt_secret_is_placeholder, ENV
 from app.core.db import init_db, engine
+from app.core.logging_config import setup_logging
 
 logger = logging.getLogger("main")
+
+# M10 运维日志落盘：root logger → logs/app.log（滚动），uvicorn 日志合并进 root。
+# 必须在 app 创建前执行，让后续 lifespan / 各 API 模块的 INFO 日志都能被捕获。
+setup_logging()
 
 
 @asynccontextmanager
@@ -59,6 +64,11 @@ async def lifespan(app: FastAPI):
     task_queue.recover_pending_tasks()
     task_queue.start_workers()
 
+    # M2 执行队列：与 task_queue 同模式，lifespan 启动（API 层懒启动兜底，幂等）
+    from app.core import exec_queue
+    exec_queue.recover_pending_runs()
+    exec_queue.start_workers()
+
     yield
 
     # 优雅关闭：等待队列中任务执行完毕（systemd TimeoutStopSec 兜底）
@@ -78,6 +88,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 接口出入参访问日志（M10.1）：注册在加密中间件**之前** = 位于其内层，
+# 看到的是解密后的入参与加密前的明文出参（加密层在外侧加解密，本层只管如实记录）
+from app.core.access_log import AccessLogMiddleware  # noqa: E402
+app.add_middleware(AccessLogMiddleware)
+
 # API 分级加密（admin 明文 / user+guest AES-256-GCM）——最后注册 = 最外层
 from app.core.middleware import ApiCryptoMiddleware  # noqa: E402
 app.add_middleware(ApiCryptoMiddleware)
@@ -88,10 +103,14 @@ app.include_router(guest.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(categories.router, prefix="/api")
 app.include_router(llm_config.router, prefix="/api")
+app.include_router(llm_pool.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
+app.include_router(quality.router, prefix="/api")
+app.include_router(automation.router, prefix="/api")
+app.include_router(prompts.router, prefix="/api")
 
 
 @app.get("/health")

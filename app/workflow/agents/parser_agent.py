@@ -14,11 +14,15 @@ business 模式：优先用真实模型理解整段需求、拆成测试点（�
 避免前端直接拿用户原话截断当名字；无 AI 时用第一个测试点名兜底。
 """
 import json
+import logging
 import re
 
 from app.services.doc_extract import extract_text_safe
 from app.services.pipeline_lib import lib_parse
 from src.models.testcase import RequirementUnit
+from src.utils import jsonx
+
+logger = logging.getLogger(__name__)
 
 
 _AI_PARSE_PROMPT = """你是资深软件测试工程师。请对下面这段业务需求做三件事：
@@ -85,30 +89,24 @@ def _parse_ai_output(raw: str) -> tuple[list[RequirementUnit], str, str]:
     title = ""
     req_summary = ""
 
-    # ① 优先尝试对象格式
-    m = re.search(r"\{.*\}", text, re.S)
-    if m:
-        try:
-            obj = json.loads(m.group(0))
-        except Exception:
-            obj = None
-        if isinstance(obj, dict) and isinstance(obj.get("units"), list):
-            arr = obj["units"]
-            title = str(obj.get("title") or "").strip()
-            req_summary = str(obj.get("summary") or "").strip()
+    # ① 优先尝试对象格式（jsonx 配对解析：不会像贪婪正则那样吞掉对象后的内容）
+    obj = jsonx.find_dict(text, need_keys=("units",))
+    if isinstance(obj, dict) and isinstance(obj.get("units"), list):
+        arr = obj["units"]
+        title = str(obj.get("title") or "").strip()
+        req_summary = str(obj.get("summary") or "").strip()
 
-    # ② 回退旧格式：裸数组
+    # ② 回退旧格式：裸数组（元素键是 name，与用例的 title 不同，故单独传 keys）
     if arr is None:
-        m = re.search(r"\[.*\]", text, re.S)
-        if m:
-            try:
-                maybe = json.loads(m.group(0))
-            except Exception:
-                maybe = None
-            if isinstance(maybe, list):
-                arr = maybe
+        arr = jsonx.find_dict_list(text, keys=("name",))
 
     if arr is None:
+        # 显性留痕：旧实现静默返回空，会让「模型没给 JSON」与「给了但格式不对」无法区分
+        logger.warning(
+            "测试点解析无产出，回退正则切标题：原文 %d 字，reason=%s",
+            len(text),
+            "invalid_json" if jsonx.has_array_literal(text) else "no_json",
+        )
         return [], title, req_summary
 
     units: list[RequirementUnit] = []

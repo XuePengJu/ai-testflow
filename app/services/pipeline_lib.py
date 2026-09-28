@@ -41,13 +41,21 @@ def lib_parse(
 
 
 def lib_generate(units: list[RequirementUnit], client=None, progress_cb=None,
-                 roles=None) -> list[TestCase]:
+                 roles=None, out_meta: dict | None = None,
+                 template_loader=None) -> list[TestCase]:
     """按策略生成测试用例。client=平台注入的真实模型；roles=参与角色（pm/qa/dev，默认 qa）。
 
     progress_cb：每个「测试点×角色」完成后的实时进度回调（透传给 CaseGenerator）。
+    out_meta：可选出参 dict；回填 {"parse_failures": [...]}，
+              即「模型调用成功但解析出 0 条」的测试点清单（供上层显性提示，不静默丢）。
+    template_loader：可选自定义模板加载器 callable(kind, role) -> str | None（V5.10，
+              平台注入用户在「提示词」弹窗的自定义模板；None 回落内置默认）。
     """
-    return CaseGenerator(client=client, roles=roles).generate(
-        units, progress_cb=progress_cb)
+    generator = CaseGenerator(client=client, roles=roles, template_loader=template_loader)
+    cases = generator.generate(units, progress_cb=progress_cb)
+    if out_meta is not None:
+        out_meta["parse_failures"] = list(generator.parse_failures)
+    return cases
 
 
 def lib_export(cases: list[TestCase], output_path: str, formats: list[str]) -> dict:

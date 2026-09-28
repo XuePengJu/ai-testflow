@@ -9,6 +9,14 @@
  */
 import { aesGcmEncrypt, aesGcmDecrypt } from "../crypto/aesGcm";
 import { getAuthSnapshot, type AuthSnapshot } from "../contexts/authState";
+import type {
+  ExecutionRunOut,
+  ExecutionStartResp,
+  QualityHistoryPoint,
+  QualityRunStatus,
+  QualitySummaryResp,
+  TaskPagesResp,
+} from "../types";
 
 export const API = "/api";
 
@@ -171,4 +179,164 @@ export async function downloadTaskFile(taskId: string, fmt: string, taskName: st
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/* ===== M0 质量看板（admin-only，与 app/api/quality.py 对齐） ===== */
+
+/** 最新聚合结果（未运行过时 exists=false，前端渲染空态） */
+export function getQualitySummary(): Promise<QualitySummaryResp | null> {
+  return apiJson<QualitySummaryResp>(`${API}/quality/summary`);
+}
+
+/** 后台触发一轮完整测试（pytest + e2e + 聚合）；运行中调用返回 409 → null */
+/** 运行范围：全部缺省=全量；unit/api 不勾不跑；e2e true=全部套件 / 数组=m1~m5 子集 / []=跳过 */
+export interface QualityRunScope {
+  unit?: boolean | null;
+  api?: boolean | null;
+  e2e?: boolean | string[] | null;
+}
+
+export function startQualityRun(scope?: QualityRunScope): Promise<{ run_id: string; status: string; plan?: unknown } | null> {
+  return apiJson<{ run_id: string; status: string; plan?: unknown }>(
+    `${API}/quality/run`,
+    { method: "POST", body: JSON.stringify(scope ?? {}) },
+  );
+}
+
+/** 当次（或最近一次）运行状态与阶段进度 */
+export function getQualityRunStatus(): Promise<QualityRunStatus | null> {
+  return apiJson<QualityRunStatus>(`${API}/quality/run/status`);
+}
+
+/** 趋势数组（时间升序，最多近 30 次） */
+export function getQualityHistory(): Promise<QualityHistoryPoint[] | null> {
+  return apiJson<QualityHistoryPoint[]>(`${API}/quality/history`);
+}
+
+/* ===== M3 自动化执行（契约 3，与 app/api/automation 对齐） ===== */
+
+/** POST /api/tasks/{task_id}/run-auto：触发执行。无 cases_json→400、进行中→409（均已由 apiJson toast） */
+export function runTaskAuto(taskId: string): Promise<ExecutionStartResp | null> {
+  return apiJson<ExecutionStartResp>(`${API}/tasks/${taskId}/run-auto`, { method: "POST" });
+}
+
+/** GET /api/tasks/{task_id}/executions：执行列表（新→旧） */
+export function getTaskExecutions(taskId: string): Promise<ExecutionRunOut[] | null> {
+  return apiJson<ExecutionRunOut[]>(`${API}/tasks/${taskId}/executions`);
+}
+
+/** GET /api/executions/{run_id}：执行详情（running 时只带 progress/total，report 为 null） */
+export function getExecution(runId: string): Promise<ExecutionRunOut | null> {
+  return apiJson<ExecutionRunOut>(`${API}/executions/${runId}`);
+}
+
+/** POST /api/executions/{run_id}/retry：复制配置建新 run；原 run 运行中→409（apiJson toast） */
+export function retryExecution(runId: string): Promise<ExecutionStartResp | null> {
+  return apiJson<ExecutionStartResp>(`${API}/executions/${runId}/retry`, { method: "POST" });
+}
+
+/** 附属文件 URL（截图/trace）。path 为 run 内相对路径（契约白名单 shots/、trace/），逐段编码防注入 */
+export function executionFileUrl(runId: string, path: string): string {
+  return `${API}/executions/${runId}/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/**
+ * M3：截图等图片取流。<img> 标签无法携带 Bearer 头，统一 fetch blob → objectURL。
+ * 返回的 URL 由调用方负责 URL.revokeObjectURL 释放。
+ */
+export async function fetchExecutionImage(runId: string, path: string): Promise<string | null> {
+  try {
+    const r = await api(executionFileUrl(runId, path));
+    if (!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  } catch {
+    return null;
+  }
+}
+
+/* ===== 页面探索可视化（与 app/api/automation.py pages 端点对齐） ===== */
+
+/** GET /api/tasks/{task_id}/pages：页面探索结果（无产物时后端返回空数组，不报错） */
+export function fetchTaskPages(taskId: string): Promise<TaskPagesResp | null> {
+  return apiJson<TaskPagesResp>(`${API}/tasks/${taskId}/pages`);
+}
+
+/**
+ * 页面探索截图取流（与 fetchExecutionImage 同模式：<img> 无法带 Bearer，fetch blob → objectURL）。
+ * name 为截图文件名（page-001.png）；404（无截图）等失败返回 null，由调用方渲染占位。
+ */
+export async function fetchPageScreenshot(taskId: string, name: string): Promise<string | null> {
+  try {
+    const r = await api(`${API}/tasks/${taskId}/pages/screenshot/${encodeURIComponent(name)}`);
+    if (!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 探索实时画面取流（GET /api/tasks/{task_id}/live-shot，返回 explore/ 下序号最大的 step-NNN.png）。
+ * 与 fetchPageScreenshot 同模式：<img> 无法带 Bearer，fetch blob → objectURL。
+ * 404（尚无截图：探索未出第一步 / 任务未跑）等失败返回 null，由调用方渲染占位并等下一轮轮询。
+ * 返回的 objectURL 由调用方负责 URL.revokeObjectURL 释放（LiveShotView 每轮刷新前释放上一张）。
+ */
+export async function fetchTaskLiveShot(taskId: string): Promise<string | null> {
+  try {
+    const r = await api(`${API}/tasks/${taskId}/live-shot`);
+    if (!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 探索录屏取流（GET /api/tasks/{task_id}/video，webm blob → objectURL，同截图鉴权模式）。
+ * 404（无录屏：静态抓取 / 旧任务）等失败返回 null，由调用方隐藏播放入口。
+ */
+export async function fetchTaskVideo(taskId: string): Promise<string | null> {
+  try {
+    const r = await api(`${API}/tasks/${taskId}/video`);
+    if (!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  } catch {
+    return null;
+  }
+}
+
+/* ===== M3 计划先行（与 app/api/tasks.py 的 explore-plan 端点对齐） ===== */
+
+/** 探索计划的单条业务流（每条：名称 + 操作步骤描述数组） */
+export interface ExplorePlanFlow {
+  name: string;
+  steps: string[];
+}
+
+/** GET /api/tasks/{task_id}/explore-plan 响应（exists=false = 尚未生成计划） */
+export interface ExplorePlanResp {
+  exists: boolean;
+  confirmed: boolean;
+  goal?: string;
+  entry_url?: string;
+  flows: ExplorePlanFlow[];
+}
+
+/** 读取任务探索计划与确认状态（计划先行关闭 / 未跑到 plan 步骤时 exists=false） */
+export function fetchExplorePlan(taskId: string): Promise<ExplorePlanResp | null> {
+  return apiJson<ExplorePlanResp>(`${API}/tasks/${taskId}/explore-plan`);
+}
+
+/**
+ * 确认（可编辑后的）探索计划：POST /api/tasks/{task_id}/explore-plan/confirm。
+ * body 只回传勾选的业务流；成功后任务恢复执行，调用方刷新任务列表即可看到续跑。
+ */
+export function confirmExplorePlan(
+  taskId: string,
+  flows: ExplorePlanFlow[],
+): Promise<{ ok: boolean; confirmed: boolean; flows: ExplorePlanFlow[] } | null> {
+  return apiJson<{ ok: boolean; confirmed: boolean; flows: ExplorePlanFlow[] }>(
+    `${API}/tasks/${taskId}/explore-plan/confirm`,
+    { method: "POST", body: JSON.stringify({ flows }) },
+  );
 }

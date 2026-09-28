@@ -1,5 +1,7 @@
-"""V2.4 FR-I：模型接入配置（厂商预设 / 用户级 Key 加密 / 生效优先级 / 连通测试 / 管线注入）。
+"""V2.4 FR-I → V5.4：模型接入（厂商预设 / 模型池 Key 加密 / 生效优先级 / 连通测试 / 管线注入）。
 
+V5.4 起单条配置（/llm/config、/llm/platform-config）已下线，配置统一走模型池
+（/llm/pool、/llm/platform-pool）；本文件所有"配置"用例均经池端点建立。
 外部 LLM 调用统一 mock `LangChainClient.chat`（V3 迁移后适配层），离线可跑。
 """
 import time
@@ -8,7 +10,7 @@ import pytest
 
 from app.core import config
 from app.core.db import SessionLocal
-from app.models.llm_config import LLMConfig
+from app.models.llm_pool import LLMModelPool
 from app.models.user import User
 from app.services import llm_service
 from app.services.langchain_client import LangChainClient
@@ -22,6 +24,13 @@ def _h(token):
 
 def _alice(db):
     return db.query(User).filter(User.username == "alice").first()
+
+
+def _add_pool(client, tok, slot="text", **over):
+    """往个人池加一条（默认百炼 qwen-plus），返回响应。"""
+    body = {"provider": "bailian", "base_url": _URL,
+            "model": "qwen-plus", "api_key": "sk-test-1234", **over}
+    return client.post(f"/api/llm/pool/{slot}", headers=_h(tok), json=body)
 
 
 # ---------- 厂商预设 ----------
@@ -48,19 +57,23 @@ def test_providers_listed(client, accounts):
 
 def test_guest_cannot_config(client, fresh_guest):
     token, _ = fresh_guest
-    body = {"slot": "text", "provider": "bailian", "base_url": _URL,
+    body = {"provider": "bailian", "base_url": _URL,
             "model": "qwen-plus", "api_key": "sk-x"}
-    assert client.get("/api/llm/config", headers=_h(token)).status_code == 403
-    assert client.put("/api/llm/config", headers=_h(token), json=body).status_code == 403
+    assert client.get("/api/llm/pool/text", headers=_h(token)).status_code == 403
+    assert client.post("/api/llm/pool/text", headers=_h(token), json=body).status_code == 403
 
 
-# ---------- 个人配置：加密落库 + 脱敏回显 ----------
+# ---------- 个人池：加密落库 + 脱敏回显 ----------
+
+def _clear_pools(db, *user_ids):
+    """清空指定归属（含平台池 0）的池条目，制造干净的初始状态。"""
+    db.query(LLMModelPool).filter(LLMModelPool.user_id.in_(user_ids)).delete()
+    db.commit()
+
 
 def test_user_config_roundtrip(client, accounts, db_session):
     tok = accounts["user"]["token"]
-    r = client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "bailian", "base_url": _URL,
-        "model": "qwen-plus", "api_key": "sk-test-1234"})
+    r = _add_pool(client, tok)
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["api_key_masked"] == "****1234"
@@ -68,21 +81,25 @@ def test_user_config_roundtrip(client, accounts, db_session):
 
     # 落库为密文
     u = _alice(db_session)
-    row = (db_session.query(LLMConfig)
-           .filter(LLMConfig.user_id == u.id, LLMConfig.slot == "text").first())
+    row = (db_session.query(LLMModelPool)
+           .filter(LLMModelPool.user_id == u.id, LLMModelPool.slot == "text").first())
     assert row and row.api_key_enc
     assert "sk-test-1234" not in row.api_key_enc
     assert llm_service.decrypt_key(row.api_key_enc, u.id) == "sk-test-1234"
 
 
 def test_put_without_key_keeps_old(client, accounts, db_session):
+    """池条目更新时未提供 api_key → 旧 Key 保留。"""
     tok = accounts["user"]["token"]
-    r = client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "bailian", "base_url": _URL, "model": "qwen-max"})
+    u = _alice(db_session)
+    _clear_pools(db_session, u.id, 0)   # 清个人池 + 平台池，避免上一用例残留干扰
+    item = _add_pool(client, tok).json()
+    r = client.put(f"/api/llm/pool/text/{item['id']}", headers=_h(tok), json={
+        "provider": "bailian", "base_url": _URL, "model": "qwen-max"})
     assert r.status_code == 200 and r.json()["model"] == "qwen-max"
     u = _alice(db_session)
-    row = (db_session.query(LLMConfig)
-           .filter(LLMConfig.user_id == u.id, LLMConfig.slot == "text").first())
+    row = (db_session.query(LLMModelPool)
+           .filter(LLMModelPool.user_id == u.id, LLMModelPool.slot == "text").first())
     # 未提供 api_key → 旧 Key 保留
     assert llm_service.decrypt_key(row.api_key_enc, u.id) == "sk-test-1234"
 
@@ -90,11 +107,11 @@ def test_put_without_key_keeps_old(client, accounts, db_session):
 def test_text_slot_requires_key(client, accounts, db_session):
     tok = accounts["user"]["token"]
     u = _alice(db_session)
-    # 先清掉已有配置，制造"无 Key"状态
-    db_session.query(LLMConfig).filter(LLMConfig.user_id == u.id).delete()
+    # 先清掉已有池条目，制造"无 Key"状态
+    db_session.query(LLMModelPool).filter(LLMModelPool.user_id == u.id).delete()
     db_session.commit()
-    r = client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "bailian", "base_url": _URL, "model": "qwen-plus"})
+    r = client.post("/api/llm/pool/text", headers=_h(tok), json={
+        "provider": "bailian", "base_url": _URL, "model": "qwen-plus"})
     assert r.status_code == 400 and "API Key" in r.json()["detail"]
 
 
@@ -104,149 +121,147 @@ def test_free_provider_no_key_allowed(client, accounts, db_session, monkeypatch)
     monkeypatch.setattr(config, "DASHSCOPE_API_KEY", "")
     tok = accounts["user"]["token"]
     u = _alice(db_session)
-    db_session.query(LLMConfig).filter(LLMConfig.user_id == u.id).delete()
+    db_session.query(LLMModelPool).filter(LLMModelPool.user_id == u.id).delete()
     db_session.commit()
-    # 个人配置选魔搭免费模型，不传 api_key → 应放行（200）
-    r = client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "modelscope",
+    # 个人池选魔搭免费模型，不传 api_key → 应放行（200）
+    r = client.post("/api/llm/pool/text", headers=_h(tok), json={
+        "provider": "modelscope",
         "base_url": config.MODELSCOPE_BASE_URL, "model": config.MODELSCOPE_MODEL})
     assert r.status_code == 200, r.text
     eff = client.get("/api/llm/effective", headers=_h(tok)).json()
-    assert eff["source"] == "user"
+    assert eff["source"] == "pool"                    # 池存在时统一标 pool
+    assert eff["pools"]["text"]["owner"] == "personal"
     assert eff["text"]["provider"] == "modelscope"
     assert eff["text"]["model"] == config.MODELSCOPE_MODEL
     assert "api_key" not in eff["text"]      # 对外视图无 Key
 
 
-def test_free_provider_no_server_key_rejected(client, accounts, db_session, monkeypatch):
-    """免费厂商但服务端未配 Key 时，空 Key 仍被拒绝（避免静默不可用）。"""
+def test_free_provider_no_server_key_falls_mock(client, accounts, db_session, monkeypatch):
+    """免费厂商但服务端未配 Key：条目可入池，但解析时无可用 Key → 回落 mock（不虚报可用）。"""
     monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "")
-    tok = accounts["user"]["token"]
-    u = _alice(db_session)
-    db_session.query(LLMConfig).filter(LLMConfig.user_id == u.id).delete()
-    db_session.commit()
-    r = client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "modelscope",
-        "base_url": config.MODELSCOPE_BASE_URL, "model": config.MODELSCOPE_MODEL})
-    assert r.status_code == 400 and "API Key" in r.json()["detail"]
-
-
-def test_free_provider_switch_clears_old_key(client, accounts, db_session, monkeypatch):
-    """切换到免费厂商(不传 Key)应清空原厂商残留 Key，避免 provider 与 Key 不匹配。"""
-    monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "ms-test-dummy")
     monkeypatch.setattr(config, "DASHSCOPE_API_KEY", "")
     tok = accounts["user"]["token"]
     u = _alice(db_session)
-    # 先存一个非免费厂商(bailian)带 Key
-    client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "bailian", "base_url": _URL,
-        "model": "qwen-plus", "api_key": "sk-old-9999"})
-    # 切换到魔搭免费模型，不传 Key
-    r = client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "modelscope",
+    db_session.query(LLMModelPool).filter(LLMModelPool.user_id == u.id).delete()
+    db_session.commit()
+    r = client.post("/api/llm/pool/text", headers=_h(tok), json={
+        "provider": "modelscope",
         "base_url": config.MODELSCOPE_BASE_URL, "model": config.MODELSCOPE_MODEL})
     assert r.status_code == 200, r.text
-    row = db_session.query(LLMConfig).filter(
-        LLMConfig.user_id == u.id, LLMConfig.slot == "text").first()
-    assert row.provider == "modelscope"
-    assert row.api_key_enc == ""      # 旧 bailian Key 已清空
     eff = client.get("/api/llm/effective", headers=_h(tok)).json()
-    assert eff["text"]["provider"] == "modelscope"
+    assert eff["source"] == "mock"
+    assert eff["text"] is None
 
 
 def test_invalid_slot_rejected(client, accounts):
-    r = client.put("/api/llm/config", headers=_h(accounts["user"]["token"]), json={
-        "slot": "foo", "provider": "bailian", "base_url": _URL, "model": "m"})
-    assert r.status_code == 422
+    r = client.post("/api/llm/pool/foo", headers=_h(accounts["user"]["token"]), json={
+        "provider": "bailian", "base_url": _URL, "model": "m", "api_key": "sk-x"})
+    assert r.status_code == 400
 
 
-# ---------- 生效优先级：user > platform > mock ----------
+def test_dup_entry_rejected(client, accounts):
+    """同端点 + 同模型 + 同 Key 的池条目 → 409 判重。"""
+    tok = accounts["user"]["token"]
+    assert _add_pool(client, tok).status_code == 200
+    r2 = _add_pool(client, tok)
+    assert r2.status_code == 409
 
-def test_effective_priority(client, accounts, monkeypatch):
-    # 隔离服务器 env 兜底 key，确保下面只验证 user / platform 两层
+
+# ---------- 生效优先级：个人池 > 平台池 > mock ----------
+
+def test_effective_priority(client, accounts, monkeypatch, db_session):
+    # 隔离服务器 env 兜底 key，确保下面只验证个人池 / 平台池两层
     monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "")
     monkeypatch.setattr(config, "DASHSCOPE_API_KEY", "")
     tok = accounts["user"]["token"]
-    # alice 已配 text（roundtrip 用例）
-    client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "bailian", "base_url": _URL,
-        "model": "qwen-plus", "api_key": "sk-test-1234"})
-    r = client.get("/api/llm/effective", headers=_h(tok))
-    eff = r.json()
-    assert eff["source"] == "user"
+    u = _alice(db_session)
+    _clear_pools(db_session, u.id, 0)     # 清个人池 + 平台池，密封起始状态
+
+    # alice 个人池配 text
+    assert _add_pool(client, tok).status_code == 200
+    eff = client.get("/api/llm/effective", headers=_h(tok)).json()
+    assert eff["source"] == "pool"
+    assert eff["pools"]["text"]["owner"] == "personal"
     assert eff["text"]["model"] == "qwen-plus"
     assert "api_key" not in eff["text"]      # 对外视图无 Key
     assert eff["vision"] is None
 
-    # admin 配平台默认（text + vision）
+    # admin 配平台池（text + vision）
     atok = accounts["admin"]["token"]
-    client.put("/api/llm/platform-config", headers=_h(atok), json={
-        "slot": "text", "provider": "zhipu", "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    r = client.post("/api/llm/platform-pool/text", headers=_h(atok), json={
+        "provider": "zhipu", "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "model": "glm-4.5", "api_key": "sk-platform-key"})
-    client.put("/api/llm/platform-config", headers=_h(atok), json={
-        "slot": "vision", "provider": "bailian", "base_url": _URL,
+    assert r.status_code == 200
+    zhipu_id = r.json()["id"]
+    client.post("/api/llm/platform-pool/vision", headers=_h(atok), json={
+        "provider": "bailian", "base_url": _URL,
         "model": "qwen-vl-plus", "api_key": "sk-platform-vl"})
 
-    # alice 仍优先自己的配置（user > platform），vision 无个人配置 → 用平台默认
+    # alice 仍优先自己的池（personal > platform），vision 个人池为空 → 用平台池
     eff2 = client.get("/api/llm/effective", headers=_h(tok)).json()
-    assert eff2["source"] == "user"
+    assert eff2["pools"]["text"]["owner"] == "personal"
     assert eff2["text"]["model"] == "qwen-plus"
     assert eff2["vision"] and eff2["vision"]["model"] == "qwen-vl-plus"
 
-    # 新用户 carol：无个人配置 → 走平台默认
+    # 新用户 carol：无个人池 → 走平台池
     client.post("/api/auth/register", json={
         "username": "carol-llm", "email": "carol-llm@test.com", "password": "Carol12345"})
     r = client.post("/api/auth/login", data={"username": "carol-llm", "password": "Carol12345"})
     btok = r.json()["access_token"]
     eff3 = client.get("/api/llm/effective", headers=_h(btok)).json()
-    assert eff3["source"] == "platform"
+    assert eff3["pools"]["text"]["owner"] == "platform"
     assert eff3["text"]["model"] == "glm-4.5"
     assert eff3["vision"]["model"] == "qwen-vl-plus"
 
-    # 平台默认对免费厂商(魔搭)允许不填 Key，解析时由服务端 Key 兜底；
-    # 平台默认成为模型选择的唯一权威来源（徽标与模型管理页一致）
+    # 平台池内切换：停用 zhipu 条目 → 魔搭条目顶上（免费厂商服务端 Key 兜底）
     monkeypatch.setattr(config, "MODELSCOPE_API_KEY", "ms-test-dummy")
-    client.put("/api/llm/platform-config", headers=_h(atok), json={
-        "slot": "text", "provider": "modelscope",
+    r = client.post("/api/llm/platform-pool/text", headers=_h(atok), json={
+        "provider": "modelscope",
         "base_url": config.MODELSCOPE_BASE_URL, "model": config.MODELSCOPE_MODEL})
+    assert r.status_code == 200
+    r = client.patch(f"/api/llm/platform-pool/text/{zhipu_id}/enabled",
+                     headers=_h(atok), json={"enabled": False})
+    assert r.status_code == 200
     eff4 = client.get("/api/llm/effective", headers=_h(btok)).json()
-    assert eff4["source"] == "platform"
+    assert eff4["pools"]["text"]["owner"] == "platform"
     assert eff4["text"]["provider"] == "modelscope"
     assert eff4["text"]["model"] == config.MODELSCOPE_MODEL
 
 
-def test_platform_config_read_open_write_admin(client, accounts):
-    """V4.2：平台配置 GET 开放给所有登录用户（设置页需回显平台默认）；写入仍仅 admin。"""
+def test_platform_pool_read_open_write_admin(client, accounts):
+    """平台池 GET 开放给所有登录用户（摘要/回显用）；写操作仍仅 admin。"""
     # 普通用户可读
-    r = client.get("/api/llm/platform-config", headers=_h(accounts["user"]["token"]))
+    r = client.get("/api/llm/platform-pool/text", headers=_h(accounts["user"]["token"]))
     assert r.status_code == 200 and isinstance(r.json(), list)
     # admin 可读
-    r = client.get("/api/llm/platform-config", headers=_h(accounts["admin"]["token"]))
+    r = client.get("/api/llm/platform-pool/text", headers=_h(accounts["admin"]["token"]))
     assert r.status_code == 200 and isinstance(r.json(), list)
     # 普通用户写入仍 403
-    assert client.put("/api/llm/platform-config", headers=_h(accounts["user"]["token"]),
-                      json={"slot": "text", "provider": "bailian", "base_url": _URL,
-                            "model": "qwen-plus", "api_key": "sk-x"}).status_code in (401, 403)
+    assert client.post("/api/llm/platform-pool/text", headers=_h(accounts["user"]["token"]),
+                       json={"provider": "bailian", "base_url": _URL,
+                             "model": "qwen-plus", "api_key": "sk-x"}).status_code in (401, 403)
 
 
 def test_delete_slot(client, accounts, db_session):
     tok = accounts["user"]["token"]
-    client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "vision", "provider": "bailian", "base_url": _URL,
-        "model": "qwen-vl-plus", "api_key": "sk-vl-5678"})
-    r = client.delete("/api/llm/config/vision", headers=_h(tok))
+    item = _add_pool(client, tok, slot="vision", model="qwen-vl-plus",
+                     api_key="sk-vl-5678").json()
+    r = client.delete(f"/api/llm/pool/vision/{item['id']}", headers=_h(tok))
     assert r.status_code == 204
     u = _alice(db_session)
-    assert (db_session.query(LLMConfig)
-            .filter(LLMConfig.user_id == u.id, LLMConfig.slot == "vision").count()) == 0
+    assert (db_session.query(LLMModelPool)
+            .filter(LLMModelPool.user_id == u.id, LLMModelPool.slot == "vision").count()) == 0
 
 
 # ---------- 连通测试 ----------
 
 def test_connectivity_ok_and_fail(client, accounts, monkeypatch):
     tok = accounts["user"]["token"]
+    seen = {}
 
-    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180):
+    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180,
+                  enable_thinking=None):
+        seen["thinking"] = enable_thinking
         assert self.api_key == "sk-test-1234"
         assert self.model == "qwen-plus"
         return "ok"
@@ -256,8 +271,11 @@ def test_connectivity_ok_and_fail(client, accounts, monkeypatch):
         "base_url": _URL, "model": "qwen-plus", "api_key": "sk-test-1234"})
     d = r.json()
     assert d["ok"] is True and d["reply"] == "ok" and d["latency_ms"] >= 0
+    # V5.4：连通测试强制关思考（只验 Key/端点/模型，不浪费时间推理）
+    assert seen["thinking"] is False
 
-    def bad_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180):
+    def bad_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180,
+                 enable_thinking=None):
         raise llm_service.LLMError("HTTP 401：无效的 API Key")
 
     monkeypatch.setattr(LangChainClient, "chat", bad_chat)
@@ -266,31 +284,31 @@ def test_connectivity_ok_and_fail(client, accounts, monkeypatch):
     assert r2.json()["ok"] is False and "401" in r2.json()["error"]
 
 
-def test_connectivity_reuses_saved_key(client, accounts, monkeypatch):
-    """api_key 留空 → 复用已保存的 Key（不再让用户重复粘贴）。"""
+def test_connectivity_reuses_pool_key(client, accounts, monkeypatch):
+    """api_key 留空 → 从池里复用同厂商已存 Key（个人池优先）。"""
     tok = accounts["user"]["token"]
     seen = {}
 
-    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180):
+    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180,
+                  enable_thinking=None):
         seen["key"] = self.api_key
         return "ok"
 
     monkeypatch.setattr(LangChainClient, "chat", fake_chat)
     r = client.post("/api/llm/test", headers=_h(tok), json={
-        "base_url": _URL, "model": "qwen-plus", "api_key": ""})
+        "provider": "bailian", "base_url": _URL, "model": "qwen-plus", "api_key": ""})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert seen["key"] == "sk-test-1234"
 
 
 def test_connectivity_requires_key(client, accounts):
-    # 无已保存 Key 的管理员（平台配置已存但 admin 自己无个人配置 → 复用平台 Key）
-    # 先清平台配置制造无 Key 场景
+    """无同厂商池条目且未填 Key → 400 明确报错。"""
     db = SessionLocal()
-    db.query(LLMConfig).filter(LLMConfig.user_id == 0).delete()
+    db.query(LLMModelPool).filter(LLMModelPool.user_id == 0).delete()
     db.commit()
     db.close()
     r = client.post("/api/llm/test", headers=_h(accounts["admin"]["token"]), json={
-        "base_url": _URL, "model": "qwen-plus", "api_key": ""})
+        "provider": "custom", "base_url": _URL, "model": "qwen-plus", "api_key": ""})
     assert r.status_code == 400
 
 
@@ -312,14 +330,15 @@ def test_generate_with_injected_client():
     assert any(c.title == "AI注入生成用例" for c in cases)
 
 
-def test_full_task_with_real_llm_path(client, accounts, monkeypatch):
-    """端到端：配置好 Key 的用户提交任务 → 引擎走真实调用路径（LangChain mock）。"""
+def test_full_task_with_real_llm_path(client, accounts, monkeypatch, db_session):
+    """端到端：池里配好 Key 的用户提交任务 → 引擎走真实调用路径（LangChain mock）。"""
     tok = accounts["user"]["token"]
-    client.put("/api/llm/config", headers=_h(tok), json={
-        "slot": "text", "provider": "bailian", "base_url": _URL,
-        "model": "qwen-plus", "api_key": "sk-test-1234"})
+    u = _alice(db_session)
+    _clear_pools(db_session, u.id, 0)     # 密封：只留本用例的池条目
+    assert _add_pool(client, tok).status_code == 200
 
-    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180):
+    def fake_chat(self, messages, temperature=0.3, max_tokens=8192, timeout=180,
+                  enable_thinking=None):
         assert self.base_url == _URL and self.api_key == "sk-test-1234"
         return ('[{"title":"真实模型用例","module":"采购","case_type":"正向","priority":"P1",'
                 '"steps":["填写采购单","提交"],"expected":"创建成功"}]')

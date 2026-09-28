@@ -21,11 +21,16 @@ class Task(Base):
     formats: Mapped[str | None] = mapped_column(String(64), default="xlsx,json")
     roles: Mapped[str | None] = mapped_column(Text, default='["qa"]')  # 多角色协作（V3.1）：pm/qa/dev JSON 数组
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    # 用例库资产化（V5.5）：评审状态 draft=草稿 / reviewed=已评审。
+    # 与「生成过程状态」status（pending/running/…）分离：库页只看资产状态，过程状态留在会话流。
+    review_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     is_sample: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     category_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     parent_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # M1 全链路：kind=e2e 时关联的被测系统（可空外键，老库由 _ensure_columns 补列）
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     input_summary: Mapped[str | None] = mapped_column(Text, default="")
     cases_count: Mapped[int | None] = mapped_column(Integer, default=0)
     duration_ms: Mapped[float | None] = mapped_column(Float, default=0.0)

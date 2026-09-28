@@ -27,6 +27,7 @@ from app.models.conversation import Message
 from app.models.task import Task, StepLog
 from app.models.user import User
 from app.services import llm_service
+from app.services import llm_pool
 from app.services.pipeline_lib import cases_to_json
 from app.workflow.agents.import_agent import import_cases, ImportError
 from app.workflow.agents.reviewer_agent import run_reviewer
@@ -148,14 +149,9 @@ def run_iterate(
         owner = db.get(User, parent.user_id) if parent.user_id else None
         eff = llm_service.resolve_effective(db, owner)
         text_cfg = eff["text"]
-        llm_client = None
-        if text_cfg:
-            try:
-                llm_client = llm_service.OpenAICompatClient(
-                    text_cfg["base_url"], text_cfg["api_key"], text_cfg["model"])
-            except llm_service.LLMError:
-                llm_client = None
-        model_desc = f'{text_cfg["model"]} · {text_cfg["provider_label"]}' if text_cfg else "未配置可用模型（模拟生成）"
+        # V5.0 P1：模型池优先（多条候选，撞限流自动切换）；池空回落单条生效配置
+        llm_client = llm_pool.build_client(db, owner, "text")
+        model_desc = llm_pool.describe_model(db, owner, "text") or "未配置可用模型（模拟生成）"
 
         # ---- 准备输出目录 + 更新版本号 ----
         data_dir = parent.user_data_dir(db)
@@ -270,6 +266,7 @@ def run_iterate(
                    Message.role == "assistant",
                    Message.task_id.is_(None))
             .order_by(Message.id.desc())
+            .limit(1)
         ).scalar_one_or_none()
             if last_msg:
                 last_msg.task_id = new_task_id

@@ -1,53 +1,18 @@
 /**
- * 设置页（M4）：个人中心 + LLM 模型配置 + 生效模型。
- * - user/admin：完整配置能力
- * - guest：LLM 配置接口 403 → 只显示个人信息与生效模型（只读）
+ * 个人中心（V5.3，原「设置」页瘦身）：个人资料 + 修改密码。
+ * - 模型配置已拆为独立一级入口（pages/ModelConfigPage.tsx）
+ * - 入口：rail 底部用户名区域（V5.3 移除了「设置」按钮）
+ * - guest：可查看账号信息（共享访客无密码）
  */
-import { useEffect } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { useSettingsStore } from "../store/settingsStore";
 import ProfileCard from "../components/settings/ProfileCard";
-import LLMConfigCard from "../components/settings/LLMConfigCard";
-import EffectiveBar from "../components/settings/EffectiveBar";
 
 export default function SettingsPage() {
-  const { me, role } = useAuth();
-  const loadMyConfigs = useSettingsStore((s) => s.loadMyConfigs);
-  const loadEffective = useSettingsStore((s) => s.loadEffective);
-  const myConfigs = useSettingsStore((s) => s.myConfigs);
-
-  useEffect(() => {
-    void loadEffective();
-    if (role && role !== "guest") void loadMyConfigs();
-  }, [role, loadMyConfigs, loadEffective]);
-
+  const { me } = useAuth();
   if (!me) return <div className="page-empty">请先登录</div>;
-
   return (
     <div className="page-wrap settings-page" data-testid="settings-page">
       <ProfileCard />
-      <EffectiveBar />
-      {role !== "guest" ? (
-        <section className="set-card">
-          <h3>我的模型配置</h3>
-          <div className="sub">
-            个人配置优先于平台默认；文本槽为必配项（免费厂商可不填 Key，由平台提供）；
-            Embedding 向量模型用于知识库入库与检索，不配置时走 mock（流程可用、检索质量差）。
-          </div>
-          <div className="llm-grid">
-            <LLMConfigCard slot="text" mode="personal" saved={myConfigs.find((c) => c.slot === "text")} />
-            <LLMConfigCard slot="vision" mode="personal" saved={myConfigs.find((c) => c.slot === "vision")} />
-            <LLMConfigCard slot="embedding" mode="personal" saved={myConfigs.find((c) => c.slot === "embedding")} />
-          </div>
-        </section>
-      ) : (
-        <section className="set-card">
-          <h3>我的模型配置</h3>
-          <div className="hint-line">
-            共享访客使用平台默认模型。注册账号后可自定义模型配置并长期保留数据。
-          </div>
-        </section>
-      )}
     </div>
   );
 }

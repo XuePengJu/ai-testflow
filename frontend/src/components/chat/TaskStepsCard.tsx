@@ -3,8 +3,19 @@
  * 数据源：chatStore 消息上的 task（taskStore 轮询回写）。
  * 方案 B：每个步骤可折叠，默认展开，展开区显示该步思考详情（输入/输出/错误）。
  */
-import { useEffect, useState } from "react";
-import type { Task } from "../../types";
+import { useEffect, useRef, useState } from "react";
+import type { Task, TaskPagesResp } from "../../types";
+import {
+  confirmExplorePlan,
+  fetchExplorePlan,
+  fetchTaskLiveShot,
+  fetchTaskPages,
+  fetchTaskVideo,
+  type ExplorePlanFlow,
+  type ExplorePlanResp,
+} from "../../api/client";
+import { PageShot } from "../task/ExecutionPanel";
+import ExploreTimeline from "./ExploreTimeline";
 import { useTaskStore } from "../../store/taskStore";
 import { isLatestOfChain } from "../../utils/taskChain";
 import { parseServerTime } from "../../utils/time";
@@ -19,25 +30,185 @@ function fmtDuration(ms: number): string {
   return `${m}:${(s % 60).toString().padStart(2, "0")}`;
 }
 
-const STEP_TITLES = ["解析规格", "AI 生成用例", "质量校验", "导出文件"];
+/** 默认步骤标题集（数据驱动渲染的兜底）：普通任务四步 / e2e 全链路六步。
+ *  实际渲染以任务返回的 steps[].title 为准（老任务四步显示不变，向后兼容）。 */
+const BASE_STEP_TITLES = ["解析规格", "AI 生成用例", "质量校验", "导出文件"];
+const E2E_STEP_TITLES = ["抓取页面", "解析需求", "AI生成用例", "质量校验", "脚本生成", "导出文件"];
+/** M5 探索式测试三步（与 engine.STEPS_EXPLORE 对齐） */
+const EXPLORE_STEP_TITLES = ["探索式测试", "脚本生成", "导出文件"];
 const STEP_ICONS: Record<string, string> = {
   解析规格: "🔍",
   "AI 生成用例": "✨",
   质量校验: "🛡️",
   导出文件: "📦",
+  抓取页面: "🌐",
+  解析需求: "🔍",
+  AI生成用例: "✨",
+  脚本生成: "📜",
+  探索式测试: "🧭",
+  生成探索计划: "🗺️",
 };
 const RUNNING_HINTS: Record<string, string> = {
   解析规格: "⏳ 正在拆解需求...",
   "AI 生成用例": "✨ 正在生成用例...",
   质量校验: "🛡️ 正在质量校验...",
   导出文件: "📦 正在导出文件...",
+  抓取页面: "🌐 正在抓取页面...",
+  解析需求: "⏳ 正在解析页面功能...",
+  AI生成用例: "✨ 正在生成用例...",
+  脚本生成: "📜 正在生成脚本...",
+  探索式测试: "🧭 正在探索页面（ReAct 循环）...",
+  生成探索计划: "🗺️ 正在生成探索计划...",
 };
+/** M3 计划先行：explore 任务探索步骤等待确认时的提示文案 */
+const AWAITING_CONFIRM_HINT = "⏸ 探索计划已生成，等待确认后开始";
 
 export function statusBadge(status: string): { text: string; cls: string } {
   if (status === "completed") return { text: "✓ 已完成", cls: "ok" };
   if (status === "running") return { text: "⏳ 生成中", cls: "run" };
   if (status === "failed") return { text: "✗ 失败", cls: "fail" };
   return { text: "排队中", cls: "sub" };
+}
+
+/**
+ * e2e crawler 步骤（抓取页面）的就地可视化：页面卡片网格 + 探索录屏播放入口 + lightbox。
+ * - 数据源：GET /api/tasks/{id}/pages（截图走 blob objectURL 鉴权，与详情页同模式）
+ * - 加载失败 / 无 pages 产物 → 回退显示原 details JSON 文本（不能因接口失败破坏步骤卡）
+ */
+function CrawlerPagesView({ taskId, json }: { taskId: string; json: string }) {
+  const [resp, setResp] = useState<TaskPagesResp | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [zoom, setZoom] = useState<string | null>(null); // 截图放大 lightbox
+  const [videoUrl, setVideoUrl] = useState<string | null>(null); // 录屏 lightbox
+
+  useEffect(() => {
+    let live = true;
+    void fetchTaskPages(taskId)
+      .then((r) => {
+        if (!live) return;
+        if (r && Array.isArray(r.pages) && r.pages.length > 0) setResp(r);
+        else setFailed(true);
+      })
+      .catch(() => {
+        if (live) setFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [taskId]);
+
+  // 关闭录屏 lightbox 时释放 blob URL
+  useEffect(() => {
+    if (!videoUrl) return;
+    return () => URL.revokeObjectURL(videoUrl);
+  }, [videoUrl]);
+
+  // 回退：接口失败 / 无产物 → 原 JSON 文本照旧（与旧版展开区一致）
+  if (failed) {
+    return json ? (
+      <div className="tsc-io">
+        <span className="tsc-io-label">📥 输入</span>
+        <div className="tsc-io-text">{json}</div>
+      </div>
+    ) : (
+      <div className="tsc-io-text tsc-muted">（暂无页面探索数据）</div>
+    );
+  }
+  if (!resp) {
+    return <div className="tsc-io-text tsc-muted">页面探索结果加载中…</div>;
+  }
+  const pages = resp.pages;
+  return (
+    <div className="tsc-io">
+      <span className="tsc-io-label">🌐 页面探索（{pages.length} 页）</span>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8, marginTop: 6 }}>
+        {pages.map((p, i) => (
+          <div
+            key={`${p.url}-${i}`}
+            title={p.title || p.url}
+            style={{ border: "1px solid #f0f1f3", borderRadius: 8, padding: 6, background: "#fff" }}
+          >
+            {p.screenshot ? (
+              <PageShot taskId={taskId} name={p.screenshot.split("/").pop() || ""} onZoom={setZoom} />
+            ) : (
+              <div
+                className="hint-line"
+                style={{ height: 96, borderRadius: 6, border: "1px dashed #e5e6eb", display: "flex", alignItems: "center", justifyContent: "center" }}
+              >
+                无截图
+              </div>
+            )}
+            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, color: "#1f2329", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {p.title || "(无标题)"}
+            </div>
+            <div className="dash" style={{ fontSize: 11, color: "#8f959e", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.url}>
+              {p.url}
+            </div>
+          </div>
+        ))}
+      </div>
+      {resp.video_available && (
+        <button
+          type="button"
+          className="btn-ghost"
+          style={{ marginTop: 8, height: 26, padding: "0 10px", fontSize: 12 }}
+          title="回放 crawler 浏览器探索全过程（webm 录屏）"
+          onClick={() => {
+            void fetchTaskVideo(taskId).then((u) => {
+              if (u) setVideoUrl(u);
+            });
+          }}
+        >
+          ▶ 观看探索录屏
+        </button>
+      )}
+      {/* 截图放大 lightbox（点击遮罩关闭） */}
+      {zoom && (
+        <div
+          onClick={() => setZoom(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            background: "rgba(15,18,25,.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={zoom}
+            alt="页面截图（放大）"
+            style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 8px 40px rgba(0,0,0,.4)" }}
+          />
+        </div>
+      )}
+      {/* 探索录屏播放 lightbox（点击视频本体不关闭，保证 controls 可用） */}
+      {videoUrl && (
+        <div
+          onClick={() => setVideoUrl(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            background: "rgba(15,18,25,.72)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <video
+            src={videoUrl}
+            controls
+            autoPlay
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 8px 40px rgba(0,0,0,.4)", background: "#000" }}
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface StepInfo {
@@ -51,14 +222,207 @@ interface StepInfo {
   error?: string | null;
 }
 
+/**
+ * M4 全链路测试实时画面：探索步骤 running 时的可选截图轮询视图。
+ * - 「实时画面」checkbox 默认不勾：不勾 = 不轮询，零请求零开销
+ * - 勾选后每 3s 轮询 GET /tasks/{id}/live-shot（blob → objectURL，<img> 鉴权同 PageShot 模式）
+ * - 每轮刷新前 revoke 上一张 objectURL、卸载时 revoke 当前一张，杜绝 blob 泄漏
+ * - 显示探索步骤实时 progress 摘要与最近刷新时间；轮询开关由父级渲染条件控制
+ *   （kind === "explore" 且探索步骤 running 才挂载，任务结束自动隐藏并停止）
+ */
+function LiveShotView({ taskId, progress }: { taskId: string; progress?: string | null }) {
+  const [enabled, setEnabled] = useState(false);
+  const [shotUrl, setShotUrl] = useState<string | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
+  // objectURL 用 ref 记账：interval 回调里也要能释放上一张，不能只靠 state
+  const urlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    const tick = (): void => {
+      void fetchTaskLiveShot(taskId).then((u) => {
+        if (cancelled) {
+          // 组件已卸载/已停轮询但响应迟到：直接释放，不进 state
+          if (u) URL.revokeObjectURL(u);
+          return;
+        }
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = u;
+        setShotUrl(u);
+        setMissing(!u);
+        if (u) setRefreshedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+      });
+    };
+    tick(); // 勾选立即拉一次，不等第一个 3s
+    const id = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current);
+        urlRef.current = null;
+      }
+    };
+  }, [enabled, taskId]);
+
+  return (
+    <div className="tsc-io" style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#1f2329", userSelect: "none" }}
+          title="每 3 秒刷新探索 Agent 的最新页面截图（仅探索进行中可用）"
+        >
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          📺 实时画面
+        </label>
+        {enabled && refreshedAt && (
+          <span style={{ fontSize: 11, color: "#8f959e" }}>最近刷新 {refreshedAt}</span>
+        )}
+      </div>
+      {enabled && (
+        <div style={{ marginTop: 6 }}>
+          {shotUrl ? (
+            <img
+              src={shotUrl}
+              alt="探索实时画面"
+              style={{ maxWidth: "100%", maxHeight: 320, borderRadius: 8, border: "1px solid #e5e6eb", display: "block", background: "#fafafa" }}
+            />
+          ) : (
+            <div
+              className="hint-line"
+              style={{ height: 96, borderRadius: 6, border: "1px dashed #e5e6eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#8f959e" }}
+            >
+              {missing ? "暂无探索截图，等 Agent 出第一步画面…" : "画面加载中…"}
+            </div>
+          )}
+          {progress && (
+            <div className="tsc-io-text tsc-muted" style={{ marginTop: 4 }}>🧭 {progress}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * M3 计划先行：探索计划确认卡（explore 步骤 status=awaiting_confirm 时渲染）。
+ * - 数据源：GET /api/tasks/{id}/explore-plan（plan.json 内容 + 确认状态）
+ * - 业务流列表：每条 checkbox（勾选 = 纳入本次探索）+ 标题可编辑
+ * - 「按计划探索」→ POST confirm（只回传勾选且合法的流）→ 刷新任务列表（恢复续跑）
+ * - 接口失败 / 无计划数据 → 静默占位，不破坏步骤卡展开区
+ */
+function ExplorePlanConfirm({ taskId }: { taskId: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [flows, setFlows] = useState<(ExplorePlanFlow & { checked: boolean })[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void fetchExplorePlan(taskId)
+      .then((r: ExplorePlanResp | null) => {
+        if (!live) return;
+        if (r && r.exists && Array.isArray(r.flows) && r.flows.length > 0) {
+          setFlows(r.flows.map((f) => ({ ...f, checked: true })));
+        } else {
+          setFailed(true);
+        }
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (live) {
+          setFailed(true);
+          setLoaded(true);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [taskId]);
+
+  const toggle = (i: number): void =>
+    setFlows((prev) => prev.map((f, j) => (j === i ? { ...f, checked: !f.checked } : f)));
+  const rename = (i: number, name: string): void =>
+    setFlows((prev) => prev.map((f, j) => (j === i ? { ...f, name } : f)));
+
+  const confirm = (): void => {
+    const selected = flows
+      .filter((f) => f.checked && f.name.trim() && f.steps.length > 0)
+      .map((f) => ({ name: f.name.trim(), steps: f.steps }));
+    if (selected.length === 0) return;
+    setSubmitting(true);
+    void confirmExplorePlan(taskId, selected).then((r) => {
+      setSubmitting(false);
+      if (r && r.ok) void useTaskStore.getState().refresh();
+    });
+  };
+
+  if (!loaded) return <div className="tsc-io-text tsc-muted">探索计划加载中…</div>;
+  if (failed) {
+    return <div className="tsc-io-text tsc-muted">（探索计划数据加载失败，可稍后刷新重试）</div>;
+  }
+  const anyChecked = flows.some((f) => f.checked);
+  return (
+    <div className="tsc-io" style={{ marginTop: 6 }}>
+      <span className="tsc-io-label">
+        🗺️ 探索计划（{flows.length} 条业务流，勾选后按计划探索，标题可编辑）
+      </span>
+      <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+        {flows.map((f, i) => (
+          <div
+            key={i}
+            style={{ border: "1px solid #f0f1f3", borderRadius: 8, padding: "8px 10px", background: "#fff" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="checkbox" checked={f.checked} onChange={() => toggle(i)} />
+              <input
+                value={f.name}
+                onChange={(e) => rename(i, e.target.value)}
+                title="点击编辑业务流标题"
+                style={{
+                  flex: 1, border: "1px solid transparent", borderRadius: 6, padding: "2px 6px",
+                  fontSize: 13, fontWeight: 600, color: "#1f2329", background: "#f7f8fa",
+                  outline: "none",
+                }}
+                onFocus={(e) => (e.currentTarget.style.borderColor = "#165dff")}
+                onBlur={(e) => (e.currentTarget.style.borderColor = "transparent")}
+              />
+            </div>
+            <ol style={{ margin: "6px 0 0 30px", padding: 0, fontSize: 12, color: "#4e5969", lineHeight: 1.7 }}>
+              {f.steps.map((s, j) => (
+                <li key={j}>{s}</li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          type="button"
+          className="qtag confirm-btn"
+          disabled={!anyChecked || submitting}
+          style={{ opacity: !anyChecked || submitting ? 0.5 : 1, cursor: !anyChecked || submitting ? "not-allowed" : "pointer" }}
+          onClick={confirm}
+        >
+          {submitting ? "提交中…" : "▶ 按计划探索"}
+        </button>
+        {!anyChecked && (
+          <span style={{ fontSize: 11, color: "#8f959e" }}>至少勾选 1 条业务流</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** showIterate：会话内任务卡传 true（挂「继续优化」→ 挂 chip）；详情页 running 卡不传（避免重复入口） */
 export default function TaskStepsCard({ task, showIterate = false }: { task: Task; showIterate?: boolean }) {
   const tasks = useTaskStore((s) => s.tasks);
   const openDetail = useTaskStore((s) => s.openDetail);
   const retryTask = useTaskStore((s) => s.retryTask);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(STEP_TITLES.map((t) => [t, true]))
-  );
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (title: string) => setExpanded((prev) => ({ ...prev, [title]: !prev[title] }));
   // 会话流里同一条迭代链的旧版本卡折叠成一行细条：入口只留最新一张完整卡，避免翻页找入口。
   // 抽屉内的卡（showIterate=false）不做折叠，那里由版本切换器导航。
   const stale = showIterate && !isLatestOfChain(tasks, task.id);
@@ -77,7 +441,7 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
   const badge = statusBadge(live.status);
   const stepMap: Record<string, StepInfo & { started_at?: string | null }> = {};
   (live.steps || []).forEach((s) => {
-    if (STEP_TITLES.includes(s.title))
+    if (s.title)
       stepMap[s.title] = {
         status: s.status,
         progress: s.progress,
@@ -88,7 +452,22 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
       };
   });
 
-  const toggle = (title: string) => setExpanded((prev) => ({ ...prev, [title]: !prev[title] }));
+  // 数据驱动步骤标题：默认集按 kind 兜底（pending 时 steps 为空也能显示骨架），
+  // 后端实际返回的 steps[].title 按出现顺序渲染在默认集之后（向后兼容老任务四步）。
+  const defaultTitles =
+    live.kind === "e2e" ? E2E_STEP_TITLES
+    : live.kind === "explore" ? EXPLORE_STEP_TITLES
+    : BASE_STEP_TITLES;
+  const titles = [...defaultTitles];
+  (live.steps || []).forEach((s) => {
+    if (s.title && !titles.includes(s.title)) titles.push(s.title);
+  });
+  // M3 计划先行：「生成探索计划」是 explore 任务的首步骤，后端返回后插到最前
+  const planTitleIdx = titles.indexOf("生成探索计划");
+  if (planTitleIdx > 0) {
+    titles.splice(planTitleIdx, 1);
+    titles.unshift("生成探索计划");
+  }
 
   // 未配置可用模型：解析/生成步骤的摘要会带「未配置可用模型」提示 → 卡片顶部展示醒目提示条
   const mockNotice = (live.steps || []).some((s) =>
@@ -151,12 +530,26 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
         <div className="tsc-mock-tip">⚠️ 未配置可用模型，当前为模拟生成。请到「模型设置」配置真实模型后重新生成。</div>
       )}
       <div className="tsc-steps">
-        {STEP_TITLES.map((title) => {
+        {titles.map((title) => {
           const s = stepMap[title];
           const st = s ? s.status : "pending";
-          const ring = st === "completed" ? "✓" : st === "failed" ? "!" : STEP_ICONS[title] || "•";
-          const open = expanded[title];
+          const ring =
+            st === "completed" ? "✓"
+            : st === "failed" ? "!"
+            : st === "awaiting_confirm" ? "⏸"
+            : STEP_ICONS[title] || "•";
+          const open = expanded[title] !== false;
           const hasDetail = !!(s?.input_summary || s?.output_summary || s?.error);
+          // e2e 抓取步骤完成后 → 就地可视化（页面卡片 + 探索录屏），失败/无产物回退 JSON
+          const isCrawlerDone = live.kind === "e2e" && title === "抓取页面" && st === "completed";
+          // M5 explore 探索步骤完成后 → 就地可视化（探索时间线：每步动作/理由/结果 + 截图），失败回退 JSON
+          const isExploreDone = live.kind === "explore" && title === "探索式测试" && st === "completed";
+          // M3 计划先行：explore 探索步骤等待计划确认 → 渲染探索计划确认卡
+          const isExploreAwaiting =
+            live.kind === "explore" && title === "探索式测试" && st === "awaiting_confirm";
+          // M4 实时画面：explore 探索步骤 running 时挂 LiveShotView（卸载即停轮询，任务结束/中断自动消失）
+          const isExploreRunning =
+            live.kind === "explore" && title === "探索式测试" && st === "running" && live.status === "running";
           return (
             <div key={title} className={`tsc-step tsc-${st}`}>
               <button type="button" className="tsc-step-head" onClick={() => toggle(title)}>
@@ -171,7 +564,9 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
                   <span className="tsc-step-time">{fmtDuration(s.duration_ms)}</span>
                 )}
                 <span className="tsc-hint">
-                  {st === "running"
+                  {st === "awaiting_confirm"
+                    ? AWAITING_CONFIRM_HINT
+                    : st === "running"
                     ? (live.status === "failed" ? "已中断" : (s?.progress || RUNNING_HINTS[title]))
                     : s?.error ? "失败" : ""}
                 </span>
@@ -179,32 +574,44 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
               </button>
               {open && (
                 <div className="tsc-step-detail">
-                  {st === "running" && live.status !== "failed" && (
+                  {isExploreAwaiting && <ExplorePlanConfirm taskId={live.id} />}
+                  {st === "running" && live.status !== "failed" && !isExploreRunning && (
                     <div className="tsc-io-text tsc-muted">{s?.progress || RUNNING_HINTS[title]}</div>
+                  )}
+                  {isExploreRunning && (
+                    <LiveShotView taskId={live.id} progress={s?.progress || RUNNING_HINTS[title]} />
                   )}
                   {st === "running" && live.status === "failed" && (
                     <div className="tsc-io-text tsc-muted">任务已中断，可点击上方「🔄 重试」从断点继续</div>
                   )}
-                  {s?.input_summary && (
-                    <div className="tsc-io">
-                      <span className="tsc-io-label">📥 输入</span>
-                      <div className="tsc-io-text">{s.input_summary}</div>
-                    </div>
-                  )}
-                  {s?.output_summary && (
-                    <div className="tsc-io">
-                      <span className="tsc-io-label">📤 输出</span>
-                      <div className="tsc-io-text">{s.output_summary}</div>
-                    </div>
-                  )}
-                  {s?.error && (
-                    <div className="tsc-io tsc-io-err">
-                      <span className="tsc-io-label">✗ 错误</span>
-                      <div className="tsc-io-text">{s.error}</div>
-                    </div>
-                  )}
-                  {st === "completed" && !hasDetail && (
-                    <div className="tsc-io-text tsc-muted">（暂无思考记录）</div>
+                  {isCrawlerDone ? (
+                    <CrawlerPagesView taskId={live.id} json={s?.input_summary || ""} />
+                  ) : isExploreDone ? (
+                    <ExploreTimeline taskId={live.id} json={s?.input_summary || ""} />
+                  ) : (
+                    <>
+                      {s?.input_summary && (
+                        <div className="tsc-io">
+                          <span className="tsc-io-label">📥 输入</span>
+                          <div className="tsc-io-text">{s.input_summary}</div>
+                        </div>
+                      )}
+                      {s?.output_summary && (
+                        <div className="tsc-io">
+                          <span className="tsc-io-label">📤 输出</span>
+                          <div className="tsc-io-text">{s.output_summary}</div>
+                        </div>
+                      )}
+                      {s?.error && (
+                        <div className="tsc-io tsc-io-err">
+                          <span className="tsc-io-label">✗ 错误</span>
+                          <div className="tsc-io-text">{s.error}</div>
+                        </div>
+                      )}
+                      {st === "completed" && !hasDetail && (
+                        <div className="tsc-io-text tsc-muted">（暂无思考记录）</div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -223,6 +630,18 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
             }}
           >
             查看用例 / 思维导图 →
+          </button>
+          {/* V5.5 用例库资产化：完成即入库，引导去用例库管理（筛选/评审/迭代） */}
+          <button
+            type="button"
+            className="qtag"
+            title="用例已自动入用例库（草稿），去库中评审管理"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.dispatchEvent(new CustomEvent("nav-to", { detail: "cases" }));
+            }}
+          >
+            📚 用例库
           </button>
           {/* 会话内闭环：直接挂载迭代引用 chip，用户无需先开详情抽屉 */}
           {showIterate && (

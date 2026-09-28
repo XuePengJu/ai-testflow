@@ -13,10 +13,12 @@ from app.api.deps import get_current_user
 from app.core import task_queue
 from app.core.config import UPLOAD_DIR, OUTPUT_DIR, GUEST_MAX_TASKS
 from app.core.db import get_db
+from app.models.automation import TestTarget, encrypt_credential
 from app.models.conversation import Conversation, Message
 from app.models.task import Task, StepLog
 from app.models.user import User
-from app.schemas.task import TaskOut, StepLogOut
+from app.schemas.task import TaskOut, StepLogOut, TaskPatchIn
+from app.services import explorer_agent
 from app.services.doc_extract import SUPPORTED_EXTS
 from app.workflow.iterate import run_iterate
 from src.models.testcase import ensure_case_ids, ensure_compound_titles
@@ -90,16 +92,28 @@ def _resolve_conversation(db: Session, task: Task) -> str | None:
     return conv.id
 
 
+def _has_auto_script(db: Session, task: Task) -> bool:
+    """M2 执行引擎：任务目录 auto/ 下是否已生成自动化脚本（存在 test_*.py）。
+
+    列表/详情都会调用，必须轻量：只 glob 一次，不做任何 IO 之外的解析。
+    """
+    auto_dir = OUTPUT_DIR / task.user_data_dir(db) / task.id / "auto"
+    return auto_dir.is_dir() and any(auto_dir.glob("test_*.py"))
+
+
 def _to_out(db: Session, task: Task, include_cases: bool = False) -> TaskOut:
     steps = db.execute(
         select(StepLog).where(StepLog.task_id == task.id).order_by(StepLog.id)
     ).scalars().all()
     return TaskOut(
         id=task.id, name=task.name, kind=task.kind, source_type=task.source_type,
-        status=task.status, cases_count=task.cases_count, duration_ms=task.duration_ms,
+        status=task.status, review_status=task.review_status or "draft",
+        cases_count=task.cases_count, duration_ms=task.duration_ms,
         formats=task.formats, roles=task.roles or '["qa"]',
         category_id=task.category_id,
         parent_task_id=task.parent_task_id,
+        target_id=task.target_id,
+        has_auto=_has_auto_script(db, task),
         conversation_id=task.conversation_id,
         created_at=task.created_at, finished_at=task.finished_at,
         steps=[
@@ -135,8 +149,13 @@ async def create_task(
     roles: str = Form("qa"),
     name: str = Form(""),
     conversation_id: str = Form(""),
+    # ---- M1 全链路（kind=e2e）专用参数 ----
+    url: str = Form(""),
+    target_id: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
 ):
-    """提交一个测试用例生成任务。可上传规格文件或粘贴文本。"""
+    """提交一个测试用例生成任务。可上传规格文件或粘贴文本；kind=e2e 时走全链路（URL 抓取）。"""
     # 访客任务上限（防滥用）
     if user.role == "guest":
         count = db.execute(
@@ -150,6 +169,65 @@ async def create_task(
     task_id = uuid.uuid4().hex[:12]
     source_type = "file" if file else "text"
     input_ref = ""
+
+    if kind in ("e2e", "explore"):
+        # ---- M1 全链路 / M5 探索式：url / target_id 至少一个；账密可现场填（自动建 target 并加密） ----
+        if file:
+            raise HTTPException(status_code=400, detail="该任务类型不需要上传文件，请填写被测系统地址")
+        e2e_target = None
+        if target_id.strip():
+            e2e_target = db.get(TestTarget, target_id.strip())
+            if not e2e_target or (e2e_target.user_id != user.id and user.role != "admin"):
+                raise HTTPException(status_code=404, detail="被测系统不存在")
+        elif not url.strip():
+            raise HTTPException(status_code=400, detail="请提供被测系统地址（url）或已保存的系统（target_id）")
+
+        source_type = "url"
+        # 现场填 URL：自动创建 TestTarget（有账密则 Fernet 加密落库），任务与其关联
+        if e2e_target is None:
+            from app.api.automation import _validate_base_url
+            clean_url = _validate_base_url(url)
+            e2e_target = TestTarget(
+                id=uuid.uuid4().hex[:12],
+                user_id=user.id,
+                name=(name.strip() or clean_url)[:255],
+                base_url=clean_url,
+                auth_type="form" if username.strip() or password else "none",
+                username_enc=encrypt_credential(username.strip()) if username.strip() else None,
+                password_enc=encrypt_credential(password) if password else None,
+            )
+            db.add(e2e_target)
+            db.flush()  # 先拿 id 再建任务（外键依赖）
+
+        input_ref = e2e_target.base_url or ""
+
+    # 会话关联：传了 conversation_id → 校验存在且属于当前用户（越权一律 404，不暴露存在性）；
+    # e2e 未传 → 自动建会话 + 两条消息（user 发起 + assistant 占位），
+    # 保证任务运行中左侧会话列表立即有记录（此前只靠详情接口 _resolve_conversation 兜底，太晚）。
+    conv_obj = None
+    if conversation_id.strip():
+        conv_obj = db.get(Conversation, conversation_id.strip())
+        if not conv_obj or conv_obj.user_id != user.id:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        conversation_id = conv_obj.id
+    elif kind in ("e2e", "explore"):
+        # e2e / explore 未传 → 自动建会话 + 两条消息（user 发起 + assistant 占位）
+        conv_title = (name.strip() or f"{'🌐 全链路测试' if kind == 'e2e' else '🤖 探索式测试'}-{e2e_target.base_url}")[:255]
+        conv_obj = Conversation(id=uuid.uuid4().hex[:12], user_id=user.id, title=conv_title)
+        db.add(conv_obj)
+        db.flush()  # 先落会话行再挂消息（外键依赖），user 消息必须先于 assistant 占位入库
+        conversation_id = conv_obj.id
+        if kind == "e2e":
+            user_msg = f"🌐 发起全链路测试：{e2e_target.base_url}"
+            bot_msg = "正在探索被测系统并生成测试用例…"
+        else:
+            user_msg = f"🤖 发起探索式测试：{e2e_target.base_url}"
+            bot_msg = "正在自主探索被测系统并生成测试用例…"
+        db.add(Message(conversation_id=conversation_id, role="user", content=user_msg))
+        db.flush()  # 保证消息顺序：user 在前，assistant 占位在后（前端聊天流按序渲染）
+        db.add(Message(conversation_id=conversation_id, role="assistant",
+                       content=bot_msg, task_id=None))
+        conv_obj.updated_at = datetime.utcnow()
 
     # 文件落 data_dir 目录（用户隔离）
     user_dir = UPLOAD_DIR / user.data_dir
@@ -168,7 +246,7 @@ async def create_task(
         input_ref = fname
     elif text.strip():
         input_ref = text
-    else:
+    elif kind not in ("e2e", "explore"):
         raise HTTPException(status_code=400, detail="file 与 text 至少提供一个")
 
     (OUTPUT_DIR / user.data_dir).mkdir(parents=True, exist_ok=True)
@@ -184,12 +262,14 @@ async def create_task(
         status="pending",
         user_id=user.id,
         conversation_id=conversation_id or None,
+        target_id=e2e_target.id if kind in ("e2e", "explore") and e2e_target else None,
     )
     db.add(task)
     db.commit()
     db.refresh(task)
 
-    # 回填该会话下最后一条 assistant 消息的 task_id（聊天流回放时据此渲染节点/用例卡）
+    # 回填该会话下最后一条 assistant 消息的 task_id（聊天流回放时据此渲染节点/用例卡）。
+    # e2e 自动建的会话里，占位消息 task_id=None 会在此被回填新任务 id，无需单独处理。
     if conversation_id:
         last_msg = db.execute(
             select(Message)
@@ -228,6 +308,31 @@ def get_task(task_id: str, db: Session = Depends(get_db),
     task = _own_task(db, task_id, user)
     _resolve_conversation(db, task)
     return _to_out(db, task, include_cases=True)
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskOut)
+def patch_task(task_id: str,
+               payload: TaskPatchIn,
+               db: Session = Depends(get_db),
+               user: User = Depends(get_current_user)):
+    """V5.5 用例库资产化：更新用例集元数据（名称 / 评审状态）。
+
+    - 归类（category_id）走既有 PUT /categories/move-task/{task_id}，本接口不重复提供
+    - review_status 仅 draft/reviewed；生成过程状态（status）由工作流管理，不可手工改
+    """
+    t = _own_task(db, task_id, user)
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="名称不能为空")
+        t.name = name[:255]
+    if payload.review_status is not None:
+        if payload.review_status not in ("draft", "reviewed"):
+            raise HTTPException(status_code=400, detail="review_status 仅支持 draft / reviewed")
+        t.review_status = payload.review_status
+    db.commit()
+    db.refresh(t)
+    return _to_out(db, t)
 
 
 @router.delete("/tasks/{task_id}")
@@ -321,6 +426,98 @@ def download(task_id: str, fmt: str = "xlsx",
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"未找到 {fmt} 导出文件")
     return FileResponse(path, filename=f"{task_id}{ext}")
+
+
+# ---- M3 计划先行：探索计划读取 / 确认（与 app/services/explorer_agent 的 plan.json 对齐） ----
+
+def _explore_plan_path(db: Session, task: Task):
+    """任务探索计划文件路径：outputs/<data_dir>/<task_id>/plan.json。"""
+    return OUTPUT_DIR / task.user_data_dir(db) / task.id / "plan.json"
+
+
+@router.get("/tasks/{task_id}/explore-plan")
+def get_explore_plan(task_id: str,
+                     db: Session = Depends(get_db),
+                     user: User = Depends(get_current_user)):
+    """读取任务的探索计划（plan.json）与确认状态。
+
+    未生成过计划（计划先行关闭 / plan 步骤未跑）→ {"exists": false}，不报错。
+    """
+    task = _own_task(db, task_id, user)
+    path = _explore_plan_path(db, task)
+    plan: dict = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                plan = loaded
+        except (OSError, ValueError):
+            plan = {}
+    flows = plan.get("flows") if isinstance(plan.get("flows"), list) else []
+    return {
+        "exists": bool(plan),
+        "confirmed": bool(plan.get("confirmed")),
+        "goal": str(plan.get("goal") or ""),
+        "entry_url": str(plan.get("entry_url") or ""),
+        "flows": flows,
+    }
+
+
+@router.post("/tasks/{task_id}/explore-plan/confirm")
+def confirm_explore_plan(task_id: str,
+                         payload: dict,
+                         db: Session = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    """确认（可编辑后的）探索计划 → 覆盖 plan.json（confirmed=true）并恢复任务执行。
+
+    - body：{"flows": [{"name": "...", "steps": ["...", ...]}]}（前端只回传勾选的流）
+    - 结构非法 → 400；计划未生成 → 404；任务不在等待确认 → 409
+    - 恢复执行：删掉 awaiting_confirm 的 explore 步骤 + 重新入队（plan 步骤已完成会自动跳过）
+    """
+    task = _own_task(db, task_id, user)
+    if task.kind != "explore":
+        raise HTTPException(status_code=400, detail="仅探索式测试（explore）任务支持探索计划")
+    if task.status != "running":
+        raise HTTPException(
+            status_code=409,
+            detail=f"任务状态为 {task.status}，当前没有等待确认的探索计划")
+    try:
+        flows = explorer_agent.validate_plan_payload(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    path = _explore_plan_path(db, task)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="该任务尚未生成探索计划")
+    # 探索正在真实运行时拒绝确认（防误删 running 步骤）
+    running_step = db.execute(
+        select(StepLog).where(
+            StepLog.task_id == task.id, StepLog.name == "explore",
+            StepLog.status == "running")
+    ).scalar_one_or_none()
+    if running_step:
+        raise HTTPException(status_code=409, detail="探索正在进行中，无需确认计划")
+
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(plan, dict):
+            plan = {}
+    except (OSError, ValueError):
+        plan = {}
+    plan["flows"] = flows
+    plan["confirmed"] = True
+    plan["confirmed_at"] = datetime.utcnow().isoformat()
+    path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 恢复执行：移除暂停步骤（awaiting_confirm / 其他非 completed 的 explore 残留）
+    db.execute(
+        delete(StepLog).where(
+            StepLog.task_id == task.id, StepLog.name == "explore",
+            StepLog.status != "completed")
+    )
+    db.commit()
+    task_queue.enqueue(task.id)
+    return {"ok": True, "confirmed": True, "flows": flows}
 
 
 @router.post("/tasks/{task_id}/iterate", response_model=TaskOut, status_code=201)

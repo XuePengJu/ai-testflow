@@ -9,7 +9,7 @@
 - 演示模式（AITF_ALLOW_DEMO=1）才允许 mock 兜底；默认未注入模型 / 调用失败 → 直接抛错
 """
 import json
-import re
+import logging
 from collections import Counter
 
 from app.core.config import AITF_ALLOW_DEMO
@@ -21,6 +21,9 @@ from src.models.testcase import (
     align_step_expectations,
     strip_title_expected,
 )
+from src.utils import jsonx
+
+logger = logging.getLogger(__name__)
 
 
 _SUPPLEMENT_PROMPT = """你是资深测试工程师。请根据补充要求，为已有测试用例集**增量补充**用例。
@@ -95,17 +98,27 @@ def _normalize(raw: dict) -> dict:
 
 
 def _parse_llm(text: str) -> list[TestCase]:
-    """从 LLM 回复中解析 JSON 用例数组。"""
-    m = re.search(r"\[.*\]", text, re.S)
-    if not m:
-        return []
-    try:
-        arr = json.loads(m.group(0))
-    except (json.JSONDecodeError, ValueError):
+    """从 LLM 回复中解析 JSON 用例数组。
+
+    D 修复（2026-09-24）：不再用贪婪正则 ``re.search(r"\\[.*\\]", text, re.S)``——
+    该写法在「数组后另有 ``[1]`` 引用」「字段值内含 ``]``」「数组不在文本末尾」时
+    必然整体失败，且旧实现静默 ``return []``，表现为「补充任务跑完一条没加」且无日志。
+    现改用 ``src.utils.jsonx`` 配对切片，并把失败显性写日志。
+    """
+    raw_text = text or ""
+    arr = jsonx.find_dict_list(raw_text, jsonx.CASE_KEYS)
+    if not arr:
+        logger.warning(
+            "补充用例解析无产出：原文 %d 字，reason=%s",
+            len(raw_text),
+            "invalid_json" if jsonx.has_array_literal(raw_text) else "no_json",
+        )
         return []
     out = []
+    skipped = 0
     for item in arr:
         if not isinstance(item, dict):
+            skipped += 1
             continue
         try:
             n = _normalize(item)
@@ -120,8 +133,10 @@ def _parse_llm(text: str) -> list[TestCase]:
                 expected=n["expected"],
                 test_data=n["test_data"],
             ))
-        except Exception:  # noqa: BLE001
-            continue
+        except Exception:  # noqa: BLE001  单条结构不合法只丢该条
+            skipped += 1
+    if skipped:
+        logger.warning("补充用例部分丢弃：%d/%d 条结构不合法", skipped, len(arr))
     return out
 
 

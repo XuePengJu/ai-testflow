@@ -5,18 +5,17 @@
  * 右栏：选中库 → 文档 Tab（上传/列表/详情/分块编辑/修订/回滚/重建/删除）
  *        + 检索 Tab（RAG 检索测试台，展示相似度与来源）
  * 权限：global 库非创建者只读（写操作按 403 由后端拦截，前端隐藏编辑按钮）
+ * V5.8：AI 问答 Tab 下线（问答统一走首页 AI 会话的知识库多选检索）
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FileText, RefreshCw, Search, Trash2, Upload, Plus,
-  History, Undo2, X, Pencil, Check,
-  BookOpen, Network, MessageSquare,
+  History, Undo2, X, Pencil, Check, Sparkles,
+  BookOpen, Network,
 } from "lucide-react";
 import { api, apiJson, toast } from "../api/client";
 import ReactECharts from "echarts-for-react";
-import ChatPanel from "../components/chat/ChatPanel";
 import KbSelector from "../components/knowledge/KbSelector";
-import { useChatStore } from "../store/chatStore";
 import { useAuth } from "../hooks/useAuth";
 import { parseServerTime } from "../utils/time";
 
@@ -30,6 +29,7 @@ interface Doc {
   file_type: string; file_size: number; parse_status: string;
   error_message: string | null; chunk_count: number; created_at: string | null;
   processed_at: string | null; wiki_summary?: string;
+  wiki_category?: string;
   custom_meta?: Record<string, string>;
 }
 interface ChunkRow {
@@ -40,6 +40,35 @@ interface Hit { id: string; score: number; document: string; metadata: Record<st
 
 const cleanTitle = (t: string) => (t || "").replace(/^\d+[_\-\s]*/, "").replace(/\.[^.]+$/, "");
 
+/**
+ * 摘要展示兜底：存量数据里 wiki_summary 可能存的是 {"summary": "..."} 形状的
+ * 原始 JSON（LLM 返回整段入库的历史脏数据），展示前解析取纯文本。
+ * 与后端 app/services/knowledge/ingest.py:extract_summary_text 同口径。
+ */
+function extractSummaryText(raw?: string | null): string {
+  const s = (raw || "").trim();
+  if (!s.startsWith("{")) return s;
+  try {
+    const data = JSON.parse(s) as { summary?: unknown };
+    if (data && typeof data === "object" && "summary" in data) {
+      const v = data.summary;
+      if (typeof v === "string") return extractSummaryText(v);
+      if (v == null) return "";
+      if (typeof v === "object") return extractSummaryText(JSON.stringify(v));
+      return String(v);
+    }
+  } catch {
+    /* 截断/非法 JSON：剥 {"summary": " 前缀做尽力修复，失败原文展示 */
+    const m = s.match(/^\{\s*"summary"\s*:\s*"(.*)$/s);
+    if (m) {
+      const body = m[1].replace(/\s*\}\s*$/, "").replace(/"\s*$/, "")
+        .replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      if (body.trim()) return body;
+    }
+  }
+  return s;
+}
+
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   ready: { label: "已入库", cls: "ok" },
   failed: { label: "失败", cls: "err" },
@@ -49,17 +78,39 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   processing: { label: "向量化中", cls: "" },
 };
 
+/* M6：类型图标块（色块 + 缩写），未识别类型回落 TXT 样式 */
+const TYPE_META: Record<string, { abbr: string; color: string }> = {
+  md: { abbr: "MD", color: "#2563eb" },
+  txt: { abbr: "TXT", color: "#64748b" },
+  pdf: { abbr: "PDF", color: "#dc2626" },
+  doc: { abbr: "DOC", color: "#4f46e5" },
+  docx: { abbr: "DOC", color: "#4f46e5" },
+  xls: { abbr: "XLS", color: "#16a34a" },
+  xlsx: { abbr: "XLS", color: "#16a34a" },
+  xmind: { abbr: "XM", color: "#7c3aed" },
+  csv: { abbr: "CSV", color: "#d97706" },
+  json: { abbr: "JSON", color: "#0891b2" },
+};
+const typeMeta = (ft?: string): { abbr: string; color: string } =>
+  TYPE_META[(ft || "").toLowerCase()] ?? { abbr: (ft || "?").toUpperCase().slice(0, 4), color: "#64748b" };
+
+/* M6：上传拖拽区接受的扩展名与大小上限（与后端 MAX_UPLOAD_BYTES/支持列表同口径） */
+const UPLOAD_ACCEPT = [".md", ".txt", ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".xmind", ".csv", ".json"];
+const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
 export default function KnowledgePage() {
   const { role } = useAuth();
   const readOnly = role === "guest"; // V4.2：访客只读（仅共享库，无新建/上传/删除，写操作后端 403 兜底）
   const [bases, setBases] = useState<KB[]>([]);
   const [sel, setSel] = useState<KB | null>(null);
-  const [tab, setTab] = useState<"chat" | "docs" | "wiki" | "graph" | "search">(
-    () => (localStorage.getItem("aitf_kb_tab") as "chat" | "docs" | "wiki" | "graph" | "search") || "docs"
+  const [tab, setTab] = useState<"docs" | "wiki" | "graph" | "search">(
+    () => {
+      const saved = localStorage.getItem("aitf_kb_tab");
+      // V5.8："chat" Tab 已下线，老记忆值回落到文档 Tab
+      return saved && saved !== "chat" ? (saved as "docs" | "wiki" | "graph" | "search") : "docs";
+    }
   );
   const [showCreate, setShowCreate] = useState(false);
-  // V4.1：AI 问答引用 chip 点击 → 跳到文档 Tab 并高亮定位该条目（seq 递增保证同 id 重复可触发）
-  const [focusDoc, setFocusDoc] = useState<{ id: string; seq: number } | null>(null);
 
   const load = useCallback(async () => {
     const data = await apiJson<{ items: KB[] }>("/api/knowledge/bases");
@@ -99,7 +150,7 @@ export default function KnowledgePage() {
   }, [embShown]);
 
   return (
-    <main className={"app-main kb-page kb-no-aside" + (tab === "chat" ? " kb-page-chat" : "")}>
+    <main className="app-main kb-page kb-no-aside">
       {/* V4.4：知识库列表移到顶栏下拉选择器（KbSelector），左侧不再占用一列 */}
       <section className="kb-main">
         {!sel ? (
@@ -124,9 +175,6 @@ export default function KnowledgePage() {
                 onNew={() => setShowCreate(true)}
               />
               <nav className="pill-tabs" role="tablist" aria-label="视图切换">
-                <button className={"ptab " + (tab === "chat" ? "on" : "")} onClick={() => setTab("chat")}>
-                  <MessageSquare size={14} /> AI 问答
-                </button>
                 <button className={"ptab " + (tab === "docs" ? "on" : "")} onClick={() => setTab("docs")}>
                   <FileText size={14} /> 文档
                 </button>
@@ -144,18 +192,8 @@ export default function KnowledgePage() {
                 {!readOnly && <KbActions kb={sel} onChanged={load} />}
               </div>
             </header>
-            {tab === "chat" && (
-              <ChatTab
-                kb={sel}
-                onCite={(kid) => {
-                  // 引用跳转：切到文档 Tab 并高亮定位（找不到对应行时静默，仅切 Tab）
-                  setTab("docs");
-                  setFocusDoc((p) => ({ id: kid, seq: (p?.seq || 0) + 1 }));
-                }}
-              />
-            )}
-            {tab === "docs" && <DocsTab kb={sel} focusDoc={focusDoc} readOnly={readOnly} />}
-            {tab === "wiki" && <WikiTab kb={sel} />}
+            {tab === "docs" && <DocsTab kb={sel} readOnly={readOnly} />}
+            {tab === "wiki" && <WikiTab kb={sel} readOnly={readOnly} />}
             {tab === "graph" && <GraphTab kb={sel} />}
             {tab === "search" && <SearchTab kb={sel} />}
           </>
@@ -164,74 +202,6 @@ export default function KnowledgePage() {
 
       {showCreate && <CreateDialog onClose={() => setShowCreate(false)} onCreated={load} />}
     </main>
-  );
-}
-
-/* ---------------- AI 问答 Tab（V4.1：知识库内对话 + 引用溯源；V4.2：建议问题对齐设计稿） ---------------- */
-function ChatTab({ kb, onCite }: { kb: KB; onCite: (kid: string) => void }) {
-  const kbConversations = useChatStore((s) => s.kbConversations);
-  const conversationId = useChatStore((s) => s.conversationId);
-  const refreshConversations = useChatStore((s) => s.refreshConversations);
-  const loadConversation = useChatStore((s) => s.loadConversation);
-  const newConversation = useChatStore((s) => s.newConversation);
-  const setChatContext = useChatStore((s) => s.setChatContext);
-  // 建议问题：从该库 Wiki 索引标题生成（真实数据，点击即按此问题检索）
-  const [suggests, setSuggests] = useState<string[]>([]);
-
-  useEffect(() => {
-    // 进入知识库问答：绑定当前库 + 从新会话开始（与首页工作流会话隔离）
-    setChatContext("kb_qa", kb.id);
-    newConversation();
-    void refreshConversations();
-    // 离开问答 Tab：复位为工作流模式，避免残留 kb 上下文串味到首页对话
-    return () => setChatContext("workflow", null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kb.id]);
-
-  useEffect(() => {
-    let alive = true;
-    apiJson<{ items: { title: string }[] }>(`/api/knowledge/bases/${kb.id}/wiki`).then((d) => {
-      if (!alive) return;
-      const titles = (d?.items ?? []).map((it) => cleanTitle(it.title)).filter(Boolean).slice(0, 4);
-      setSuggests(titles.map((t) => `${t}的要点是什么？`));
-    }).catch(() => {});
-    return () => { alive = false; };
-  }, [kb.id]);
-
-  return (
-    <div className="kb-chat-wrap">
-      <aside className="kb-chat-side">
-        <button
-          className="btn ghost btn-sm"
-          onClick={() => { newConversation(); void refreshConversations(); }}
-          title="开始一段新的问答会话"
-        >
-          <Plus size={14} /> 新会话
-        </button>
-        <div className="kb-chat-list">
-          {kbConversations.length === 0 && (
-            <div className="muted" style={{ padding: "8px 4px", fontSize: 12 }}>暂无问答会话</div>
-          )}
-          {kbConversations.map((c) => (
-            <button
-              key={c.id}
-              className={"kb-chat-item" + (conversationId === c.id ? " on" : "")}
-              onClick={() => void loadConversation(c.id)}
-              title={c.title}
-            >
-              <span className="kci-title">{c.title || "新会话"}</span>
-              <span className="muted kci-meta">{c.message_count} 条</span>
-            </button>
-          ))}
-        </div>
-        <div className="muted" style={{ fontSize: 11, padding: "6px 4px" }}>
-          提问只检索「{kb.name}」内的知识
-        </div>
-      </aside>
-      <div className="kb-chat-main">
-        <ChatPanel showCitations onCiteClick={onCite} kbName={kb.name} suggests={suggests} />
-      </div>
-    </div>
   );
 }
 
@@ -281,14 +251,17 @@ function KbActions({ kb, onChanged }: { kb: KB; onChanged: () => void }) {
   );
 }
 
-/* ---------------- 文档 Tab ---------------- */
-function DocsTab({ kb, focusDoc, readOnly = false }: { kb: KB; focusDoc?: { id: string; seq: number } | null; readOnly?: boolean }) {
+/* ---------------- 文档 Tab（M6：库头 + 拖拽上传 + 轻行列表） ---------------- */
+function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [detail, setDetail] = useState<{ doc: Doc; chunks: ChunkRow[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newContent, setNewContent] = useState("");
+  const [kw, setKw] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -296,17 +269,6 @@ function DocsTab({ kb, focusDoc, readOnly = false }: { kb: KB; focusDoc?: { id: 
     setDocs(data?.items ?? []);
   }, [kb.id]);
   useEffect(() => { void load(); }, [load]);
-
-  // V4.1：AI 问答引用跳转——滚动定位并高亮对应文档行（等文档列表渲染后再定位）
-  useEffect(() => {
-    if (!focusDoc?.id || !docs.length) return;
-    const el = document.querySelector(`[data-doc-id="${focusDoc.id}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("flash");
-      setTimeout(() => el.classList.remove("flash"), 1600);
-    }
-  }, [focusDoc, docs]);
 
   const upload = async (f: File) => {
     setBusy(true);
@@ -324,6 +286,17 @@ function DocsTab({ kb, focusDoc, readOnly = false }: { kb: KB; focusDoc?: { id: 
     } catch {
       toast("入库请求失败：网络错误或后端无响应，请检查后端日志");
     } finally { setBusy(false); }
+  };
+
+  /** M6：拖拽/选择文件前的本地校验（格式 + 大小），不通过直接提示 */
+  const acceptFile = (f: File) => {
+    const ext = "." + (f.name.split(".").pop() || "").toLowerCase();
+    if (!UPLOAD_ACCEPT.includes(ext)) {
+      toast(`暂不支持 ${ext} 格式，请上传 ${UPLOAD_ACCEPT.join("/")} 文件`);
+      return;
+    }
+    if (f.size > UPLOAD_MAX_BYTES) { toast("文件过大，单个文档上限 10MB"); return; }
+    void upload(f);
   };
 
   const createTextDoc = async () => {
@@ -374,27 +347,74 @@ function DocsTab({ kb, focusDoc, readOnly = false }: { kb: KB; focusDoc?: { id: 
     if (r.ok) { toast("已删除"); void load(); if (detail?.doc.id === doc.id) setDetail(null); }
   };
 
+  /* 库头统计 + 工具栏过滤数据（从现有列表聚合，不发额外请求） */
+  const totalChunks = docs.reduce((a, d) => a + (d.chunk_count || 0), 0);
+  const latest = docs.reduce<string | null>((acc, d) => {
+    const t = d.processed_at || d.created_at;
+    return !acc || (t && t > acc) ? t : acc;
+  }, null);
+  const docTypes = Array.from(new Set(docs.map((d) => (d.file_type || "").toLowerCase()).filter(Boolean)));
+  const kwLower = kw.trim().toLowerCase();
+  const filtered = docs.filter((d) => {
+    if (typeFilter && (d.file_type || "").toLowerCase() !== typeFilter) return false;
+    if (!kwLower) return true;
+    const summary = extractSummaryText(d.wiki_summary);
+    return (d.title || "").toLowerCase().includes(kwLower)
+      || (d.file_name || "").toLowerCase().includes(kwLower)
+      || summary.toLowerCase().includes(kwLower);
+  });
+
   return (
     <div className="kb-panel">
+      {/* 库头：库名 + 可见性徽章 + 统计 */}
+      <header className="kb-lib-head">
+        <h2 className="kb-lib-name" title={kb.name}>{kb.name}</h2>
+        <span className={"kb-vis " + kb.visibility}>{kb.visibility === "global" ? "共享" : "私有"}</span>
+        <span className="kb-lib-stats muted">
+          {docs.length} 个文档 · {totalChunks} 片段 · 最近更新 {latest ? fmtDate(latest) : "—"}
+        </span>
+      </header>
+
+      {!readOnly && (
+        <div
+          className={"kb-dropzone" + (dragOver ? " drag" : "")}
+          onClick={() => fileRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault(); setDragOver(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) acceptFile(f);
+          }}
+          role="button" aria-label="上传文档"
+        >
+          <Upload size={18} className="kb-dz-icon" />
+          <span>拖拽文件到此处，或 <b className="kb-dz-link">选择文件</b></span>
+          <span className="muted kb-dz-hint">支持 md/pdf/docx/xlsx/xmind/csv/json/txt（≤10MB）</span>
+        </div>
+      )}
+
+      {/* 工具栏：本地搜索 + 类型筛选 + 新建文档 */}
       <div className="kb-toolbar">
+        <input className="input kb-search" style={{ maxWidth: 260 }} value={kw} placeholder="搜索标题或摘要…"
+          onChange={(e) => setKw(e.target.value)} />
+        <select className="input kb-type-select" style={{ width: 130 }}
+          value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="按类型筛选">
+          <option value="">全部类型</option>
+          {docTypes.map((t) => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+        </select>
         {!readOnly ? (
-          <>
-            <button className="btn btn-sm btn-primary" disabled={busy}
-              onClick={() => fileRef.current?.click()} title="上传文档（md/txt/pdf/docx/xlsx/xls/xmind/csv/json）">
-              <Upload size={14} /> 上传文档
-            </button>
-            <button className="btn btn-sm ghost" disabled={busy} onClick={() => setShowNew(true)} title="在线新建文本文档">
-              <FileText size={14} /> 新建文档
-            </button>
-          </>
+          <button className="btn btn-sm ghost" disabled={busy} onClick={() => setShowNew(true)} title="在线新建文本文档">
+            <FileText size={14} /> 新建文档
+          </button>
         ) : (
           <span className="muted" style={{ fontSize: 12.5 }}>👤 访客只读模式：仅可浏览与检索，不支持上传/修改</span>
         )}
-        <input ref={fileRef} type="file" hidden
-          accept=".md,.txt,.pdf,.docx,.xlsx,.xls,.xmind,.csv,.json"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ""; }} />
-        <span className="muted" style={{ fontSize: 12 }}>支持 md/txt/pdf/docx/xlsx/xls/xmind/csv/json（≤10MB）</span>
+        {filtered.length !== docs.length && <span className="muted" style={{ fontSize: 12 }}>筛选出 {filtered.length}/{docs.length} 篇</span>}
       </div>
+
+      <input ref={fileRef} type="file" hidden accept={UPLOAD_ACCEPT.join(",")}
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) acceptFile(f); e.target.value = ""; }} />
 
       {showNew && (
         <div className="kb-mask" onClick={() => setShowNew(false)}>
@@ -411,33 +431,54 @@ function DocsTab({ kb, focusDoc, readOnly = false }: { kb: KB; focusDoc?: { id: 
         </div>
       )}
 
-      <div className="doc-cards">
-        {docs.length === 0 && <div className="muted" style={{ padding: 32, textAlign: "center" }}>{readOnly ? "该库暂无文档" : "暂无文档，点上方「上传文档」开始入库"}</div>}
-        {docs.map((d) => {
-          const sm = STATUS_META[d.parse_status] ?? { label: d.parse_status, cls: "" };
+      {/* 轻行列表：类型图标块 + 标题 + 单行摘要 + 右对齐元信息 */}
+      <div className="doc-rows">
+        {docs.length === 0 && <div className="muted" style={{ padding: 32, textAlign: "center" }}>{readOnly ? "该库暂无文档" : "暂无文档，把文件拖到上方虚线区开始入库"}</div>}
+        {docs.length > 0 && filtered.length === 0 && (
+          <div className="muted" style={{ padding: 32, textAlign: "center" }}>没有匹配「{kw || typeFilter.toUpperCase()}」的文档</div>
+        )}
+        {filtered.map((d) => {
+          const meta = typeMeta(d.file_type);
+          const failed = d.parse_status === "failed";
+          const running = ["unprocessed", "parsing", "chunking", "processing"].includes(d.parse_status);
+          const summary = failed && d.error_message
+            ? d.error_message
+            : extractSummaryText(d.wiki_summary);
+          const cat = (d.wiki_category || "").trim();
           return (
-            <article key={d.id} className="doc-card" data-doc-id={d.id} onClick={() => void openDetail(d)}>
-              <div className="dc-top">
-                <h3>{cleanTitle(d.file_name || d.title)}</h3>
-                <span className={"status-pill " + sm.cls}>{sm.label}</span>
-                <span className="dc-ops" onClick={(e) => e.stopPropagation()}>
-                  <button className="btn ghost btn-sm" onClick={() => void openDetail(d)} title={readOnly ? "查看分块" : "查看/编辑分块"}><FileText size={13} /></button>
-                  {!readOnly && (
-                    <>
-                      <button className="btn ghost btn-sm" onClick={() => void reindex(d)} title="重建索引"><RefreshCw size={13} /></button>
-                      <button className="btn ghost btn-sm danger" onClick={() => void delDoc(d)} title="删除"><Trash2 size={13} /></button>
-                    </>
+            <article key={d.id}
+              className={"doc-row" + (failed ? " row-err" : running ? " row-run" : "")}
+              data-doc-id={d.id} onClick={() => void openDetail(d)}>
+              <span className="doc-type-ic" style={{ background: meta.color + "1a", color: meta.color }}>{meta.abbr}</span>
+              <div className="doc-row-main">
+                <div className="doc-row-titleline">
+                  <span className="doc-row-title">{cleanTitle(d.file_name || d.title)}</span>
+                  {(failed || running) && (
+                    <span className={"status-pill " + (failed ? "err" : "")}>
+                      {STATUS_META[d.parse_status]?.label ?? d.parse_status}
+                    </span>
                   )}
-                </span>
+                  {cat && cat !== "未分类" && <span className="doc-row-cat">{cat}</span>}
+                </div>
+                {summary && (
+                  <div className={"doc-row-summary" + (failed ? " err-text" : "")} title={summary}>
+                    {summary.slice(0, 120)}
+                  </div>
+                )}
               </div>
-              {d.parse_status === "failed" && d.error_message
-                ? <div className="dc-summary err-text" title={d.error_message}>{d.error_message.slice(0, 90)}</div>
-                : d.wiki_summary && <div className="dc-summary">{d.wiki_summary}</div>}
-              <div className="dc-meta">
+              <div className="doc-row-meta">
                 <span>{d.chunk_count} 片段</span>
-                <span>{(d.file_type || "—").toUpperCase()}</span>
                 <span>{fmtSize(d.file_size)}</span>
-                <span>入库于 {fmtDate(d.created_at)}</span>
+                <span>{fmtDate(d.created_at)}</span>
+              </div>
+              <div className="doc-row-ops" onClick={(e) => e.stopPropagation()}>
+                <button className="btn ghost btn-sm" onClick={() => void openDetail(d)} title={readOnly ? "查看分块" : "查看/编辑分块"}><FileText size={13} /></button>
+                {!readOnly && (
+                  <>
+                    <button className="btn ghost btn-sm" onClick={() => void reindex(d)} title="重建索引"><RefreshCw size={13} /></button>
+                    <button className="btn ghost btn-sm danger" onClick={() => void delDoc(d)} title="删除"><Trash2 size={13} /></button>
+                  </>
+                )}
               </div>
             </article>
           );
@@ -455,9 +496,9 @@ function DocMetaPanel({ doc }: { doc: Doc }) {
     Object.entries(d.custom_meta || {}).map(([key, value]) => ({ key, value: String(value) }));
   const [metaFields, setMetaFields] = useState<{ key: string; value: string }[]>(() => toFields(doc));
   const [metaEditing, setMetaEditing] = useState(false);
-  const [summary, setSummary] = useState(doc.wiki_summary || "");
+  const [summary, setSummary] = useState(() => extractSummaryText(doc.wiki_summary));
   const [summaryEditing, setSummaryEditing] = useState(false);
-  const [summaryText, setSummaryText] = useState(doc.wiki_summary || "");
+  const [summaryText, setSummaryText] = useState(() => extractSummaryText(doc.wiki_summary));
   const [busy, setBusy] = useState(false);
 
   const fmtTime = (t?: string | null) => (t ? t.replace("T", " ").slice(0, 16) : "—");
@@ -475,14 +516,14 @@ function DocMetaPanel({ doc }: { doc: Doc }) {
     setBusy(true); toast("正在用文本模型生成摘要…");
     const r = await apiJson<{ wiki_summary?: string }>(`/api/knowledge/documents/${doc.id}/summary`, { method: "POST" });
     setBusy(false);
-    if (r) { setSummary(r.wiki_summary || ""); setSummaryText(r.wiki_summary || ""); toast("摘要已生成"); }
+    if (r) { const t = extractSummaryText(r.wiki_summary); setSummary(t); setSummaryText(t); toast("摘要已生成"); }
   };
   const saveSummary = async () => {
     setBusy(true);
     const r = await apiJson<{ wiki_summary?: string }>(`/api/knowledge/documents/${doc.id}/summary`,
       { method: "PUT", body: JSON.stringify({ summary: summaryText }) });
     setBusy(false);
-    if (r) { setSummary(r.wiki_summary || summaryText); setSummaryEditing(false); toast("摘要已保存"); }
+    if (r) { setSummary(extractSummaryText(r.wiki_summary) || summaryText); setSummaryEditing(false); toast("摘要已保存"); }
   };
 
   return (
@@ -734,9 +775,10 @@ type WikiItem = {
 };
 const CAT_COLORS = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#db2777", "#65a30d"];
 
-function WikiTab({ kb }: { kb: KB }) {
+function WikiTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
   const [items, setItems] = useState<WikiItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [classifying, setClassifying] = useState(false);
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<string>("全部");
   const [detail, setDetail] = useState<{ doc: Doc; chunks: ChunkRow[] } | null>(null);
@@ -755,6 +797,24 @@ function WikiTab({ kb }: { kb: KB }) {
       const r = await apiJson<{ items: WikiItem[] }>(`/api/knowledge/bases/${kb.id}/wiki/index`, { method: "POST" });
       if (r?.items) { setItems(r.items); toast(`Wiki 索引生成完成，共 ${r.items.length} 篇`); }
     } finally { setBusy(false); }
+  };
+
+  /** M7 一键修复：对未分类文档批量跑轻量 AI 归类，完成后刷新列表 */
+  const classifyAll = async () => {
+    const n = catCounts["未分类"] ?? 0;
+    if (!n) { toast("没有未分类文档"); return; }
+    setClassifying(true);
+    toast(`正在 AI 归类 ${n} 篇未分类文档…`);
+    try {
+      const r = await apiJson<{ classified: number; skipped: number }>(
+        `/api/knowledge/bases/${kb.id}/wiki/classify`, { method: "POST" });
+      if (r) {
+        toast(`AI 归类完成：成功 ${r.classified} 篇${r.skipped ? `，跳过 ${r.skipped} 篇（无内容）` : ""}`);
+        load();
+      }
+    } catch {
+      toast("AI 归类失败：网络错误或后端无响应");
+    } finally { setClassifying(false); }
   };
 
   const openDoc = async (docId: string) => {
@@ -781,62 +841,71 @@ function WikiTab({ kb }: { kb: KB }) {
   const fmtDate = (t?: string | null) => t ? t.replace("T", " ").slice(0, 10) : "—";
 
   return (
-    <div className="wiki-layout">
-      <aside className="wiki-cats">
-        <div className="wiki-cats-head">主题分类</div>
-        {cats.map((c) => (
-          <button key={c} className={"wiki-cat " + (cat === c ? "on" : "")} onClick={() => setCat(c)}>
-            {c !== "全部" && <span className="wiki-cat-dot" style={{ background: catColor(c) }} />}
-            <span className="wiki-cat-name">{c}</span>
-            <span className="muted">{c === "全部" ? items.length : catCounts[c]}</span>
-          </button>
-        ))}
-        <div style={{ padding: "12px 4px 0" }}>
-          <button className="btn btn-sm btn-primary" style={{ width: "100%" }} onClick={() => void indexWiki()} disabled={busy}>
-            {busy ? "生成中…" : "重新生成 Wiki 索引"}
-          </button>
+    /* M7：左栏侧栏降级为顶部筛选 chips，页面回到单栏（2 栏 → 1 内容栏） */
+    <div className="wiki-main">
+      <div className="wiki-chips-bar">
+        <div className="wiki-chips" role="tablist" aria-label="分类筛选">
+          {cats.map((c) => (
+            <button key={c} className={"wiki-chip-f" + (cat === c ? " on" : "")} onClick={() => setCat(c)}>
+              {c !== "全部" && <span className="wiki-cat-dot" style={{ background: catColor(c) }} />}
+              {c} <b>{c === "全部" ? items.length : catCounts[c]}</b>
+            </button>
+          ))}
+          {catCounts["未分类"] ? (
+            !readOnly && (
+              <button className="btn btn-sm ghost wiki-fix-btn" disabled={classifying || busy}
+                onClick={() => void classifyAll()} title="对未分类文档批量跑轻量 AI 归类（只补分类，不动摘要）">
+                <Sparkles size={13} /> {classifying ? "归类中…" : "AI 归类"}
+              </button>
+            )
+          ) : null}
         </div>
-      </aside>
-      <section className="wiki-main">
-        <div className="kb-toolbar">
-          <input className="input" style={{ flex: 1 }} placeholder="搜索 Wiki 页面（标题或摘要）…" value={q} onChange={(e) => setQ(e.target.value)} />
-        </div>
-        <div className="wiki-index">
-          <div className="wiki-overview">
-            <h3>Wiki Index</h3>
-            <div className="wiki-stats">
-              <span><b>{items.length}</b> 篇文档</span>
-              <span><b>{totalChunks}</b> 个知识块</span>
-              <span><b>{themeCount}</b> 个主题分类</span>
-            </div>
+        {!readOnly && (
+          <button className="btn btn-sm ghost" onClick={() => void indexWiki()} disabled={busy || classifying}
+            title="兜底：全库重跑摘要+分类（覆盖已有摘要）">
+            <RefreshCw size={13} className={busy ? "spin" : ""} /> {busy ? "生成中…" : "重新生成索引"}
+          </button>
+        )}
+      </div>
+      <div className="kb-toolbar">
+        <input className="input" style={{ flex: 1 }} placeholder="搜索 Wiki 页面（标题或摘要）…" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+      <div className="wiki-index">
+        <div className="wiki-overview">
+          <h3>Wiki Index</h3>
+          <div className="wiki-stats">
+            <span><b>{items.length}</b> 篇文档</span>
+            <span><b>{totalChunks}</b> 个知识块</span>
+            <span><b>{themeCount}</b> 个主题分类</span>
           </div>
-          {items.length === 0 && (
-            <div className="muted" style={{ padding: 40, textAlign: "center" }}>
-              还没有 Wiki 索引。点左侧「重新生成 Wiki 索引」，AI 会自动生成摘要并按主题分类。
-            </div>
-          )}
-          {items.length > 0 && filtered.length === 0 && (
-            <div className="muted" style={{ padding: 40, textAlign: "center" }}>没有匹配「{q}」的 Wiki 页面</div>
-          )}
-          {filtered.map((s) => {
-            const c = normCat(s.category);
-            return (
-              <div key={s.doc_id} className="wiki-item" onClick={() => void openDoc(s.doc_id)} title="点击查看文档与分块">
-                <div className="wiki-item-top">
-                  <div className="wiki-item-title">{cleanTitle(s.title)}</div>
-                  <span className="wiki-cat-tag" style={{ background: (catColor(c)) + "1a", color: catColor(c) }}>{c}</span>
-                </div>
-                <div className="wiki-item-summary">{s.summary || "（暂无摘要，点「重新生成 Wiki 索引」生成）"}</div>
-                <div className="wiki-item-foot">
-                  <span>{s.chunk_count} 个片段</span>
-                  {s.file_type && <span className="ft">{s.file_type.toUpperCase()}</span>}
-                  <span className="muted">更新于 {fmtDate(s.updated_at || s.processed_at)}</span>
-                </div>
-              </div>
-            );
-          })}
         </div>
-      </section>
+        {items.length === 0 && (
+          <div className="muted" style={{ padding: 40, textAlign: "center" }}>
+            还没有 Wiki 索引。点右上「重新生成索引」，AI 会自动生成摘要并按主题分类；
+            新上传的文档入库后会自动生成摘要与分类。
+          </div>
+        )}
+        {items.length > 0 && filtered.length === 0 && (
+          <div className="muted" style={{ padding: 40, textAlign: "center" }}>没有匹配「{q}」的 Wiki 页面</div>
+        )}
+        {filtered.map((s) => {
+          const c = normCat(s.category);
+          return (
+            <div key={s.doc_id} className="wiki-item" onClick={() => void openDoc(s.doc_id)} title="点击查看文档与分块">
+              <div className="wiki-item-top">
+                <div className="wiki-item-title">{cleanTitle(s.title)}</div>
+                <span className="wiki-cat-tag" style={{ background: (catColor(c)) + "1a", color: catColor(c) }}>{c}</span>
+              </div>
+              <div className="wiki-item-summary">{extractSummaryText(s.summary) || "（暂无摘要，点「重新生成索引」生成）"}</div>
+              <div className="wiki-item-foot">
+                <span>{s.chunk_count} 个片段</span>
+                {s.file_type && <span className="ft">{s.file_type.toUpperCase()}</span>}
+                <span className="muted">更新于 {fmtDate(s.updated_at || s.processed_at)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
       {detail && <ChunkPanel detail={detail} onClose={() => setDetail(null)} />}
     </div>
   );

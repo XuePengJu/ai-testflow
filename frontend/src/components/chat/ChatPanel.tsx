@@ -9,12 +9,23 @@
  * V2.10：输入框为唯一入口 —— 挂载「迭代引用 chip」时本次发送走 iterate（基于旧任务合并用例），
  *        无 chip 时为新建任务；chip 由详情页「继续优化」或会话内任务卡挂载。
  */
-import { useEffect, useRef, useState } from "react";
-import { Bot, Paperclip, Lightbulb, Send, Square, FileUp, ClipboardList, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Paperclip, Lightbulb, Send, Square, Globe, Library, BookCheck, PenLine } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
-import { toast } from "../../api/client";
+import { useTaskStore } from "../../store/taskStore";
+import { api, API, toast } from "../../api/client";
 import type { ChatDraft } from "../../types";
 import MessageView from "./MessageView";
+import PromptEditorModal from "./PromptEditorModal";
+import { statusBadge } from "../chat/TaskStepsCard";
+import { groupByChain } from "../../utils/taskChain";
+
+/** V5.8 知识库选择器条目（/api/knowledge/bases 返回的精简字段） */
+interface KbItem {
+  id: string;
+  name: string;
+  doc_count?: number;
+}
 
 function fmtSize(b: number): string {
   return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(2) + " MB";
@@ -33,7 +44,7 @@ const SAMPLE_LOGIN =
 const SAMPLE_DBERP =
   "DBERP 采购入库。\n功能点：创建采购入库单、关联采购订单、质检、上架、库存更新、单据查询。\n业务规则：入库数量不可超采购数量；质检不合格可退货；库存实时扣减。";
 
-/** 「深度思考」开关的本地记忆键（默认开） */
+/** 「总是深度思考」开关的本地记忆键（默认关＝按需：简单问题直接答，复杂问题由后端自动推理） */
 const THINK_KEY = "aitf_deep_think";
 
 /** 多角色协作（V3.1）：参与生成用例的视角（与后端 src/generator.case_generator 对齐） */
@@ -46,22 +57,23 @@ const ROLE_OPTIONS: { id: string; label: string; title: string }[] = [
 export default function ChatPanel({
   showCitations = false,
   onCiteClick,
-  kbName,
-  suggests,
 }: {
-  /** V4.1：知识库问答传 true → 渲染引用溯源 chips；首页不传，界面零变化 */
+  /** V5.8：AI 会话勾选知识库后渲染引用溯源 chips（不选库不检索、无 citations） */
   showCitations?: boolean;
-  /** 引用 chip 点击回调（知识库页切 tab + 高亮定位） */
+  /** 引用 chip 点击回调（跳知识库页定位原文） */
   onCiteClick?: (knowledgeId: string) => void;
-  /** V4.1：知识库问答模式下欢迎语展示的库名 */
-  kbName?: string;
-  /** V4.2：知识库问答的建议问题（来自该库 Wiki 索引标题），点击填入输入框 */
-  suggests?: string[];
 }) {
-  const chatMode = useChatStore((s) => s.chatMode);
-  const kbMode = chatMode === "kb_qa";
   const messages = useChatStore((s) => s.messages);
   const conversationId = useChatStore((s) => s.conversationId);
+  // W3 M8 首页驾驶舱摘要：复用 taskStore 任务列表（App 层统一 5s 轮询），客户端聚合最近 2 条
+  const tasks = useTaskStore((s) => s.tasks);
+  /** 最近用例：任务按迭代链聚合（一行 = 一条用例集，展示最新版），取最近 2 条 */
+  const recentCases = useMemo(() => groupByChain(tasks).slice(0, 2), [tasks]);
+  /** 最近测试运行：按创建时间倒序取最近 2 次（名称 + 结果） */
+  const recentRuns = useMemo(
+    () => [...tasks].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "")).slice(0, 2),
+    [tasks],
+  );
   const streamingByConversation = useChatStore((s) => s.streamingByConversation);
   // 按会话隔离的流式状态：当前会话在输出中才禁用输入框，其他会话不受影响
   const streaming = conversationId ? (streamingByConversation[conversationId] ?? false) : false;
@@ -77,6 +89,29 @@ export default function ChatPanel({
   const requestIterate = useChatStore((s) => s.requestIterate);
   const clearIterRef = useChatStore((s) => s.clearIterRef);
   const inputFocusSeq = useChatStore((s) => s.inputFocusSeq);
+  // V5.8 知识库多选检索
+  const kbIds = useChatStore((s) => s.kbIds);
+  const toggleKb = useChatStore((s) => s.toggleKb);
+  const clearKbs = useChatStore((s) => s.clearKbs);
+  const [kbOpen, setKbOpen] = useState(false);
+  const [kbList, setKbList] = useState<KbItem[]>([]);
+  /** kb 弹层容器：点击外部 / Escape 关闭 */
+  const kbPickerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!kbOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (kbPickerRef.current && !kbPickerRef.current.contains(e.target as Node)) setKbOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setKbOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [kbOpen]);
 
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -84,12 +119,15 @@ export default function ChatPanel({
   const [formats] = useState<string[]>(["xlsx", "json", "xmind"]);
   /** 多角色协作（V3.1）：参与生成用例的视角（pm/qa/dev），默认仅测试 */
   const [roles, setRoles] = useState<string[]>(["qa"]);
-  /** 深度思考开关：默认开，本地记忆（关掉则不请求模型思考，也不显示思考面板） */
-  const [deepThink, setDeepThink] = useState<boolean>(() => {
+  /** V5.10 提示词定制弹窗（角色 pill 旁 ✎ 入口） */
+  const [promptOpen, setPromptOpen] = useState(false);
+  /** 「总是深度思考」：默认关＝按需 —— 简单问题直接答，复杂问题（排查/分析/报错等）
+   *  由后端自动判定是否推理。开启后每轮都先推理再作答。本地记忆，未表态时后端走自动判定。 */
+  const [alwaysThink, setAlwaysThink] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(THINK_KEY) !== "0";
+      return localStorage.getItem(THINK_KEY) === "1";
     } catch {
-      return true;
+      return false;
     }
   });
   const streamRef = useRef<HTMLDivElement>(null);
@@ -126,6 +164,15 @@ export default function ChatPanel({
     inputRef.current?.focus();
   }, [inputFocusSeq]);
 
+  // V5.8：知识库选择 popover 打开时拉取可见库列表（后端按权限过滤）
+  useEffect(() => {
+    if (!kbOpen) return;
+    void api(API + "/knowledge/bases")
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((d) => setKbList(Array.isArray(d?.items) ? d.items : []))
+      .catch(() => setKbList([]));
+  }, [kbOpen]);
+
   function onScroll(): void {
     const el = streamRef.current;
     if (!el) return;
@@ -141,8 +188,15 @@ export default function ChatPanel({
     const txt = text.trim();
     if (!txt && !file) return;
     if (streaming) return;
-    // V4.2.2：kb_qa 模式不传 roles——避免 QA 人设污染知识问答（回答不再带用例生成话术）
-    const draft: ChatDraft = { text: txt, file, kind, formats, thinking: deepThink, roles: kbMode ? undefined : roles };
+    // thinking：true=总是深度思考；null=未表态 → 后端按需自动判定（llm_service.should_deep_think）
+    const draft: ChatDraft = {
+      text: txt,
+      file,
+      kind,
+      formats,
+      thinking: alwaysThink ? true : null,
+      roles,
+    };
     // 只传附件不打字时正文保持为空（气泡显示 📎 文件名徽标），不再写「(仅附加文档)」占位符
     void send(txt, draft);
     setText("");
@@ -162,10 +216,10 @@ export default function ChatPanel({
     setFile(f);
   }
 
-  /** 切换深度思考：写本地记忆，下一次发送即生效 */
+  /** 切换「总是深度思考」：写本地记忆，下一次发送即生效 */
   function toggleThink(): void {
-    const next = !deepThink;
-    setDeepThink(next);
+    const next = !alwaysThink;
+    setAlwaysThink(next);
     try {
       localStorage.setItem(THINK_KEY, next ? "1" : "0");
     } catch {
@@ -186,52 +240,16 @@ export default function ChatPanel({
       <div className="chat-stream" ref={streamRef} onScroll={onScroll}>
         {messages.length === 0 ? (
           <div className="welcome">
+            {/* W3 M8 首页驾驶舱：一句话主线 + 副文案 + 示例 chips + 最近用例/最近测试运行摘要卡。
+                单输入框 = 下方现有聊天输入（功能与附加按钮全保留），不再摆 4 张功能卡分流。 */}
             <h2>
               <Bot size={24} style={{ verticalAlign: "-4px", marginRight: 6 }} />
-              {kbMode ? (
-                <>Hi，我是<em style={{ fontStyle: "normal", color: "var(--itf-p600, #4f46e5)" }}>{kbName || "知识库"}助手</em></>
-              ) : (
-                "我是 Buddy"
-              )}
+              输入需求，生成用例，一键全链路测试
             </h2>
-            {kbMode ? (
-              <p>
-                基于{kbName ? `「${kbName}」` : "当前知识库"}回答问题，回答附引用来源，点引用可跳转到原文。
-              </p>
-            ) : (
-              <p>把你的测试需求告诉我，我来拆解需求、生成用例、质量校验、导出文件。</p>
-            )}
-
-            {/* V4.2：建议问题（设计稿 .suggest）—— 来自该库 Wiki 索引，点击填入输入框 */}
-            {kbMode && !!suggests?.length && (
-              <div className="kb-suggest">
-                {suggests.map((s) => (
-                  <button key={s} className="kb-sug" type="button" onClick={() => { setText(s); inputRef.current?.focus(); }}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {!kbMode && (
-              <>
-            <div className="quick-cards">
-              <button className="quick-card" type="button" onClick={() => fileRef.current?.click()}>
-                <FileUp size={18} />
-                <span className="qc-title">上传文档</span>
-                <span className="qc-desc">上传需求文档，AI 自动读取</span>
-              </button>
-              <button className="quick-card" type="button" onClick={() => inputRef.current?.focus()}>
-                <ClipboardList size={18} />
-                <span className="qc-title">输入场景</span>
-                <span className="qc-desc">直接描述你的业务场景</span>
-              </button>
-              <button className="quick-card" type="button" onClick={() => setText(SAMPLE_ECOM)}>
-                <Sparkles size={18} />
-                <span className="qc-title">查看示例</span>
-                <span className="qc-desc">点下方示例一键填入</span>
-              </button>
-            </div>
+            <p className="welcome-sub">
+              把需求告诉试飞员（TestPilot）：自动拆解测试点、生成用例并沉淀到用例库；
+              也可以输入网址发起全链路测试，质量报告随时可查。
+            </p>
 
             <div className="sample-chips">
               <span className="sc-label">试试这些示例：</span>
@@ -239,8 +257,59 @@ export default function ChatPanel({
               <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_LOGIN)}>用户登录注册</button>
               <button className="sample-chip" type="button" onClick={() => setText(SAMPLE_DBERP)}>DBERP 采购入库</button>
             </div>
-              </>
-            )}
+
+            {/* 摘要卡两块：数据全部来自 taskStore 现有列表（App 层 5s 轮询），无新后端 */}
+            <div className="home-cards">
+              <div className="home-card" data-testid="home-recent-cases">
+                <div className="hc-title">
+                  <Library size={14} />
+                  最近用例
+                  <button
+                    type="button"
+                    className="hc-more"
+                    onClick={() => window.dispatchEvent(new CustomEvent("nav-to", { detail: "cases" }))}
+                  >
+                    查看全部
+                  </button>
+                </div>
+                {recentCases.length === 0 ? (
+                  <div className="hc-empty">暂无用例，输入需求即可生成</div>
+                ) : (
+                  recentCases.map((g) => (
+                    <div key={g.latest.id} className="hc-row">
+                      <span className="hc-name" title={g.latest.name}>{g.latest.name}</span>
+                      <span className="pill pill-sub">v{g.versions}</span>
+                      <span className={`pill ${(g.latest.review_status || "draft") === "reviewed" ? "rv-ok" : "rv-draft"}`}>
+                        {(g.latest.review_status || "draft") === "reviewed" ? "已评审" : "草稿"}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="home-card" data-testid="home-recent-runs">
+                <div className="hc-title">
+                  <BookCheck size={14} />
+                  最近测试运行
+                  <button
+                    type="button"
+                    className="hc-more"
+                    onClick={() => window.dispatchEvent(new CustomEvent("nav-to", { detail: "e2e" }))}
+                  >
+                    测试中心
+                  </button>
+                </div>
+                {recentRuns.length === 0 ? (
+                  <div className="hc-empty">暂无运行记录</div>
+                ) : (
+                  recentRuns.map((t) => (
+                    <div key={t.id} className="hc-row">
+                      <span className="hc-name" title={t.name}>{t.name}</span>
+                      <span className={`pill pill-${statusBadge(t.status).cls}`}>{statusBadge(t.status).text}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         ) : (
           messages.map((m) => (
@@ -295,6 +364,62 @@ export default function ChatPanel({
               accept={ACCEPT}
               onChange={(e) => onPickFile(e.target.files?.[0] || null)}
             />
+            {/* V5.8 知识库多选检索：不选 = 不检索；按钮徽章显示已选数量 */}
+            <div className="kb-picker" ref={kbPickerRef}>
+              <button
+                className={`icon-btn ${kbIds.length ? "kb-active" : ""}`}
+                type="button"
+                title={
+                  kbIds.length
+                    ? `已选 ${kbIds.length} 个知识库参与检索（点击调整）`
+                    : "选择知识库参与检索（不选则不检索）"
+                }
+                aria-expanded={kbOpen}
+                onClick={() => setKbOpen((v) => !v)}
+              >
+                <Library size={20} />
+                {kbIds.length > 0 && <span className="kb-badge">{kbIds.length}</span>}
+              </button>
+              {kbOpen && (
+                <div className="kb-pop" role="dialog" aria-label="选择检索知识库">
+                  <div className="kb-pop-head">
+                    <span>检索知识库</span>
+                    {kbIds.length > 0 && (
+                      <button type="button" className="kb-pop-clear" onClick={clearKbs}>清空</button>
+                    )}
+                  </div>
+                  <p className="kb-pop-hint">勾选后 AI 回答将参考所选库内容；不选 = 不检索</p>
+                  <div className="kb-pop-list">
+                    {kbList.length === 0 && (
+                      <div className="kb-pop-empty">暂无可选知识库（可在「知识库」页创建）</div>
+                    )}
+                    {kbList.map((k) => {
+                      const on = kbIds.includes(k.id);
+                      return (
+                        <button
+                          key={k.id}
+                          type="button"
+                          className={`kb-pop-row ${on ? "on" : ""}`}
+                          onClick={() => toggleKb(k.id)}
+                        >
+                          <span className={`kb-check ${on ? "on" : ""}`} aria-hidden="true">{on ? "✓" : ""}</span>
+                          <span className="kb-pop-name">{k.name}</span>
+                          <span className="kb-pop-count">{k.doc_count ?? 0} 篇</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            <button
+              className="icon-btn"
+              type="button"
+              title="🌐 全链路测试：输入网址，AI 自动抓取页面并生成用例"
+              onClick={() => window.dispatchEvent(new CustomEvent("nav-to", { detail: "e2e" }))}
+            >
+              <Globe size={20} />
+            </button>
             <button
               className="icon-btn"
               type="button"
@@ -305,43 +430,46 @@ export default function ChatPanel({
               <Paperclip size={20} />
             </button>
             <button
-              className={`think-toggle ${deepThink ? "active" : ""}`}
+              className={`think-toggle ${alwaysThink ? "active" : ""}`}
               type="button"
-              aria-pressed={deepThink}
+              aria-pressed={alwaysThink}
               title={
-                deepThink
-                  ? "深度思考：已开启 —— 模型会先推理再作答（点击关闭）"
-                  : "深度思考：已关闭 —— 直接作答，不展示思考过程（点击开启）"
+                alwaysThink
+                  ? "总是深度思考：已开启 —— 每轮都会先推理再作答（点击改为按需）"
+                  : "按需深度思考：简单问题直接作答，复杂问题（排查/分析/报错等）自动推理（点击改为每轮都思考）"
               }
               disabled={streaming}
               onClick={toggleThink}
             >
               <Lightbulb size={16} />
-              <span className="tt-text">深度思考</span>
+              <span className="tt-text">总是深度思考</span>
             </button>
-            {/* 角色选择器仅工作流模式展示：RAG 问答与用例视角无关（V4.2.2） */}
-            {!kbMode && (
-              <span className="role-picker" title="多角色协作：以多个视角分别生成用例后合并去重">
-                {ROLE_OPTIONS.map((r) => (
-                  <button
-                    key={r.id}
-                    className={`role-chip ${roles.includes(r.id) ? "active" : ""}`}
-                    type="button"
-                    title={r.title}
-                    disabled={streaming}
-                    onClick={() => toggleRole(r.id)}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </span>
-            )}
-            {/* V4.2：检索范围 pill（设计稿 .scope）—— kb_qa 固定检索当前库，状态展示 */}
-            {kbMode && (
-              <span className="kb-scope" title="知识库问答固定检索当前知识库">
-                📚 检索范围：{kbName || "当前知识库"}
-              </span>
-            )}
+            {/* 角色选择器：生成用例的视角（多选合并去重） */}
+            <span className="role-picker" title="多角色协作：以多个视角分别生成用例后合并去重">
+              {ROLE_OPTIONS.map((r) => (
+                <button
+                  key={r.id}
+                  className={`role-chip ${roles.includes(r.id) ? "active" : ""}`}
+                  type="button"
+                  title={r.title}
+                  disabled={streaming}
+                  onClick={() => toggleRole(r.id)}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </span>
+            {/* V5.10 提示词定制入口：编辑角色口吻与生成模板的系统提示词 */}
+            <button
+              className="prompt-btn"
+              type="button"
+              title="定制提示词：修改 AI 角色口吻与用例生成模板"
+              aria-label="定制提示词"
+              disabled={streaming}
+              onClick={() => setPromptOpen(true)}
+            >
+              <PenLine size={14} />
+            </button>
           </div>
           <div className="input-body">
             <textarea
@@ -351,10 +479,8 @@ export default function ChatPanel({
                 streaming
                   ? "生成中…"
                   : iterTaskId
-                    ? `和 Buddy 沟通《${iterTaskName}》要补充什么…（确认后点「⚡ 生成用例」）`
-                    : kbMode
-                      ? `基于${kbName ? "「" + kbName + "」" : "知识库"}提问，如“退货超过5000元怎么处理？”…`
-                      : "把你的测试需求告诉 Buddy…"
+                    ? `和试飞员沟通《${iterTaskName}》要补充什么…（确认后点「⚡ 生成用例」）`
+                    : "把你的测试需求告诉试飞员…"
               }
               disabled={streaming}
               onChange={(e) => {
@@ -380,6 +506,8 @@ export default function ChatPanel({
           </div>
         </div>
       </div>
+      {/* V5.10 提示词定制弹窗（访客打开时后端 403，弹窗内提示注册） */}
+      <PromptEditorModal open={promptOpen} onClose={() => setPromptOpen(false)} />
     </div>
   );
 }

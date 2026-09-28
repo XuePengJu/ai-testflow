@@ -14,7 +14,7 @@ import logging
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -26,11 +26,14 @@ from app.models.knowledge import Chunk, ChunkRevision, Knowledge, KnowledgeBase
 from app.models.user import User
 from app.services.doc_extract import ExtractError, UnsupportedFormatError, extract_text, is_supported, supported_hint
 from app.services.knowledge import vectorstore
+from app.services.knowledge.classify import normalize_category, parse_llm_category
 from app.services import llm_service
+from src.utils import jsonx
 from app.services.knowledge.ingest import (
     IngestError,
     delete_document_vectors,
     doc_summary,
+    extract_summary_text,
     ingest_document,
     visible_kb_ids,
 )
@@ -218,6 +221,7 @@ async def delete_base(
 @router.post("/knowledge/bases/{kb_id}/documents", status_code=201)
 async def upload_document(
     kb_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
@@ -268,6 +272,8 @@ async def upload_document(
         ingest_document(db, kb, doc, text)
     except IngestError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # M7 归类时机前移：入库成功后后台自动生成摘要+分类（不阻塞上传响应）
+    background_tasks.add_task(_bg_summarize_doc, kb.id, doc.id, user.id)
     return doc_summary(doc)
 
 
@@ -280,6 +286,7 @@ class TextDocCreate(BaseModel):
 @router.post("/knowledge/bases/{kb_id}/documents/text", status_code=201)
 async def create_text_document(
     kb_id: str,
+    background_tasks: BackgroundTasks,
     body: TextDocCreate,
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
@@ -313,6 +320,8 @@ async def create_text_document(
         ingest_document(db, kb, doc, text)
     except IngestError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # M7 归类时机前移：同上传文档，后台自动摘要+分类
+    background_tasks.add_task(_bg_summarize_doc, kb.id, doc.id, user.id)
     return doc_summary(doc)
 
 
@@ -456,8 +465,9 @@ async def regen_doc_summary(
         raise HTTPException(status_code=400, detail="文档暂无分块，无法生成摘要")
     text = "\n".join((c.content or "")[:500] for c in chunks[:10])
     ai = await _llm_summarize(db, user, text, doc.title)
-    doc.wiki_summary = ai.get("summary", "")
-    doc.wiki_category = ai.get("category") or doc.wiki_category or "未分类"
+    # 兜底清洗：LLM 可能返回 {"summary": "..."} 形状的 JSON 字符串，入库前剥壳
+    doc.wiki_summary = extract_summary_text(ai.get("summary", ""))
+    doc.wiki_category = normalize_category(ai.get("category"), fallback=doc.wiki_category or "未分类")
     db.commit()
     return doc_summary(doc)
 
@@ -718,15 +728,94 @@ async def _llm_summarize(db: Session, user: User, text: str, doc_title: str) -> 
             temperature=0.3,
         )
         content = resp.choices[0].message.content or ""
-        import json, re
-        # 提取 JSON
-        m = re.search(r'\{[^}]+\}', content)
-        if m:
-            data = json.loads(m.group())
-            return {"summary": data.get("summary", ""), "category": data.get("category", "未分类")}
+        # 提取 JSON：改用 jsonx 配对解析。旧写法 r'\{[^}]+\}' 遇嵌套对象会截断成
+        # 非法 JSON（如 {"summary":{"k":1}}）→ 摘要静默退化为全文，用户看不出失败。
+        data = jsonx.find_dict(content) or {}
+        if isinstance(data, dict) and ("summary" in data or "category" in data):
+            return {"summary": data.get("summary", ""), "category": normalize_category(data.get("category"))}
         return {"summary": content, "category": "未分类"}
     except Exception as e:
         return {"summary": f"（摘要生成失败：{e}）", "category": "未分类"}
+
+
+def _doc_chunk_text(db: Session, doc: Knowledge, max_chunks: int = 10, per_chunk: int = 500) -> str:
+    """取文档前 N 个分块内容拼接（摘要/分类共用取样口径）。"""
+    chunks = db.query(Chunk).filter(
+        Chunk.knowledge_id == doc.id, Chunk.deleted_at.is_(None)
+    ).order_by(Chunk.chunk_index).all()
+    return "\n".join((c.content or "")[:per_chunk] for c in chunks[:max_chunks])
+
+
+async def _llm_classify(db: Session, user: User, text: str, doc_title: str) -> str:
+    """轻量独立分类调用（一键修复用）：只输出分类标签。
+
+    与摘要合并调用的取舍：一键修复面对的是「已有摘要、缺分类」的存量文档，
+    重跑摘要既浪费 token 又可能改掉用户认可的摘要文本；这里用短 prompt +
+    max_tokens=16 的独立轻量调用，成本约为摘要调用的 1/20。
+    """
+    from openai import AsyncOpenAI
+    eff = llm_service.resolve_effective(db, user)
+    cfg = eff.get("text")
+    if not cfg:
+        return DEFAULT_UNCLASSIFIED
+    client = AsyncOpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=30.0)
+    prompt = f"""给以下文档打一个主题分类标签。
+
+文档标题：{doc_title}
+
+文档内容（节选）：
+{text[:2000]}
+
+要求：直接输出 2-6 字的分类标签（如：测试基础/工具配置/开发实践），不要解释，不要标点。"""
+    try:
+        resp = await client.chat.completions.create(
+            model=cfg["model"],
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=16,
+            temperature=0.1,
+        )
+        return parse_llm_category(resp.choices[0].message.content or "")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("轻量分类调用失败 doc=%s: %s", doc_title, e)
+        return DEFAULT_UNCLASSIFIED
+
+
+DEFAULT_UNCLASSIFIED = "未分类"
+
+
+async def _bg_summarize_doc(kb_id: str, doc_id: str, user_id: int) -> None:
+    """后台自动摘要+分类（M7 归类时机前移）。
+
+    上传/新建文档入库成功后触发；用独立 SessionLocal（请求级 session 在
+    响应返回后已关闭）。失败只打日志，不影响文档可用性——用户随时可以
+    手动「重新生成 Wiki 索引」兜底。
+    """
+    from app.core.db import SessionLocal
+    db = SessionLocal()
+    try:
+        kb = db.get(KnowledgeBase, kb_id)
+        doc = db.get(Knowledge, doc_id)
+        user = db.get(User, user_id)
+        if not kb or not doc or doc.deleted_at or not user:
+            return
+        text = _doc_chunk_text(db, doc)
+        if not text:
+            return
+        ai = await _llm_summarize(db, user, text, doc.title)
+        summary_text = extract_summary_text(ai.get("summary", ""))
+        category = normalize_category(ai.get("category"))
+        if summary_text:
+            doc.wiki_summary = summary_text
+        # 已有有效分类时不覆盖（后台任务晚于用户手动归类到达的场景）
+        if category and category != DEFAULT_UNCLASSIFIED:
+            doc.wiki_category = category
+        db.commit()
+        logger.info("后台自动摘要+分类完成 doc=%s category=%s", doc_id, doc.wiki_category)
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning("后台自动摘要+分类失败 doc=%s: %s", doc_id, e)
+    finally:
+        db.close()
 
 
 @router.post("/knowledge/bases/{kb_id}/wiki/index")
@@ -751,19 +840,59 @@ async def wiki_index_kb(kb_id: str, db: Session = Depends(get_db), user: User = 
         # 清洗标题：去掉 01_、02_ 前缀
         import re
         clean_title = re.sub(r'^\d+[_\-\s]*', '', doc.title or doc.file_name or "")
-        # 落库（摘要 + AI 主题分类）
-        doc.wiki_summary = ai["summary"]
-        doc.wiki_category = ai.get("category") or "未分类"
+        # 落库（摘要 + AI 主题分类）；extract_summary_text 兜底剥 {"summary":...} 壳
+        summary_text = extract_summary_text(ai["summary"])
+        doc.wiki_summary = summary_text
+        # V5.10.1 分类保护：LLM 本次未分出有效类别（空/拒答/未知 → 归一化为「未分类」）
+        # 时保留原有分类，不清掉用户已有归类；LLM 给出有效新分类则正常覆盖。
+        # 与 _bg_summarize_doc / regen_doc_summary / wiki_classify_kb 三处既有保护对齐。
+        doc.wiki_category = normalize_category(
+            ai.get("category"), fallback=doc.wiki_category or DEFAULT_UNCLASSIFIED)
         db.commit()
         results.append({
             "doc_id": doc.id,
             "title": clean_title,
             "raw_title": doc.title,
-            "summary": ai["summary"],
+            "summary": summary_text,
             "category": ai["category"],
             "chunk_count": len(chunks),
         })
     return {"items": results, "kb_id": kb_id}
+
+
+@router.post("/knowledge/bases/{kb_id}/wiki/classify")
+async def wiki_classify_kb(kb_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """一键修复未分类文档（M7）：对缺分类/未分类的文档批量跑轻量分类调用。
+
+    只补分类、不动已有摘要；无分块内容的文档跳过。返回逐篇结果供前端刷新。
+    """
+    kb = db.get(KnowledgeBase, kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    _ensure_manage(user, kb)
+    docs = db.query(Knowledge).filter(
+        Knowledge.knowledge_base_id == kb_id,
+        Knowledge.type == "document",
+        Knowledge.deleted_at.is_(None),
+    ).all()
+    results: list[dict] = []
+    classified = 0
+    skipped = 0
+    for doc in docs:
+        cat = (doc.wiki_category or "").strip()
+        if cat and cat != DEFAULT_UNCLASSIFIED:
+            continue  # 已有有效分类，不动
+        text = _doc_chunk_text(db, doc)
+        if not text:
+            skipped += 1
+            continue
+        new_cat = await _llm_classify(db, user, text, doc.title)
+        if new_cat and new_cat != DEFAULT_UNCLASSIFIED:
+            doc.wiki_category = new_cat
+            classified += 1
+        results.append({"doc_id": doc.id, "title": doc.title, "category": doc.wiki_category or DEFAULT_UNCLASSIFIED})
+    db.commit()
+    return {"items": results, "classified": classified, "skipped": skipped, "kb_id": kb_id}
 
 
 @router.get("/knowledge/bases/{kb_id}/wiki")
