@@ -35,6 +35,19 @@ _ACTION_MAP = {
 }
 
 
+def llm_client_meta(llm_client: Any) -> str:
+    """提取 LLM 客户端的 provider / model 标识（用于调用日志，不含 prompt 内容）。
+
+    客户端实现各异（LangChainClient / httpx 直连 / 测试 fake），属性取不到时
+    逐级兜底：model_name → model → unknown；provider 无则用类名。
+    """
+    model = getattr(llm_client, "model_name", None) or getattr(llm_client, "model", None)
+    if not isinstance(model, str) or not model:
+        model = "unknown"
+    provider = getattr(llm_client, "provider", None) or llm_client.__class__.__name__
+    return f"provider={provider} model={model}"
+
+
 @dataclass
 class FastDecision:
     """FastDecider 的判断结果。action 为 escalate 时表示交给主 LLM。"""
@@ -142,6 +155,7 @@ class FastDecider:
 
         messages = _build_fast_messages(goal, host, history, obs,
                                         step_no, max_steps)
+        meta = llm_client_meta(self._llm)
         t0 = time.monotonic()
         try:
             # enable_thinking=False：判断类调用必须关思考链，否则 reasoning 生成
@@ -149,12 +163,17 @@ class FastDecider:
             raw = self._llm.chat(messages, temperature=0.1, max_tokens=256,
                                  enable_thinking=False)
         except Exception as e:  # noqa: BLE001  快速判断失败不致命 → 升级主 LLM
+            ms = int((time.monotonic() - t0) * 1000)
+            logger.info("LLM 快判调用失败 %s ms=%d err=%s", meta, ms, str(e)[:120])
             logger.warning("快速判断调用失败：%s", e)
             return (FastDecision(reason=f"快速判断异常：{str(e)[:80]}"),
-                    {"ms": int((time.monotonic() - t0) * 1000),
+                    {"ms": ms,
                      "in": sum(len(str(m["content"])) for m in messages), "out": 0})
         ms = (time.monotonic() - t0) * 1000
         decision = _parse_fast(raw)
+        # 调用观测日志：provider / model / 耗时 / 结果（不记 prompt 全文）
+        logger.info("LLM 快判调用成功 %s ms=%d action=%s confidence=%.2f",
+                    meta, int(ms), decision.action, decision.confidence)
         return decision, {"ms": int(ms),
                           "in": sum(len(str(m["content"])) for m in messages),
                           "out": len(raw or "")}

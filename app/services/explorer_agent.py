@@ -40,7 +40,11 @@ logger = logging.getLogger("services.explorer_agent")
 # src.models.testcase.align_step_expectations；与 sample_seeder 同一惯例）
 from app.services import pipeline_lib  # noqa: F401,E402
 from app.services.decision_provider import (CONFIDENCE_HIGH, FAST_ACTIONS,  # noqa: E402
-                                            FastDecider)
+                                            FastDecider, llm_client_meta)
+from app.services.view_fingerprint import (SIM_THRESHOLD as _FP_SIM_THRESHOLD,  # noqa: E402
+                                           ViewFingerprint,
+                                           fingerprint as _view_fingerprint,
+                                           similarity as _view_similarity)
 
 # ---- 预算配置：os.getenv 直读（调用时读取，测试可 monkeypatch；不改 config.py） ----
 def _max_steps() -> int:
@@ -62,6 +66,15 @@ def _max_seconds() -> float:
         return max(30.0, float(os.getenv("EXPLORE_MAX_SECONDS", "900")))
     except ValueError:
         return 900.0
+
+
+def _fingerprint_enabled() -> bool:
+    """视图指纹判重开关（EXPLORE_FINGERPRINT，默认开 "1"；设 "0" 走旧逻辑）。
+
+    SPA tab 切换 URL 不变，URL 判重失效导致重复漫游；开启后按
+    规范化 URL + 激活态 + 元素集合（Jaccard ≥ 0.9）判同视图（M1）。
+    """
+    return os.getenv("EXPLORE_FINGERPRINT", "1") == "1"
 
 
 # 危险操作黑名单：按钮/链接文案命中即拒绝点击（一期从宽，设计文档 5.4）
@@ -190,6 +203,14 @@ class BrowserSession:
             }
             return parts.join(' > ');
         }
+        function isActive(el) {
+            if (el.getAttribute('aria-selected') === 'true') return true;
+            const cur = el.getAttribute('aria-current');
+            if (cur === 'true' || cur === 'page') return true;
+            const cls = (typeof el.className === 'string') ? el.className
+                : (el.getAttribute('class') || '');
+            return /(^|\\s)(active|selected|is-active|is-selected|ant-tabs-tab-active)(\\s|$)/i.test(cls);
+        }
         const out = [];
         let i = 0;
         for (const el of els) {
@@ -199,13 +220,18 @@ class BrowserSession:
             const tag = el.tagName.toLowerCase();
             if (!nm && !['input', 'select', 'textarea'].includes(tag)) continue;
             i += 1;
-            out.push({ref: 'e' + i, role: role(el), name: nm, css: cssPath(el)});
+            out.push({ref: 'e' + i, role: role(el), name: nm, css: cssPath(el),
+                      active: isActive(el)});
         }
         return out;
     }"""
 
     def snapshot(self) -> tuple[str, dict[str, dict]]:
-        """返回 (可交互元素摘要文本, ref→元素信息注册表)。"""
+        """返回 (可交互元素摘要文本, ref→元素信息注册表)。
+
+        激活态元素（aria-selected / active class）在文本行追加「（选中）」标记，
+        注册表 info 附带 active 布尔值——供视图指纹判别 SPA tab 切换后的视图。
+        """
         js = self._SNAPSHOT_JS.replace("__MAX__", str(_SNAPSHOT_MAX_ELEMENTS))
         try:
             els = self._page.evaluate(js)
@@ -215,8 +241,10 @@ class BrowserSession:
         lines = [f"URL：{self.url}", f"标题：{self.title or '(无标题)'}"]
         for el in els:
             ref = el["ref"]
-            self._registry[ref] = {"role": el["role"], "name": el["name"], "css": el["css"]}
-            lines.append(f"[{ref}] {el['role']} {el['name']}".rstrip())
+            self._registry[ref] = {"role": el["role"], "name": el["name"], "css": el["css"],
+                                   "active": bool(el.get("active"))}
+            mark = "（选中）" if el.get("active") else ""
+            lines.append(f"[{ref}] {el['role']} {el['name']}{mark}".rstrip())
         return "\n".join(lines), dict(self._registry)
 
     def _locate(self, ref: str):
@@ -506,6 +534,41 @@ def explore_pages_md(entry_url: str, outcome: ExploreOutcome) -> str:
     return "\n".join(lines)
 
 
+# ============ M1 视图指纹判重：已见视图上下文注入 ============
+
+# 视图切换入口：点击后视图变化但 URL 往往不变（SPA tab / 菜单项）
+_TRIGGER_ROLES = ("tab", "menuitem")
+# 注入 prompt 的已见视图条数上限（防长会话把上下文打爆）
+_FP_CONTEXT_MAX_VIEWS = 8
+
+
+def _build_fp_context(visited: list[dict], current: dict | None) -> str:
+    """已见视图清单 + 未触发入口 → 决策 prompt 注入文本（无视图时返回空串）。
+
+    visited 元素契约：{"fp": ViewFingerprint, "tab_triggers": set[str],
+    "clicked": set[str]}。「探索完」= 该视图全部 tab 触发器点过一遍。
+    """
+    if not visited:
+        return ""
+    lines = ["【已见视图清单（勿重复漫游）】"]
+    for i, v in enumerate(visited[-_FP_CONTEXT_MAX_VIEWS:], 1):
+        fp = v["fp"]
+        pending = sorted(v["tab_triggers"] - v["clicked"])
+        explored = bool(v["tab_triggers"]) and not pending
+        line = (f"视图{i} url={fp.url} 激活={fp.active or '-'} "
+                f"元素{len(fp.elements)}个 {'已探索完' if explored else '未探索完'}")
+        if pending and v is current:
+            line += f"；未触发入口：{'、'.join(pending[:8])}"
+        lines.append(line)
+    if current is not None:
+        pending = sorted(current["tab_triggers"] - current["clicked"])
+        if pending:
+            lines.append(f"当前视图未触发的 tab/菜单入口：{'、'.join(pending[:8])}（优先点击它们）")
+    lines.append("规则：禁止重复漫游已见视图；未探索完的视图先把它的 tab/菜单入口点一遍；"
+                 "入口点完或视图已探索完 → 离开该视图，或 submit_cases 提交用例。")
+    return "\n".join(lines)
+
+
 # ============ 决策提示词 ============
 
 _SYSTEM_PROMPT = """你是探索式测试 Agent（ReAct 模式），目标站点：{url}。任务：{goal}
@@ -540,14 +603,16 @@ expected（整体预期）、test_data。
 
 def _build_decision_messages(goal: str, entry_url: str, host: str,
                              history: list[str], obs: str,
-                             step_no: int = 0, max_steps: int = 0) -> list[dict]:
-    """组装决策上下文：system + 截断的 history + 当前观察。"""
+                             step_no: int = 0, max_steps: int = 0,
+                             fp_context: str = "") -> list[dict]:
+    """组装决策上下文：system + 截断的 history + 当前观察（+ 视图判重上下文）。"""
     recent = history[-12:]  # 截断防 token 爆炸
     hist_text = "\n".join(recent) if recent else "（暂无历史动作）"
     user = (f"【历史动作与结果】\n{hist_text}\n\n【当前页面观察】\n{obs}\n\n"
-            f"【进度】当前第 {step_no}/{max_steps} 步。"
-            f"剩余步数不多时请直接 submit_cases 汇总用例并结束。\n"
-            f"请输出下一个动作的 JSON。")
+            + (f"{fp_context}\n\n" if fp_context else "")
+            + f"【进度】当前第 {step_no}/{max_steps} 步。"
+              f"剩余步数不多时请直接 submit_cases 汇总用例并结束。\n"
+              f"请输出下一个动作的 JSON。")
     return [
         {"role": "system", "content": _SYSTEM_PROMPT.format(
             url=entry_url, goal=goal, host=host, max_steps_hint=max_steps)},
@@ -603,6 +668,13 @@ def run_explore(entry_url: str, credentials: dict | None = None,
     storage_state = ""
     metrics = ExploreMetrics()
     seen_fp: dict[str, int] = {}
+
+    # 视图指纹判重（M1，EXPLORE_FINGERPRINT=1 默认开；纯内存，单次任务内）：
+    # visited 每项 {"fp": ViewFingerprint, "tab_triggers": set[str], "clicked": set[str]}
+    fp_enabled = _fingerprint_enabled()
+    visited: list[dict] = []
+    current_view: dict | None = None
+    no_new_streak = 0     # 同一视图连续无新元素的步数（循环检测用）
 
     # 分层决策开关（EXPLORE_LAYERED=1）：每步先走快速判断，高置信直接执行，
     # 低置信 / 需要生成（fill、submit_cases）/ 解析失败 → 升级主 LLM。默认关闭。
@@ -707,6 +779,56 @@ def run_explore(entry_url: str, credentials: dict | None = None,
             if browser.url not in outcome.page_obs:
                 outcome.page_obs[browser.url] = obs
 
+            # ---- M1 视图指纹判重：快照后先查重（Jaccard ≥ 0.9 判同视图）----
+            fp_context = ""
+            if fp_enabled:
+                fp = _view_fingerprint(browser.url, obs)
+                matched: dict | None = None
+                best_sim = 0.0
+                for v in visited:
+                    sim = _view_similarity(fp, v["fp"])
+                    if sim > best_sim:
+                        best_sim, matched = sim, v
+                if matched is not None and best_sim >= _FP_SIM_THRESHOLD:
+                    current_view = matched
+                    old_elems = set(matched["fp"].elements)
+                    merged = old_elems | set(fp.elements)
+                    if len(merged) > len(old_elems):
+                        # 回访视图出现新元素（懒加载/展开）：并入指纹并刷新计数
+                        matched["fp"] = ViewFingerprint(
+                            url=matched["fp"].url,
+                            active=matched["fp"].active or fp.active,
+                            elements=tuple(sorted(merged)))
+                        no_new_streak = 0
+                    else:
+                        no_new_streak += 1
+                    # 回访时补录新出现的 tab/菜单触发器（懒加载菜单可能后出现）
+                    for info in registry.values():
+                        role = str(info.get("role") or "")
+                        if role in _TRIGGER_ROLES and info.get("name"):
+                            matched["tab_triggers"].add(str(info["name"]))
+                    if no_new_streak >= 3:
+                        # 循环检测：同视图连续 3 步无新元素 → 强制换目标
+                        no_new_streak = 0
+                        history.append(
+                            "【系统警告】已连续 3 步处于同一视图且无新元素（可能在绕圈）。"
+                            "强制换目标：点击当前视图尚未点过的 tab/菜单入口，"
+                            "或 browser_navigate 前往其他页面；"
+                            "功能流已探索充分则立即 submit_cases(done=true) 结束。")
+                        logger.info("视图循环检测：同视图连续 3 步无新元素 url=%s",
+                                    matched["fp"].url)
+                else:
+                    # 新视图：登记指纹 + 收集 tab/菜单触发器
+                    current_view = {"fp": fp, "tab_triggers": set(),
+                                    "clicked": set()}
+                    visited.append(current_view)
+                    no_new_streak = 0
+                    for info in registry.values():
+                        role = str(info.get("role") or "")
+                        if role in _TRIGGER_ROLES and info.get("name"):
+                            current_view["tab_triggers"].add(str(info["name"]))
+                fp_context = _build_fp_context(visited, current_view)
+
             # ---- 分层决策：按上一步的 next 预测路由（EXPLORE_LAYERED=1 时）----
             plan: dict | None = None
             if fast is not None and route_hint == "fast":
@@ -733,14 +855,22 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                 # 升级主 LLM：低置信 / 需要生成（fill、submit_cases）/ 快判失败
                 messages = _build_decision_messages(goal, entry_url,
                                                     entry_host or entry_scheme, history, obs,
-                                                    step_no, max_steps)
+                                                    step_no, max_steps,
+                                                    fp_context=fp_context)
                 try:
                     t_llm = time.monotonic()
                     raw = llm_client.chat(messages, temperature=0.2, max_tokens=2048)
-                    metrics.llm_ms.append((time.monotonic() - t_llm) * 1000)
+                    llm_ms = (time.monotonic() - t_llm) * 1000
+                    metrics.llm_ms.append(llm_ms)
                     metrics.llm_in.append(sum(len(str(m["content"])) for m in messages))
                     metrics.llm_out.append(len(raw or ""))
+                    # LLM 调用观测日志（M1 补点）：provider / model / 耗时，不记 prompt 全文
+                    logger.info("决策 LLM 调用成功 %s ms=%d out=%d",
+                                llm_client_meta(llm_client), int(llm_ms), len(raw or ""))
                 except Exception as e:  # noqa: BLE001  LLM 网络失败 → 收敛不崩
+                    logger.info("决策 LLM 调用失败 %s ms=%d err=%s",
+                                llm_client_meta(llm_client),
+                                int((time.monotonic() - t_llm) * 1000), str(e)[:120])
                     _add_step(browser.url, "llm_error", {}, "调用决策模型", False,
                               f"{e.__class__.__name__}: {str(e)[:120]}")
                     outcome.stop_reason = "error"
@@ -827,6 +957,10 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                         shot = _shot(browser)
                         _add_step(browser.url, action, args, reason, ok, msg, shot)
                         history.append(f"[{action}] {ref}({info.get('name')}) → {'ok' if ok else msg}")
+                        # M1：点击 tab/菜单入口成功 → 记入当前视图已触发集合
+                        if fp_enabled and current_view is not None and ok \
+                                and str(info.get("role") or "") in _TRIGGER_ROLES:
+                            current_view["clicked"].add(str(info.get("name") or ""))
 
             elif action == "browser_fill":
                 fields = args.get("fields")
@@ -915,6 +1049,7 @@ def run_explore(entry_url: str, credentials: dict | None = None,
         "storage_state": storage_state,
         "metrics": m,
         "metrics_file": _write_metrics_file(out_dir, m),
+        "views_seen": len(visited),
     }
     return outcome
 
