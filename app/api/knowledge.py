@@ -720,22 +720,34 @@ async def _llm_summarize(db: Session, user: User, text: str, doc_title: str) -> 
 
 请按以下 JSON 格式输出（不要有其他解释）：
 {{"summary": "150字以内摘要，概括核心知识点和适用场景", "category": "主题分类（2-6字，如：测试基础/工具配置/开发实践/网络协议）"}}"""
-    try:
-        resp = await client.chat.completions.create(
-            model=cfg["model"],
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.3,
-        )
-        content = resp.choices[0].message.content or ""
-        # 提取 JSON：改用 jsonx 配对解析。旧写法 r'\{[^}]+\}' 遇嵌套对象会截断成
-        # 非法 JSON（如 {"summary":{"k":1}}）→ 摘要静默退化为全文，用户看不出失败。
-        data = jsonx.find_dict(content) or {}
-        if isinstance(data, dict) and ("summary" in data or "category" in data):
-            return {"summary": data.get("summary", ""), "category": normalize_category(data.get("category"))}
-        return {"summary": content, "category": "未分类"}
-    except Exception as e:
-        return {"summary": f"（摘要生成失败：{e}）", "category": "未分类"}
+    # max_tokens 须给思考链留预算：deepseek 等思考模型的 reasoning token 计入
+    # max_tokens，400 时思考未完回答即被截断 → JSON 断半截 → 摘要静默为空（09-29 实锤）
+    max_tokens = 1200
+    for attempt in range(2):
+        try:
+            resp = await client.chat.completions.create(
+                model=cfg["model"],
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                temperature=0.3,
+            )
+            choice = resp.choices[0]
+            content = choice.message.content or ""
+            # 提取 JSON：改用 jsonx 配对解析。旧写法 r'\{[^}]+\}' 遇嵌套对象会截断成
+            # 非法 JSON（如 {"summary":{"k":1}}）→ 摘要静默退化为全文，用户看不出失败。
+            data = jsonx.find_dict(content) or {}
+            if isinstance(data, dict) and ("summary" in data or "category" in data):
+                return {"summary": data.get("summary", ""), "category": normalize_category(data.get("category"))}
+            # 输出被截断（finish=length）且首轮：预算翻倍重试一次
+            if choice.finish_reason == "length" and attempt == 0:
+                max_tokens *= 2
+                continue
+            return {"summary": content, "category": "未分类"}
+        except Exception as e:  # noqa: BLE001
+            if attempt == 0:
+                max_tokens *= 2
+                continue
+            return {"summary": f"（摘要生成失败：{e}）", "category": "未分类"}
 
 
 def _doc_chunk_text(db: Session, doc: Knowledge, max_chunks: int = 10, per_chunk: int = 500) -> str:
@@ -751,7 +763,8 @@ async def _llm_classify(db: Session, user: User, text: str, doc_title: str) -> s
 
     与摘要合并调用的取舍：一键修复面对的是「已有摘要、缺分类」的存量文档，
     重跑摘要既浪费 token 又可能改掉用户认可的摘要文本；这里用短 prompt +
-    max_tokens=16 的独立轻量调用，成本约为摘要调用的 1/20。
+    max_tokens=256 的独立轻量调用（输出仅 2-6 字标签，256 主要给思考模型
+    的 reasoning 留预算）。
     """
     from openai import AsyncOpenAI
     eff = llm_service.resolve_effective(db, user)
@@ -771,7 +784,8 @@ async def _llm_classify(db: Session, user: User, text: str, doc_title: str) -> s
         resp = await client.chat.completions.create(
             model=cfg["model"],
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=16,
+            # 思考模型的 reasoning token 计入 max_tokens，16 连思考都装不下必截断
+            max_tokens=256,
             temperature=0.1,
         )
         return parse_llm_category(resp.choices[0].message.content or "")
