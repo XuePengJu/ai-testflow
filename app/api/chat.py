@@ -31,7 +31,9 @@ SSE 协议：
 （中间件只加密 application/json）。
 """
 import json
+import logging
 import re
+import time
 import uuid
 
 from fastapi import APIRouter, Depends
@@ -51,6 +53,10 @@ from app.schemas.llm_config import ChatIn
 from app.services import llm_service
 
 router = APIRouter()
+
+# M10 运维日志：/chat/stream 调用记录（user_id / 模型 / 耗时 / 成功失败；
+# 只记元信息，不落用户消息全文与 prompt，避免敏感内容进运维日志）
+logger = logging.getLogger("api.chat")
 
 # V4.1 会话模式：workflow=首页工作流对话；kb_qa=知识库问答
 _VALID_MODES = ("workflow", "kb_qa")
@@ -242,7 +248,8 @@ def _build_rag_context(db: Session, user: User | None, body: ChatIn) -> tuple[st
     return out[:4000], cites
 
 
-async def _run(db: Session, user: User | None, body: ChatIn, source: str):
+async def _run(db: Session, user: User | None, body: ChatIn, source: str,
+               model: str = ""):
     """异步 SSE 事件流 generator。
 
     上游 llm_service.chat_stream 输出 delta / think / notice / done / error，
@@ -250,9 +257,12 @@ async def _run(db: Session, user: User | None, body: ChatIn, source: str):
     流式结束后（finally）把 user + assistant 消息落库到会话，实现对话持久化。
 
     V4.1：正文开始前若 RAG 命中知识库，先发 citations 事件（引用溯源）。
+    M10：finally 处记录本次调用的成功/失败与耗时（毫秒）到运维日志。
     """
     full_text = ""
     think_text = ""
+    had_error = False       # 本次流是否出现错误（error 事件或流式异常）
+    t0 = time.perf_counter()  # 请求耗时统计起点
     task_summary = _build_task_summary(db, body.task_id, user)
     # 附件文本由 POST /api/files 预先抽取落盘，这里按 file_id 读回
     attached = load_chat_file(body.file_id) if body.file_id else None
@@ -297,17 +307,25 @@ async def _run(db: Session, user: User | None, body: ChatIn, source: str):
                 # 降级/中断提示：非终态错误，前端以黄色提示条展示，流会继续
                 yield _sse("notice", {"message": str(payload)[:300]})
             elif ev == "error":
+                had_error = True
                 msg = payload if isinstance(payload, str) else str(payload)
                 yield _sse("error", {"message": msg[:300]})
                 yield _sse("done", {"full": "", "source": source, "had_error": True,
                                     "conversation_id": body.conversation_id})
     except Exception as e:  # noqa: BLE001
+        had_error = True
         try:
             yield _sse("error", {"message": f"流式中断：{e.__class__.__name__}: {str(e)[:120]}"})
             yield _sse("done", {"full": "", "source": source, "had_error": True})
         except Exception:
             pass
     finally:
+        # M10 调用记录：只记元信息（user_id / 模型 / 耗时 / 成功失败），不记消息内容
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info("chat/stream %s user_id=%s model=%s elapsed_ms=%d",
+                    "failed" if had_error else "success",
+                    user.id if user else "guest",
+                    model or "-", elapsed_ms)
         _persist_chat(db, user, body, full_text, think_text, citations)
 
 
@@ -322,8 +340,12 @@ async def chat_stream(
     _ensure_conversation(db, user, body)
     eff = llm_service.resolve_effective(db, user)
     source = eff.get("source", "mock")
+    # M10：生效模型标识（个人/平台池配置或 env 兜底的模型名，mock 时为 "-"）
+    model = (eff.get("text") or {}).get("model") or "-"
+    logger.info("chat/stream 开始 user_id=%s model=%s source=%s",
+                user.id if user else "guest", model, source)
     return StreamingResponse(
-        _run(db, user, body, source),
+        _run(db, user, body, source, model=model),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

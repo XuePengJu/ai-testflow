@@ -70,6 +70,10 @@ API_ENCRYPT = os.getenv("API_ENCRYPT", "1") == "1"
 # 设为 1：恢复旧「演示模式」，用于本地或现场演示开箱即跑。
 AITF_ALLOW_DEMO = os.getenv("AITF_ALLOW_DEMO", "0") == "1"
 
+# ============ 运维日志（M10） ============
+# root logger 落盘级别（DEBUG/INFO/WARNING/ERROR），见 app/core/logging_config.py
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
 def jwt_secret_is_placeholder() -> bool:
     return JWT_SECRET == "change-me-in-production"
 

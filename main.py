@@ -31,8 +31,13 @@ class NoCacheStaticFiles(StaticFiles):
 from app.api import auth, automation, categories, chat, conversations, files, guest, knowledge, llm_config, llm_pool, quality, tasks, users
 from app.core.config import STATIC_DIR, jwt_secret_is_placeholder, ENV
 from app.core.db import init_db, engine
+from app.core.logging_config import setup_logging
 
 logger = logging.getLogger("main")
+
+# M10 运维日志落盘：root logger → logs/app.log（滚动），uvicorn 日志合并进 root。
+# 必须在 app 创建前执行，让后续 lifespan / 各 API 模块的 INFO 日志都能被捕获。
+setup_logging()
 
 
 @asynccontextmanager

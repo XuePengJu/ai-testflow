@@ -13,6 +13,9 @@ app.db
 outputs/
 uploads/
 
+# 运维日志（M10 落盘滚动日志，运行产物不入库）
+logs/
+
 # 前端构建产物（不入库，本地构建后打包上传服务器部署）
 frontend/dist/
 
