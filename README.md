@@ -200,32 +200,8 @@ ai-testflow/
 
 ## 部署架构
 
-- **同源单服务**：FastAPI（127.0.0.1:8000）同时提供 API（`/api`）与前端静态资源（`frontend/dist`，相对路径调用，无跨域）；进程由宝塔 Python 项目管理器托管
-
-- **服务器**：阿里云 ECS，宝塔面板统一运维（Nginx / MySQL / Python 项目）
-
-- **公网访问**：宝塔 Nginx 反向代理，三域名全 HTTPS（证书 acme.sh 自动续期），域名已完成 **ICP 备案**：
-
-  | 域名 | 用途 |
-  | --- | --- |
-  | `agentest.vip` | 个人主页（静态站，页脚挂 ICP 备案号） |
-  | `ai.agentest.vip` | 本平台（Nginx 反代 → 127.0.0.1:8000） |
-  | `erp.agentest.vip` | 被测系统 DBERP（PHP 站点） |
-
-  IP 直连 80/443 已通过 `return 444` 断连，仅允许域名访问
-
-- **前端发布**：`scripts/deploy_frontend.sh` 本地构建 → 打包上传 → 服务器解压重启 → 健康检查 + 外网验证（3 份滚动备份 + 失败自动回滚）；`frontend/dist` 不入库
-
-- **后端同步**：git push 后服务器经 gh-proxy 镜像 `git pull --ff-only` 更新，宝塔面板重启项目生效
-
-```
-浏览器 ──HTTPS──> Nginx(443 · ai.agentest.vip) ──反代──> 阿里云:8000 (uvicorn)
-                                                      ├── /api/*  REST API
-                                                      ├── /health 健康检查
-                                                      └── /       前端静态页(frontend/dist)
-```
-
-详见 `docs/DEPLOY.md`。
+- **同源单服务**：FastAPI（127.0.0.1:8000）同时提供 REST API 与前端静态资源（`frontend/dist`），天然同源无跨域；阿里云 ECS + 宝塔面板托管，Nginx 反代对外（三域名全 HTTPS）
+- 前端发布 / 后端更新 / 域名与证书 / IP 直访管控等运维细节见 **[docs/DEPLOY.md](docs/DEPLOY.md)**
 
 ***
 
