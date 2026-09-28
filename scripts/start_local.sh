@@ -6,18 +6,20 @@
 #   本地：127.0.0.1:3306 的 Docker MySQL + Ollama bge-m3 embedding
 #   线上：见 .env.server（不写入文档）+ 云端 embedding
 #   配置源：.env（由 app/core/config.py 读取），可用 AITF_ENV_FILE 切换
+#
+# 路径全部由脚本位置推导（可移植，无机器相关绝对路径）。
+# 一键交互式启动（建 venv + 装依赖 + 迁移）请用仓库根目录 ./start.sh
 set -u
-ROOT="/Users/xp/Documents/软件测试示例项目/ai-testflow"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG="/tmp/aitf-8000.log"
 
-# Python 解释器：优先项目自带 .venv（含 langchain / chromadb 等全套依赖）。
-# 旧的 python/envs/aitf venv 缺 langchain，启动会在 import 阶段直接崩：
-#   ModuleNotFoundError: No module named 'langchain'
+# Python 解释器：项目 .venv（含 langchain / chromadb 等全套依赖）
+# 不存在则提示先用根目录 ./start.sh 完成初始化
 if [ -x "$ROOT/.venv/bin/python" ]; then
   PY="$ROOT/.venv/bin/python"
 else
-  PY="/Users/xp/.workbuddy/binaries/python/envs/aitf/bin/python"
-  echo "警告：项目 .venv 不存在，回退 $PY（可能缺少 langchain 等依赖）"
+  echo "❌ 项目 .venv 不存在。请先执行: cd $ROOT && ./start.sh （自动建环境+装依赖）"
+  exit 1
 fi
 
 # 前置检查：本地 MySQL 必须就绪，否则服务起来了也连不上库

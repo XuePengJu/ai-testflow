@@ -107,6 +107,10 @@
 ## 快速开始
 
 ```bash
+# 一键启动（推荐）：自动建 .venv + 装依赖 + 数据库迁移 + 启动
+./start.sh                    # 换端口: PORT=9000 ./start.sh；重装依赖: FORCE_INSTALL=1 ./start.sh
+
+# 或分步手动执行：
 pip install -r requirements.txt
 cp .env.example .env        # 可选：填 DASHSCOPE_API_KEY 接真模型；留空且不开演示模式则报错（见下）
 python scripts/migrate_v2.py  # 首次/升级时执行（幂等）：建用户表 + 预置 admin + 存量数据迁移
@@ -171,6 +175,7 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 ```
 ai-testflow/
 ├── main.py                      # 入口（挂载 API + 静态页 + 启动检查 + 调度器 + 任务队列恢复）
+├── start.sh                     # 一键启动：建 .venv + 装依赖 + 迁移 + 运行（clone 即用）
 ├── requirements.txt / .env.example
 ├── generator_core/              # 内置用例生成核心（parser / generator / reviewer / exporter + 角色提示词模板）
 ├── examples/                    # DBERP 接口规格 / 业务需求样本
