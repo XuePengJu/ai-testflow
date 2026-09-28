@@ -1,9 +1,12 @@
 # AI 测试工作流平台
 
-> 作品集「门面担当」全栈产品，当前版本 **V4.5.2**（线上）/ **V5.4**（本地交付）。
+> 作品集「门面担当」全栈产品，当前版本 **V4.5.2**（线上）/ **V5.9**（本地交付）。
 > 一句话定位：把"规格 → AI 生成测试用例 → 质量校验 → 导出"做成一条**可编排、可观测、可对话驱动的工作流**，配可视化前端；并内置 **RAG 知识库**与**知识库问答**能力——AI 对话默认自动检索私有/共享知识库并给出引用溯源。支持多厂商大模型、**多角色协作视角（产品/测试/开发）**、多级分类、思维导图预览、三级用户体系与流量分级加密，以及任务级用例迭代与多格式导入。
 > **V5.0 升级为「AI 测试闭环平台」**：URL → 抓取 → 用例 → 脚本 → 执行 → 报告全链路自动化 + 平台自身质量看板（M0–M5 全部本地交付：M4 自愈循环 / M5 探索式测试 Agent 已于 09-24 交付）。
 > **V5.1–V5.4 模型接入收敛**：多模型池（每槽位多条候选 + 优先级 + 限流熔断自动切换）成为唯一模型配置入口，单条配置已下线；模型配置升为一级页面，信息架构重组（用户管理 / 个人中心 / 侧栏「被测系统」子菜单）。
+> **V5.5–V5.8 用例库与知识库资产化**：生成用例沉淀为可管理的用例库资产（评审状态 / 分类 / 版本链聚合 / 概览指标条）；知识库检索升级多选联合检索；会话页「我的任务」迁出为一级「用例库」页。
+> **plan-first-explore（M1–M10）探索 Agent 治理 + 信息架构收敛 + 日志体系**：探索视图指纹防重复（SPA tab 切换识别）、护栏域名白名单、计划先行逐步确认、探索实时画面开关；一级导航收敛 4 项（AI 会话 / 用例库 / 测试中心 / 知识库）+ 首页驾驶舱；质量报告展示面只保留核心接口 + e2e（平台自测 384 条 pytest 不再上展示面）；日志按小时切片 + error 单独成档 + 接口出入参访问日志（脱敏）。
+> **V5.9 会话治理**：历史会话手动重命名（行内编辑）+ AI 总结一键生成标题（根治首条消息硬截断的"标题不准"）。
 
 在线演示：[https://ai.agentest.vip/](https://ai.agentest.vip/)
 
@@ -334,6 +337,49 @@
 
 - **信息架构重组（V5.3）**：管理后台改名「用户管理」（页面只含用户管理与访客治理）；「设置」瘦身成「个人中心」（个人资料 + 修改密码，入口移至侧栏底部用户区）；侧栏新增「被测系统」可折叠子菜单（数据源数组化，外链新窗口打开，收起态飞出面板）
 
+### 用例库资产化（V5.5–V5.7）
+
+> 生成结果从「会话里的一次性任务卡」升级为「可管理、可评审、可归类的测试资产」。
+
+- **一级「用例库」页（V5.5）**：会话页右栏「我的任务」迁出为一级页面；每行 = 一个用例集任务，行内操作（评审切换 / 重命名 / 归类 / 来源会话回跳 / 删除）
+- **评审状态**：任务新增 `review_status`（draft / reviewed），`PATCH /tasks/{id}` 改名/切评审；用例库行内一键切换
+- **两栏布局（V5.6）**：左栏分类树常驻（点行即筛选），右栏搜索 + 评审状态筛选；窄屏自适应收起
+- **概览指标条（V5.7）**：全部 / 草稿 / 已评审 / 生成中 / 失败 5 张指标卡，点卡联动筛选
+- **版本链聚合**：同一迭代链只占一行，版本徽章 `vN` 展开历史
+
+### 知识库多选检索（V5.8）
+
+- **多库联合检索**：AI 会话工具栏「📚 知识库」popover 勾选多个库，检索范围为所选库 `$in` 联合；**不选库 = 不检索**（旧"空 kb_id=搜全部"语义已废弃）；无权限库静默剔除
+- **检索范围跨会话保留**：勾选状态存 zustand，发送负载 `kb_ids`（单库 `kb_id` 字段兼容保留）
+- **知识库页瘦身**：删除「AI 问答」Tab（pill 只剩 文档/Wiki/图谱/检索测试），问答统一回主对话；引用溯源 chips 常开
+
+### 探索 Agent 计划先行与实时画面（plan-first-explore · M1–M4）
+
+> 解决探索式测试"方向不受控、SPA 页面重复探索、过程黑盒"三大痛点。
+
+- **视图指纹防重复（M1）**：归一化 URL + 活跃 tab 状态 + 元素集合签名（复用现有 snapshot，零额外抓取成本），Jaccard 相似度 ≥0.9 判同视图，连续 3 次无新视图收敛；SPA tab 切换 URL 不变也能识别
+- **护栏域名白名单（M2）**：探索只访问同域 + 抓取阶段已见页面，越域请求拦截并回喂原因
+- **计划先行（M3）**：探索前 LLM 产出 3–5 步业务流程计划 → 逐步确认卡片（`awaiting_confirm` 步级暂停，不动全局状态机）→ 前端确认后继续；`EXPLORE_FINGERPRINT / EXPLORE_GUARDRAILS / EXPLORE_PLAN_FIRST` 三开关默认开
+- **探索实时画面（M4）**：探索/执行时勾选「实时画面」即以 3s 轮播展示 Agent 当前截图（`GET /tasks/{id}/live-shot` 取最新 step 截图），不勾不展示；并发写安全
+
+### 测试中心与展示收敛（M8–M9）
+
+- **一级导航收敛 4 项**：AI 会话 / 用例库 / 测试中心 / 知识库；配置类收进底部「设置」组；首页升级任务驾驶舱（主线一句话 + 最近用例 / 最近运行）
+- **测试中心**：全链路测试与质量报告合并为独立页（E2E / 质量报告 Tab + 指标卡），旧 quality 视图自动重定向兼容
+- **质量报告展示面收敛**：平台自测的 384 条 pytest 单元用例不再上展示面，只保留 **UI 自动化（e2e）+ 核心接口自动化**（test_auth / test_task / test_knowledge / test_chat 前缀）；admin 运行能力与历史趋势全量口径不受影响
+
+### 日志体系（M10 / M10.1）
+
+- **小时切片**：`logs/app.log` 按小时滚动（TimedRotatingFileHandler，保留 72 份）
+- **error 单独成档**：`logs/error.log` 只收 ERROR 级（保留 168 份 = 7 天）
+- **接口出入参访问日志**：`api.access` 中间件记录 `方法 路径 → 状态码（耗时）入参=... 出参=...`；注册在加密中间件内层（看得到解密后明文）；敏感字段（password/token/secret/api_key/enc_key 等）递归脱敏为 `***`；高频轮询 GET 降 DEBUG 降噪；uvicorn.access 旧访问日志静音
+
+### 会话重命名与 AI 总结标题（V5.9）
+
+- **手动重命名**：历史会话 hover 出 ✏️，行内输入框 Enter 提交 / Esc 取消（`PATCH /conversations/{id}`）
+- **AI 总结标题**：hover 出 ✨，一键由 LLM 总结会话内容生成 ≤15 字中文标题并覆盖（`POST /conversations/{id}/ai-title`，前 8 条消息压缩为上下文，`enable_thinking=False` 提速，清洗引号/换行/句尾标点）；根治"标题 = 首条消息前 40 字硬截断"的不准问题
+- 未配模型 / 空会话 / 模型失败分别给出明确提示
+
 ### 产品包装
 
 - 右侧悬浮「需求进度」抽屉：已上线 / 开发中 / 规划中，三组进度展示
@@ -363,7 +409,7 @@
 | 页面抓取  | **httpx + BeautifulSoup**（同域 BFS ≤8 页）+ **Playwright** 渲染降级与登录态（storage_state） |
 | 自动化执行 | **Playwright(Python) + pytest**：脚本 LLM 生成（ast 校验重试），subprocess 隔离执行 + pytest-json-report 结构化报告（1 worker 队列） |
 | 任务调度  | 全局任务队列 + 5 Worker 池（uvicorn 启动恢复未完成任务） |
-| 测试    | pytest（**384 条** V5.4 本地基线，覆盖认证 / 分级加密 / 权限 / 对话 / RAG / 知识库 / 迭代导入 / 附件解析 / 思考 / 标题复合化 / 多角色 / Embedding / 演示模式 / 页面抓取 / 脚本生成与执行 / 自愈循环 / 探索式 Agent / 质量看板 / **模型池**）+ Playwright（m1~m5 浏览器端到端套件 + run-e2e.mjs 汇总 runner，已适配 V5.3 信息架构） |
+| 测试    | pytest（**525 条** V5.9 本地基线，覆盖认证 / 分级加密 / 权限 / 对话 / RAG / 知识库 / 迭代导入 / 附件解析 / 思考 / 标题复合化 / 多角色 / Embedding / 演示模式 / 页面抓取 / 脚本生成与执行 / 自愈循环 / 探索式 Agent / 质量看板 / 模型池 / 视图指纹 / 探索护栏与计划先行 / 日志切片 / 接口出入参访问日志 / 会话重命名与 AI 标题）+ Playwright（m1~m5 浏览器端到端套件 + run-e2e.mjs 汇总 runner，已适配 V5.3 信息架构与 V5.5 用例库） |
 
 ***
 
@@ -443,6 +489,7 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 | POST | `/api/tasks`                    | 提交任务：`file` 或 `text` + `kind` + `formats` + `roles`（可选，pm/qa/dev 视角数组，V3.1，默认仅 qa） |
 | GET  | `/api/tasks`                    | 任务列表（admin 加 `?all=true` 看全部）             |
 | GET  | `/api/tasks/{id}`               | 任务详情 + 四步骤日志 + 用例列表（含 `conversation_id`、`parent_task_id`、`roles`） |
+| PATCH | `/api/tasks/{id}`              | 更新任务（V5.5：`name` 重命名 / `review_status` 评审切换，仅本人） |
 | DELETE | `/api/tasks/{id}`             | 删除任务（仅本人/admin）                           |
 | POST | `/api/tasks/{id}/iterate`      | 迭代补充：`instruction` + 可选 `file`（用例导入）+ 可选 `conversation_id`，生成新版本子任务（自动继承角色；V2.10 起同步落会话 user/assistant 消息） |
 | GET  | `/api/tasks/{id}/download?fmt=` | 下载导出文件（xlsx/json/xmind）                   |
@@ -454,6 +501,8 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 | GET    | `/api/conversations`           | 会话列表（按更新时间倒序，含 mode/kb_id） |
 | POST   | `/api/conversations`           | 新建会话（可带 `mode=workflow\|kb_qa` + `kb_id`） |
 | GET    | `/api/conversations/{id}`       | 会话详情（含全部消息，含思考过程）     |
+| PATCH  | `/api/conversations/{id}`       | 手动重命名会话（V5.9，仅本人）     |
+| POST   | `/api/conversations/{id}/ai-title` | AI 总结会话内容生成标题并覆盖（V5.9，走生效模型池） |
 | POST   | `/api/conversations/{id}/messages` | 追加消息（前端断线恢复用）     |
 | DELETE | `/api/conversations/{id}`       | 删除会话                  |
 
@@ -517,6 +566,9 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 | GET  | `/api/tasks/{task_id}/pages`             | 抓取页面清单（探索可视化）                    |
 | GET  | `/api/tasks/{task_id}/pages/screenshot/{name}` | 页面截图（文件名白名单防穿越）            |
 | GET  | `/api/tasks/{task_id}/video`             | 探索过程录屏                            |
+| GET  | `/api/tasks/{task_id}/live-shot`         | 探索/执行实时画面（最新 step 截图，V5.0 M4） |
+| GET  | `/api/tasks/{id}/explore-plan`           | 探索计划查询（plan-first，M3）           |
+| POST | `/api/tasks/{id}/explore-plan/confirm`   | 确认探索计划继续执行（plan-first，M3）       |
 
 ### 分类
 
@@ -597,16 +649,20 @@ ai-testflow/
 │   │   ├── api/                 # client.ts（fetch 封装 + AES 加密层，禁止裸 fetch）
 │   │   ├── contexts/            # AuthContext（认证/加密快照）
 │   │   ├── store/               # zustand（chat/task/settings/category/pool——poolStore 池数据，V5.1）
-│   │   ├── pages/               # Dashboard / KnowledgePage（V4.0 知识库合一页）/ ModelConfigPage（V5.3 模型配置一级页）/ SettingsPage（V5.3 个人中心）/ AdminPage（V5.3 用户管理）/ QualityPage（V5.0 质量看板）
+│   │   ├── pages/               # Dashboard / KnowledgePage（V4.0，V5.8 去 AI 问答 Tab）/ CaseLibraryPage（V5.5 用例库一级页，V5.6 两栏 + V5.7 概览条）/ ModelConfigPage（V5.3 模型配置一级页）/ SettingsPage（V5.3 个人中心）/ AdminPage（V5.3 用户管理）/ E2EPage（V5.0 测试中心：全链路 + 质量报告 Tab + 指标卡，吸收原 QualityPage）
 │   │   ├── components/          # chat/ task/ settings/ admin/ knowledge/ common/
 │   │   │   ├── settings/LLMPoolCard.tsx   # 模型池卡片（每槽一张：候选列表/排序/启停/测连通/健康徽标，V5.1）
 │   │   │   ├── settings/LLMSlotGroup.tsx  # 槽位分组（V5.4 起仅渲染池卡，单条配置已下线）
 │   │   │   ├── settings/EffectiveBar.tsx  # 顶栏调度摘要（各槽池可用/冷却状态）
 │   │   │   ├── knowledge/KbSelector.tsx   # 顶栏知识库下拉选择器（V4.4）
+│   │   │   ├── chat/ChatPanel.tsx         # 会话主面板（V5.8 知识库多选 popover：kbIds 联合检索）
 │   │   │   ├── chat/E2ETaskModal.tsx      # 全链路/探索式测试发起弹窗（URL+账密/target，e2e/explore 类型切换，V5.0 M1/M5）
+│   │   │   ├── chat/TaskStepsCard.tsx     # 任务步骤卡（探索实时画面 LiveShotView + 探索计划确认卡，M3/M4）
+│   │   │   ├── chat/ConversationPicker.tsx # 历史会话侧栏（分组/归档折叠 + 行内重命名 + AI 总结标题，V5.9）
 │   │   │   ├── task/ExecutionPanel.tsx    # 自动化执行列表与报告面板（V5.0 M3）
 │   │   │   ├── task/HealSection.tsx       # 自愈过程折叠区 + 疑似缺陷警示区（V5.0 M4）
 │   │   │   ├── task/ExploreTimeline.tsx   # 探索时间线（动作/理由/截图逐步可视化，V5.0 M5）
+│   │   │   ├── admin/TestCenterMetrics.tsx # 测试中心指标卡（核心接口 + e2e 口径，M9）
 │   │   │   └── SelfCheckToast.tsx         # 系统自检悬浮通知（V4.5.1）
 │   │   ├── utils/               # taskChain.ts（迭代版本链解析，V2.11）
 │   │   └── styles/              # 样式（V4.5 活泼浅色主题 + V4.3 折叠侧栏）
@@ -619,7 +675,7 @@ ai-testflow/
 │   ├── migrate_v2.py            # 幂等迁移：建用户表 + 预置 admin + 存量任务归属
 │   ├── start_local.sh           # 本地起服脚本（restart：kill 8000 后拉起）
 │   └── quality/                 # 质量数据聚合（aggregate_quality.py，V5.0 M0）
-├── tests/                       # 384 条自动化用例（V5.4 本地基线：认证 + 分级加密 + 权限 + 对话 + RAG + 知识库 + 迭代导入 + 附件解析 + 思考 + 标题复合化 + 多角色 + Embedding + 演示模式 + 访客共享 + 页面抓取 + 脚本执行 + 自愈循环 + 探索式 Agent + 质量看板 + 模型池，pytest）
+├── tests/                       # 525 条自动化用例（V5.9 本地基线：认证 + 分级加密 + 权限 + 对话 + RAG + 知识库 + 迭代导入 + 附件解析 + 思考 + 标题复合化 + 多角色 + Embedding + 演示模式 + 访客共享 + 页面抓取 + 脚本执行 + 自愈循环 + 探索式 Agent + 质量看板 + 模型池 + 视图指纹/护栏/计划先行 + 日志 + 会话重命名，pytest）
 ├── app/
 │   ├── core/
 │   │   ├── config.py            # 配置加载（含 Embedding / Chroma / AITF_ALLOW_DEMO）
@@ -628,7 +684,9 @@ ai-testflow/
 │   │   ├── crypto.py            # AES-256-GCM 加解密
 │   │   ├── providers.py         # LLM 厂商预设（8 家 + 自定义 + Embedding）
 │   │   ├── exec_queue.py        # 自动化执行队列（1 worker，V5.0 M2）
-│   │   └── middleware.py        # 分级加密中间件
+│   │   ├── middleware.py        # 分级加密中间件
+│   │   ├── logging_config.py    # 日志配置：app.log 小时切片×72 + error.log 单独成档×168（M10.1）
+│   │   └── access_log.py        # 接口出入参访问日志中间件（脱敏/降噪，M10.1）
 │   ├── models/                  # SQLAlchemy 模型
 │   │   ├── task.py              # Task / StepLog（含 roles 多角色字段，V3.1）
 │   │   ├── user.py              # User / GuestCreationLog / CleanLog
@@ -654,9 +712,11 @@ ai-testflow/
 │   │   ├── web_crawler.py       # 被测站点抓取（httpx+BS4 BFS / Playwright 降级 / 登录态，V5.0 M1）
 │   │   ├── auto_runner.py       # 本机执行 Runner（subprocess pytest + 报告解析，V5.0 M2）
 │   │   ├── auto_healer.py       # 自愈循环（四分类诊断 / 断言保护 / heal_backup / 只重跑失败，V5.0 M4）
-│   │   └── explorer_agent.py    # 探索式测试 Agent（ReAct + 7 工具 + 域名锁定/黑名单/三重预算，V5.0 M5）
+│   │   ├── view_fingerprint.py  # 探索视图指纹（URL+tab+元素集合 Jaccard 相似度防重复，M1）
+│   │   ├── decision_provider.py # 探索分层决策 FastDecider + 路由门控（EXPLORE_LAYERED 开关，阶段1/2）
+│   │   └── explorer_agent.py    # 探索式测试 Agent（ReAct + 7 工具 + 护栏 + 视图指纹/白名单/计划先行，M1–M3）
 │   ├── workflow/
-│   │   ├── engine.py            # 状态机 + 步骤调度 + 全局任务队列（V3.2）+ STEPS_E2E 六步 / STEPS_EXPLORE 三步（V5.0）
+│   │   ├── engine.py            # 状态机 + 步骤调度 + 全局任务队列（V3.2）+ STEPS_E2E 六步 / STEPS_EXPLORE 三步（V5.0）+ plan-first 步级 awaiting_confirm 暂停（M3）
 │   │   ├── iterate.py           # 迭代流水线（加载基础用例→增量生成→合并去重→校验→导出）
 │   │   └── agents/              # Agent（parser/generator/reviewer/exporter/import/supplement/scripter）
 │   ├── api/                     # API 路由
@@ -665,7 +725,7 @@ ai-testflow/
 │   │   ├── tasks.py
 │   │   ├── categories.py
 │   │   ├── chat.py              # 对话流式/非流式（V2.6，V4.1 kb_qa + citations）
-│   │   ├── conversations.py     # 会话持久化（V2.6，V4.1 mode/kb_id）
+│   │   ├── conversations.py     # 会话持久化（V2.6，V4.1 mode/kb_id）+ PATCH 重命名 + AI 标题（V5.9）
 │   │   ├── knowledge.py         # RAG 知识库 CRUD + 检索 + 分块修订（V4.0）
 │   │   ├── llm_config.py        # providers / effective / test（V5.4 单条配置端点已删）
 │   │   ├── llm_pool.py          # 模型池 API：个人池 + 平台池 CRUD/排序/启停/测连通/健康（V5.1）
@@ -753,3 +813,9 @@ ai-testflow/
 | V5.2（本地交付） | 平台模型区自管理后台迁出至配置页「平台默认」Tab（admin）；模型配置中心分段 Tab | ✅ 本地已交付 |
 | V5.3（本地交付） | 信息架构重组：模型配置拆为一级页面（全角色可见，访客只读调度摘要）；管理后台改名「用户管理」；「设置」瘦身成「个人中心」（入口移至侧栏底部用户区）；侧栏「系统」组对齐修正 +「被测系统」可折叠子菜单（外链数据源数组化，收起态飞出面板）；e2e m1~m5 全套适配 V5.3 选择器 | ✅ 本地已交付 |
 | V5.4（本地交付） | 单条配置下线，模型池成唯一配置入口（`llm_configs` 数据保留不再参与调度；解析链 = 个人池 > 平台池 > env > mock）；连通测试统一 `enable_thinking=False`（不带思考测连通）；`/llm/config` 与 `/llm/platform-config` 共 6 端点删除 | ✅ 本地已交付 |
+| V5.5（本地交付） | 用例库资产化：会话页「我的任务」迁出为一级「用例库」页（行内评审切换/重命名/归类/来源回跳/删除）；任务 `review_status` + `PATCH /tasks/{id}`；迁移脚本 `scripts/migrate_case_library.py` | ✅ 本地已交付 |
+| V5.6（本地交付） | 用例库两栏化：左栏分类树常驻即点即筛，右栏搜索 + 评审筛选；表格删分类列；窄屏自适应 | ✅ 本地已交付 |
+| V5.7（本地交付） | 用例库概览条：全部/草稿/已评审/生成中/失败 5 张指标卡，点卡联动筛选 | ✅ 本地已交付 |
+| V5.8（本地交付） | 知识库多选检索：会话工具栏多选库 `$in` 联合检索（不选库=不检索）；状态跨会话保留；知识库页删「AI 问答」Tab（问答统一回主对话）；引用溯源 kb_ids 化 | ✅ 本地已交付 |
+| plan-first-explore M1–M10（本地交付） | 探索 Agent 治理 + 信息架构收敛 + 日志体系：M1 视图指纹防重复（Jaccard ≥0.9）+ M2 域名白名单护栏 + M3 计划先行逐步确认（步级暂停）+ M4 探索实时画面（3s 轮播）+ M5 知识库摘要截断修复与迁移 + M8 导航收敛 4 项 + 首页驾驶舱 + M9 测试中心（全链路+质量报告合并）+ M10/M10.1 日志（小时切片 + error 单独成档 + 接口出入参脱敏日志）；质量报告展示面只留核心接口 + e2e。分支 `feature/plan-first-explore`，pytest 基线 509→525 | ✅ 本地已交付 |
+| V5.9（本地交付） | 会话治理：历史会话手动重命名（行内编辑，`PATCH /conversations/{id}`）+ AI 总结一键生成标题（`POST /conversations/{id}/ai-title`，≤15 字清洗落库）；V5.9.1 修复编辑态输入框被 hover opacity 规则隐藏 | ✅ 本地已交付 |
