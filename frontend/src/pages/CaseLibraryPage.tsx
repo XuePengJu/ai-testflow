@@ -54,6 +54,8 @@ export default function CaseLibraryPage() {
 
   const [q, setQ] = useState("");
   const [rvFilter, setRvFilter] = useState<ReviewFilter>("all");
+  /** 生成过程状态筛选（概览条联动）：running=生成中，failed=失败 */
+  const [genFilter, setGenFilter] = useState<"all" | "running" | "failed">("all");
   /** 行内重命名的任务 id 与草稿值 */
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -66,6 +68,17 @@ export default function CaseLibraryPage() {
     if (token) void refreshCats();
   }, [token, taskCount, refreshCats]);
 
+  // 概览条统计（前端聚合，与列表同源同轮询；草稿/已评审=资产状态，生成中/失败=生成过程状态，两组分口径）
+  const stats = useMemo(() => {
+    let draft = 0, reviewed = 0, running = 0, failed = 0;
+    for (const t of tasks) {
+      if ((t.review_status || "draft") === "reviewed") reviewed++; else draft++;
+      if (t.status === "pending" || t.status === "running") running++;
+      else if (t.status === "failed") failed++;
+    }
+    return { total: tasks.length, draft, reviewed, running, failed };
+  }, [tasks]);
+
   const groups = useMemo(() => {
     const kw = q.trim().toLowerCase();
     const filtered = tasks.filter((t) => {
@@ -73,10 +86,12 @@ export default function CaseLibraryPage() {
       if (catFilter === "none" && t.category_id != null) return false;
       if (typeof catFilter === "number" && t.category_id !== catFilter) return false;
       if (rvFilter !== "all" && (t.review_status || "draft") !== rvFilter) return false;
+      if (genFilter === "running" && t.status !== "pending" && t.status !== "running") return false;
+      if (genFilter === "failed" && t.status !== "failed") return false;
       return true;
     });
     return groupByChain(filtered);
-  }, [tasks, q, catFilter, rvFilter]);
+  }, [tasks, q, catFilter, rvFilter, genFilter]);
 
   const catName = (id: number | null | undefined): string =>
     id == null ? "未分类" : categories.find((c) => c.id === id)?.name || "未分类";
@@ -180,6 +195,57 @@ export default function CaseLibraryPage() {
               <option value="reviewed">已评审</option>
             </select>
           </div>
+        </div>
+
+        {/* 概览条：点卡片 = 联动筛选下方表格（再点取消） */}
+        <div className="cl-cards" role="group" aria-label="用例库概览">
+          <button
+            type="button"
+            className={"cl-card" + (rvFilter === "all" && genFilter === "all" ? " on" : "")}
+            data-testid="cl-card-all"
+            onClick={() => { setRvFilter("all"); setGenFilter("all"); }}
+          >
+            <span className="clc-label">全部用例集</span>
+            <span className="clc-num">{stats.total}</span>
+          </button>
+          <button
+            type="button"
+            className={"cl-card" + (rvFilter === "draft" && genFilter === "all" ? " on" : "")}
+            data-testid="cl-card-draft"
+            onClick={() => { setRvFilter(rvFilter === "draft" ? "all" : "draft"); setGenFilter("all"); }}
+          >
+            <span className="clc-label">草稿</span>
+            <span className="clc-num">{stats.draft}<span className="clc-sub">{stats.total ? ` ${Math.round((stats.draft / stats.total) * 100)}%` : ""}</span></span>
+          </button>
+          <button
+            type="button"
+            className={"cl-card" + (rvFilter === "reviewed" && genFilter === "all" ? " on" : "")}
+            data-testid="cl-card-reviewed"
+            onClick={() => { setRvFilter(rvFilter === "reviewed" ? "all" : "reviewed"); setGenFilter("all"); }}
+          >
+            <span className="clc-label">已评审</span>
+            <span className="clc-num clc-ok">{stats.reviewed}<span className="clc-sub">{stats.total ? ` ${Math.round((stats.reviewed / stats.total) * 100)}%` : ""}</span></span>
+          </button>
+          <button
+            type="button"
+            className={"cl-card cl-warm" + (genFilter === "running" ? " on" : "")}
+            data-testid="cl-card-running"
+            title="生成过程进行中的用例集"
+            onClick={() => setGenFilter(genFilter === "running" ? "all" : "running")}
+          >
+            <span className="clc-label">生成中</span>
+            <span className="clc-num">{stats.running}</span>
+          </button>
+          <button
+            type="button"
+            className={"cl-card cl-danger" + (genFilter === "failed" ? " on" : "")}
+            data-testid="cl-card-failed"
+            title="生成失败的用例集（回 AI 会话重试）"
+            onClick={() => setGenFilter(genFilter === "failed" ? "all" : "failed")}
+          >
+            <span className="clc-label">失败</span>
+            <span className="clc-num">{stats.failed}</span>
+          </button>
         </div>
 
         <div className="cl-table-wrap">

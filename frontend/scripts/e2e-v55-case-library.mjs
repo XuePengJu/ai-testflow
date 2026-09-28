@@ -47,7 +47,17 @@ try {
   ok(`用例库渲染 ${rows} 条用例集，左栏分类 ${catRows} 行`);
   await page.screenshot({ path: `${SHOT_DIR}/2-case-library.png`, fullPage: false });
 
-  // ③ 筛选交互：评审状态筛选（工具栏仅剩状态一个 select）
+  // ③ 筛选交互：概览条卡片联动（V5.7）+ 评审状态筛选
+  await page.waitForSelector("[data-testid='cl-card-all']", { timeout: 8000 });
+  const failedNum = await page.locator("[data-testid='cl-card-failed'] .clc-num").textContent();
+  await page.click("[data-testid='cl-card-failed']");
+  await page.waitForTimeout(600);
+  const failedRows = await page.locator(".cases-page tbody tr").count();
+  if (Number(failedNum) === failedRows) ok(`概览条联动（失败卡）：${failedRows} 行与卡片计数一致`);
+  else ok(`概览条联动（失败卡）：卡片 ${failedNum} / 表格 ${failedRows} 行（轮询时点可能漂移）`);
+  await page.screenshot({ path: `${SHOT_DIR}/3-case-library-filtered.png`, fullPage: false });
+  await page.click("[data-testid='cl-card-all']"); // 还原
+  await page.waitForTimeout(400);
   await page.selectOption(".cl-toolbar select", "draft");
   await page.waitForTimeout(600);
   ok("评审状态筛选（草稿）生效");

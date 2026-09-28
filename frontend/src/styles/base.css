@@ -593,6 +593,25 @@ body {
 .cl-title { font-size: 16px; font-weight: 600; color: #1f2329; }
 .cl-count { font-size: 13px; font-weight: 400; color: #8f959e; margin-left: 2px; }
 .cl-toolbar { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+/* 概览条：点卡片联动筛选（全部/草稿/已评审=资产口径；生成中/失败=过程口径） */
+.cl-cards { display: flex; align-items: stretch; gap: 8px; margin-bottom: 12px; flex: none; flex-wrap: wrap; }
+.cl-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  min-width: 96px; padding: 8px 14px; border: 1px solid #e5e6eb; border-radius: 10px;
+  background: #f7f9fc; cursor: pointer; font-family: inherit; text-align: left;
+  transition: border-color .12s, background .12s;
+}
+.cl-card:hover { border-color: #bedaff; }
+.cl-card.on { border-color: #165dff; background: #f0f7ff; }
+.clc-label { font-size: 11px; color: #86909c; }
+.cl-card.on .clc-label { color: #165dff; }
+.clc-num { font-size: 18px; font-weight: 600; color: #1f2329; line-height: 1.2; }
+.clc-sub { font-size: 10.5px; font-weight: 400; color: #8f959e; margin-left: 2px; }
+.clc-num.clc-ok { color: #00b42a; }
+.cl-card.cl-warm.on { border-color: #d25f00; background: #fff7e8; }
+.cl-card.cl-warm.on .clc-label, .cl-card.cl-warm.on .clc-num { color: #d25f00; }
+.cl-card.cl-danger.on { border-color: #d83931; background: #fff2f0; }
+.cl-card.cl-danger.on .clc-label, .cl-card.cl-danger.on .clc-num { color: #d83931; }
 .cl-search {
   display: flex; align-items: center; gap: 6px; background: #fff;
   border: 1px solid #e5e6eb; border-radius: 8px; padding: 5px 10px; color: #8f959e;
