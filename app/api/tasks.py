@@ -18,6 +18,7 @@ from app.models.conversation import Conversation, Message
 from app.models.task import Task, StepLog
 from app.models.user import User
 from app.schemas.task import TaskOut, StepLogOut, TaskPatchIn
+from app.services import explorer_agent
 from app.services.doc_extract import SUPPORTED_EXTS
 from app.workflow.iterate import run_iterate
 from src.models.testcase import ensure_case_ids, ensure_compound_titles
@@ -425,6 +426,98 @@ def download(task_id: str, fmt: str = "xlsx",
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"未找到 {fmt} 导出文件")
     return FileResponse(path, filename=f"{task_id}{ext}")
+
+
+# ---- M3 计划先行：探索计划读取 / 确认（与 app/services/explorer_agent 的 plan.json 对齐） ----
+
+def _explore_plan_path(db: Session, task: Task):
+    """任务探索计划文件路径：outputs/<data_dir>/<task_id>/plan.json。"""
+    return OUTPUT_DIR / task.user_data_dir(db) / task.id / "plan.json"
+
+
+@router.get("/tasks/{task_id}/explore-plan")
+def get_explore_plan(task_id: str,
+                     db: Session = Depends(get_db),
+                     user: User = Depends(get_current_user)):
+    """读取任务的探索计划（plan.json）与确认状态。
+
+    未生成过计划（计划先行关闭 / plan 步骤未跑）→ {"exists": false}，不报错。
+    """
+    task = _own_task(db, task_id, user)
+    path = _explore_plan_path(db, task)
+    plan: dict = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                plan = loaded
+        except (OSError, ValueError):
+            plan = {}
+    flows = plan.get("flows") if isinstance(plan.get("flows"), list) else []
+    return {
+        "exists": bool(plan),
+        "confirmed": bool(plan.get("confirmed")),
+        "goal": str(plan.get("goal") or ""),
+        "entry_url": str(plan.get("entry_url") or ""),
+        "flows": flows,
+    }
+
+
+@router.post("/tasks/{task_id}/explore-plan/confirm")
+def confirm_explore_plan(task_id: str,
+                         payload: dict,
+                         db: Session = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    """确认（可编辑后的）探索计划 → 覆盖 plan.json（confirmed=true）并恢复任务执行。
+
+    - body：{"flows": [{"name": "...", "steps": ["...", ...]}]}（前端只回传勾选的流）
+    - 结构非法 → 400；计划未生成 → 404；任务不在等待确认 → 409
+    - 恢复执行：删掉 awaiting_confirm 的 explore 步骤 + 重新入队（plan 步骤已完成会自动跳过）
+    """
+    task = _own_task(db, task_id, user)
+    if task.kind != "explore":
+        raise HTTPException(status_code=400, detail="仅探索式测试（explore）任务支持探索计划")
+    if task.status != "running":
+        raise HTTPException(
+            status_code=409,
+            detail=f"任务状态为 {task.status}，当前没有等待确认的探索计划")
+    try:
+        flows = explorer_agent.validate_plan_payload(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    path = _explore_plan_path(db, task)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="该任务尚未生成探索计划")
+    # 探索正在真实运行时拒绝确认（防误删 running 步骤）
+    running_step = db.execute(
+        select(StepLog).where(
+            StepLog.task_id == task.id, StepLog.name == "explore",
+            StepLog.status == "running")
+    ).scalar_one_or_none()
+    if running_step:
+        raise HTTPException(status_code=409, detail="探索正在进行中，无需确认计划")
+
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(plan, dict):
+            plan = {}
+    except (OSError, ValueError):
+        plan = {}
+    plan["flows"] = flows
+    plan["confirmed"] = True
+    plan["confirmed_at"] = datetime.utcnow().isoformat()
+    path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 恢复执行：移除暂停步骤（awaiting_confirm / 其他非 completed 的 explore 残留）
+    db.execute(
+        delete(StepLog).where(
+            StepLog.task_id == task.id, StepLog.name == "explore",
+            StepLog.status != "completed")
+    )
+    db.commit()
+    task_queue.enqueue(task.id)
+    return {"ok": True, "confirmed": True, "flows": flows}
 
 
 @router.post("/tasks/{task_id}/iterate", response_model=TaskOut, status_code=201)

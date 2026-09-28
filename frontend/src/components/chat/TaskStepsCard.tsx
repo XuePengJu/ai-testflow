@@ -5,7 +5,15 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { Task, TaskPagesResp } from "../../types";
-import { fetchTaskLiveShot, fetchTaskPages, fetchTaskVideo } from "../../api/client";
+import {
+  confirmExplorePlan,
+  fetchExplorePlan,
+  fetchTaskLiveShot,
+  fetchTaskPages,
+  fetchTaskVideo,
+  type ExplorePlanFlow,
+  type ExplorePlanResp,
+} from "../../api/client";
 import { PageShot } from "../task/ExecutionPanel";
 import ExploreTimeline from "./ExploreTimeline";
 import { useTaskStore } from "../../store/taskStore";
@@ -38,6 +46,7 @@ const STEP_ICONS: Record<string, string> = {
   AI生成用例: "✨",
   脚本生成: "📜",
   探索式测试: "🧭",
+  生成探索计划: "🗺️",
 };
 const RUNNING_HINTS: Record<string, string> = {
   解析规格: "⏳ 正在拆解需求...",
@@ -49,7 +58,10 @@ const RUNNING_HINTS: Record<string, string> = {
   AI生成用例: "✨ 正在生成用例...",
   脚本生成: "📜 正在生成脚本...",
   探索式测试: "🧭 正在探索页面（ReAct 循环）...",
+  生成探索计划: "🗺️ 正在生成探索计划...",
 };
+/** M3 计划先行：explore 任务探索步骤等待确认时的提示文案 */
+const AWAITING_CONFIRM_HINT = "⏸ 探索计划已生成，等待确认后开始";
 
 export function statusBadge(status: string): { text: string; cls: string } {
   if (status === "completed") return { text: "✓ 已完成", cls: "ok" };
@@ -294,6 +306,116 @@ function LiveShotView({ taskId, progress }: { taskId: string; progress?: string 
   );
 }
 
+/**
+ * M3 计划先行：探索计划确认卡（explore 步骤 status=awaiting_confirm 时渲染）。
+ * - 数据源：GET /api/tasks/{id}/explore-plan（plan.json 内容 + 确认状态）
+ * - 业务流列表：每条 checkbox（勾选 = 纳入本次探索）+ 标题可编辑
+ * - 「按计划探索」→ POST confirm（只回传勾选且合法的流）→ 刷新任务列表（恢复续跑）
+ * - 接口失败 / 无计划数据 → 静默占位，不破坏步骤卡展开区
+ */
+function ExplorePlanConfirm({ taskId }: { taskId: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [flows, setFlows] = useState<(ExplorePlanFlow & { checked: boolean })[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void fetchExplorePlan(taskId)
+      .then((r: ExplorePlanResp | null) => {
+        if (!live) return;
+        if (r && r.exists && Array.isArray(r.flows) && r.flows.length > 0) {
+          setFlows(r.flows.map((f) => ({ ...f, checked: true })));
+        } else {
+          setFailed(true);
+        }
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (live) {
+          setFailed(true);
+          setLoaded(true);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [taskId]);
+
+  const toggle = (i: number): void =>
+    setFlows((prev) => prev.map((f, j) => (j === i ? { ...f, checked: !f.checked } : f)));
+  const rename = (i: number, name: string): void =>
+    setFlows((prev) => prev.map((f, j) => (j === i ? { ...f, name } : f)));
+
+  const confirm = (): void => {
+    const selected = flows
+      .filter((f) => f.checked && f.name.trim() && f.steps.length > 0)
+      .map((f) => ({ name: f.name.trim(), steps: f.steps }));
+    if (selected.length === 0) return;
+    setSubmitting(true);
+    void confirmExplorePlan(taskId, selected).then((r) => {
+      setSubmitting(false);
+      if (r && r.ok) void useTaskStore.getState().refresh();
+    });
+  };
+
+  if (!loaded) return <div className="tsc-io-text tsc-muted">探索计划加载中…</div>;
+  if (failed) {
+    return <div className="tsc-io-text tsc-muted">（探索计划数据加载失败，可稍后刷新重试）</div>;
+  }
+  const anyChecked = flows.some((f) => f.checked);
+  return (
+    <div className="tsc-io" style={{ marginTop: 6 }}>
+      <span className="tsc-io-label">
+        🗺️ 探索计划（{flows.length} 条业务流，勾选后按计划探索，标题可编辑）
+      </span>
+      <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+        {flows.map((f, i) => (
+          <div
+            key={i}
+            style={{ border: "1px solid #f0f1f3", borderRadius: 8, padding: "8px 10px", background: "#fff" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="checkbox" checked={f.checked} onChange={() => toggle(i)} />
+              <input
+                value={f.name}
+                onChange={(e) => rename(i, e.target.value)}
+                title="点击编辑业务流标题"
+                style={{
+                  flex: 1, border: "1px solid transparent", borderRadius: 6, padding: "2px 6px",
+                  fontSize: 13, fontWeight: 600, color: "#1f2329", background: "#f7f8fa",
+                  outline: "none",
+                }}
+                onFocus={(e) => (e.currentTarget.style.borderColor = "#165dff")}
+                onBlur={(e) => (e.currentTarget.style.borderColor = "transparent")}
+              />
+            </div>
+            <ol style={{ margin: "6px 0 0 30px", padding: 0, fontSize: 12, color: "#4e5969", lineHeight: 1.7 }}>
+              {f.steps.map((s, j) => (
+                <li key={j}>{s}</li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          type="button"
+          className="qtag confirm-btn"
+          disabled={!anyChecked || submitting}
+          style={{ opacity: !anyChecked || submitting ? 0.5 : 1, cursor: !anyChecked || submitting ? "not-allowed" : "pointer" }}
+          onClick={confirm}
+        >
+          {submitting ? "提交中…" : "▶ 按计划探索"}
+        </button>
+        {!anyChecked && (
+          <span style={{ fontSize: 11, color: "#8f959e" }}>至少勾选 1 条业务流</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** showIterate：会话内任务卡传 true（挂「继续优化」→ 挂 chip）；详情页 running 卡不传（避免重复入口） */
 export default function TaskStepsCard({ task, showIterate = false }: { task: Task; showIterate?: boolean }) {
   const tasks = useTaskStore((s) => s.tasks);
@@ -340,6 +462,12 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
   (live.steps || []).forEach((s) => {
     if (s.title && !titles.includes(s.title)) titles.push(s.title);
   });
+  // M3 计划先行：「生成探索计划」是 explore 任务的首步骤，后端返回后插到最前
+  const planTitleIdx = titles.indexOf("生成探索计划");
+  if (planTitleIdx > 0) {
+    titles.splice(planTitleIdx, 1);
+    titles.unshift("生成探索计划");
+  }
 
   // 未配置可用模型：解析/生成步骤的摘要会带「未配置可用模型」提示 → 卡片顶部展示醒目提示条
   const mockNotice = (live.steps || []).some((s) =>
@@ -405,13 +533,20 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
         {titles.map((title) => {
           const s = stepMap[title];
           const st = s ? s.status : "pending";
-          const ring = st === "completed" ? "✓" : st === "failed" ? "!" : STEP_ICONS[title] || "•";
+          const ring =
+            st === "completed" ? "✓"
+            : st === "failed" ? "!"
+            : st === "awaiting_confirm" ? "⏸"
+            : STEP_ICONS[title] || "•";
           const open = expanded[title] !== false;
           const hasDetail = !!(s?.input_summary || s?.output_summary || s?.error);
           // e2e 抓取步骤完成后 → 就地可视化（页面卡片 + 探索录屏），失败/无产物回退 JSON
           const isCrawlerDone = live.kind === "e2e" && title === "抓取页面" && st === "completed";
           // M5 explore 探索步骤完成后 → 就地可视化（探索时间线：每步动作/理由/结果 + 截图），失败回退 JSON
           const isExploreDone = live.kind === "explore" && title === "探索式测试" && st === "completed";
+          // M3 计划先行：explore 探索步骤等待计划确认 → 渲染探索计划确认卡
+          const isExploreAwaiting =
+            live.kind === "explore" && title === "探索式测试" && st === "awaiting_confirm";
           // M4 实时画面：explore 探索步骤 running 时挂 LiveShotView（卸载即停轮询，任务结束/中断自动消失）
           const isExploreRunning =
             live.kind === "explore" && title === "探索式测试" && st === "running" && live.status === "running";
@@ -429,7 +564,9 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
                   <span className="tsc-step-time">{fmtDuration(s.duration_ms)}</span>
                 )}
                 <span className="tsc-hint">
-                  {st === "running"
+                  {st === "awaiting_confirm"
+                    ? AWAITING_CONFIRM_HINT
+                    : st === "running"
                     ? (live.status === "failed" ? "已中断" : (s?.progress || RUNNING_HINTS[title]))
                     : s?.error ? "失败" : ""}
                 </span>
@@ -437,6 +574,7 @@ export default function TaskStepsCard({ task, showIterate = false }: { task: Tas
               </button>
               {open && (
                 <div className="tsc-step-detail">
+                  {isExploreAwaiting && <ExplorePlanConfirm taskId={live.id} />}
                   {st === "running" && live.status !== "failed" && !isExploreRunning && (
                     <div className="tsc-io-text tsc-muted">{s?.progress || RUNNING_HINTS[title]}</div>
                   )}

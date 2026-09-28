@@ -304,3 +304,39 @@ export async function fetchTaskVideo(taskId: string): Promise<string | null> {
     return null;
   }
 }
+
+/* ===== M3 计划先行（与 app/api/tasks.py 的 explore-plan 端点对齐） ===== */
+
+/** 探索计划的单条业务流（每条：名称 + 操作步骤描述数组） */
+export interface ExplorePlanFlow {
+  name: string;
+  steps: string[];
+}
+
+/** GET /api/tasks/{task_id}/explore-plan 响应（exists=false = 尚未生成计划） */
+export interface ExplorePlanResp {
+  exists: boolean;
+  confirmed: boolean;
+  goal?: string;
+  entry_url?: string;
+  flows: ExplorePlanFlow[];
+}
+
+/** 读取任务探索计划与确认状态（计划先行关闭 / 未跑到 plan 步骤时 exists=false） */
+export function fetchExplorePlan(taskId: string): Promise<ExplorePlanResp | null> {
+  return apiJson<ExplorePlanResp>(`${API}/tasks/${taskId}/explore-plan`);
+}
+
+/**
+ * 确认（可编辑后的）探索计划：POST /api/tasks/{task_id}/explore-plan/confirm。
+ * body 只回传勾选的业务流；成功后任务恢复执行，调用方刷新任务列表即可看到续跑。
+ */
+export function confirmExplorePlan(
+  taskId: string,
+  flows: ExplorePlanFlow[],
+): Promise<{ ok: boolean; confirmed: boolean; flows: ExplorePlanFlow[] } | null> {
+  return apiJson<{ ok: boolean; confirmed: boolean; flows: ExplorePlanFlow[] }>(
+    `${API}/tasks/${taskId}/explore-plan/confirm`,
+    { method: "POST", body: JSON.stringify({ flows }) },
+  );
+}

@@ -367,7 +367,12 @@ def test_create_task_explore_requires_url_or_target(client, accounts):
 
 
 def test_engine_explore_wiring(client, accounts, db_session, monkeypatch):
-    """engine kind=explore 分支接线：explore → scripter → exporter 三步，任务 completed。"""
+    """engine kind=explore 分支接线：explore → scripter → exporter 三步，任务 completed。
+
+    注：M3 计划先行（EXPLORE_PLAN_FIRST=1）默认开；本用例固定旧自由探索路径，
+    计划先行的暂停/恢复接线由 tests/test_explore_plan.py 覆盖。
+    """
+    monkeypatch.setenv("EXPLORE_PLAN_FIRST", "0")
     from app.models.task import StepLog, Task
     from app.workflow import engine
 

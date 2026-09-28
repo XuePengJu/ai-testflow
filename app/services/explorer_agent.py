@@ -77,6 +77,64 @@ def _fingerprint_enabled() -> bool:
     return os.getenv("EXPLORE_FINGERPRINT", "1") == "1"
 
 
+def _guardrails_enabled() -> bool:
+    """结构化护栏开关（EXPLORE_GUARDRAILS，默认开 "1"；设 "0" 走旧逻辑）。
+
+    开启后导航/点击目标先过 M2 URL 白名单（explore=入口同域；提供 crawler
+    pages.json 时取其 URL 集）；关闭后仅保留旧的域名锁定，不做点击目标预检。
+    """
+    return os.getenv("EXPLORE_GUARDRAILS", "1") == "1"
+
+
+def _norm_url_key(url: str) -> tuple[str, str, str]:
+    """URL 规范化为可比对的 (scheme, host, path)：忽略 fragment 与末尾斜杠。"""
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return ("", "", "")
+    return (p.scheme, p.netloc, (p.path or "/").rstrip("/"))
+
+
+def build_url_whitelist(entry_url: str,
+                        pages_json: str | Path | None = None) -> dict:
+    """M2 结构化护栏：构建导航白名单（在 run_explore 初始化处调用）。
+
+    - explore 任务：初始 URL 同域（不传 pages_json）
+    - e2e 任务：crawler 产物 pages.json 存在时取其 URL 集（list[PageDesc] JSON，
+      元素含 url 字段；兼容 {"pages": [...]} 包裹与纯字符串数组）
+
+    返回：{"hosts": set[str], "url_keys": set[tuple] | None}——
+    url_keys=None 表示「无 URL 集约束，仅按 hosts 同域判定」。
+    解析失败时告警并回落同域白名单，绝不阻断任务。
+    """
+    hosts: set[str] = set()
+    try:
+        p = urlparse(entry_url)
+        if p.scheme in ("http", "https") and p.netloc:
+            hosts.add(p.netloc)
+    except ValueError:
+        pass
+    url_keys: set[tuple[str, str, str]] | None = None
+    if pages_json:
+        try:
+            data = json.loads(Path(pages_json).read_text(encoding="utf-8"))
+            pages = data.get("pages") if isinstance(data, dict) else data
+            keys: set[tuple[str, str, str]] = set()
+            for pg in pages or []:
+                u = str((pg.get("url") if isinstance(pg, dict) else pg) or "").strip()
+                if not u:
+                    continue
+                up = urlparse(u)
+                if up.scheme in ("http", "https") and up.netloc:
+                    keys.add(_norm_url_key(u))
+                    hosts.add(up.netloc)
+            if keys:
+                url_keys = keys
+        except (OSError, ValueError) as e:
+            logger.warning("护栏白名单构建：pages.json 解析失败（%s），回落同域白名单", e)
+    return {"hosts": hosts, "url_keys": url_keys}
+
+
 # 危险操作黑名单：按钮/链接文案命中即拒绝点击（一期从宽，设计文档 5.4）
 DANGEROUS_KEYWORDS = ("删除", "支付", "提交订单", "退款", "注销", "清空",
                       "logout", "signout", "delete", "refund")
@@ -221,7 +279,8 @@ class BrowserSession:
             if (!nm && !['input', 'select', 'textarea'].includes(tag)) continue;
             i += 1;
             out.push({ref: 'e' + i, role: role(el), name: nm, css: cssPath(el),
-                      active: isActive(el)});
+                      active: isActive(el),
+                      href: (el.tagName === 'A' && el.href) ? el.href : ''});
         }
         return out;
     }"""
@@ -229,9 +288,10 @@ class BrowserSession:
     def snapshot(self) -> tuple[str, dict[str, dict]]:
         """返回 (可交互元素摘要文本, ref→元素信息注册表)。
 
-        激活态元素（aria-selected / active class）在文本行追加「（选中）」标记，
-        注册表 info 附带 active 布尔值——供视图指纹判别 SPA tab 切换后的视图。
-        """
+    激活态元素（aria-selected / active class）在文本行追加「（选中）」标记，
+    注册表 info 附带 active 布尔值——供视图指纹判别 SPA tab 切换后的视图；
+    链接元素额外携带 href——供 M2 护栏对点击导航目标做预检。
+    """
         js = self._SNAPSHOT_JS.replace("__MAX__", str(_SNAPSHOT_MAX_ELEMENTS))
         try:
             els = self._page.evaluate(js)
@@ -242,7 +302,8 @@ class BrowserSession:
         for el in els:
             ref = el["ref"]
             self._registry[ref] = {"role": el["role"], "name": el["name"], "css": el["css"],
-                                   "active": bool(el.get("active"))}
+                                   "active": bool(el.get("active")),
+                                   "href": str(el.get("href") or "")}
             mark = "（选中）" if el.get("active") else ""
             lines.append(f"[{ref}] {el['role']} {el['name']}{mark}".rstrip())
         return "\n".join(lines), dict(self._registry)
@@ -534,6 +595,195 @@ def explore_pages_md(entry_url: str, outcome: ExploreOutcome) -> str:
     return "\n".join(lines)
 
 
+# ============ M3 计划先行：探索计划生成 / 校验 / 消费 ============
+
+_PLAN_SYSTEM_PROMPT = """你是资深测试分析师。根据被测系统的需求描述与首页快照，规划要探索的业务流。
+
+只输出一个 JSON 对象（不要 markdown 围栏、不要解释文字）：
+{"flows": [{"name": "业务流名称", "steps": ["操作步骤描述", "…"]}], "reason": "一句话规划理由"}
+
+要求：
+- 产出 3~5 条业务流，覆盖系统核心功能（需求描述中点名的功能优先）
+- steps 为人可读的操作步骤描述数组，每条 2~6 步，不写元素定位等技术细节
+- 业务流名称不超过 20 字"""
+
+
+def _plan_seed_snapshot(entry_url: str, browser_factory: Any = None) -> str:
+    """尽力而为获取种子页快照：作计划生成的 LLM 输入；任何失败返回空串
+    （浏览器不可用/页面打不开都不阻断计划生成，退化为仅按需求文本规划）。"""
+    try:
+        browser = (browser_factory or BrowserSession)()
+    except Exception:  # noqa: BLE001
+        return ""
+    try:
+        ok, _ = browser.goto(entry_url)
+        if not ok:
+            return ""
+        text, _registry = browser.snapshot()
+        return text[:4000]
+    except Exception:  # noqa: BLE001
+        return ""
+    finally:
+        try:
+            browser.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _fallback_plan(goal: str) -> list[dict]:
+    """计划生成失败时的兜底：单条自由探索流（不阻塞确认流程，用户可编辑后确认）。"""
+    return [{
+        "name": (goal or "自由探索").strip()[:20] or "自由探索",
+        "steps": ["浏览首页了解主要功能入口", "逐个功能流探索并提交用例"],
+    }]
+
+
+def normalize_plan_flows(flows: Any) -> list[dict]:
+    """任意 flows 输入 → 合法计划结构（非法条目丢弃，字段截断兜底）。"""
+    out: list[dict] = []
+    if not isinstance(flows, list):
+        return out
+    for f in flows:
+        if not isinstance(f, dict):
+            continue
+        name = str(f.get("name") or "").strip()
+        steps = [str(s).strip() for s in (f.get("steps") or []) if str(s).strip()]
+        if not name or not steps:
+            continue
+        out.append({"name": name[:60], "steps": steps[:10]})
+    return out[:8]
+
+
+def validate_plan_payload(payload: Any) -> list[dict]:
+    """校验 confirm 提交的计划 JSON 结构；非法抛 ValueError（API 层转 400）。"""
+    if not isinstance(payload, dict):
+        raise ValueError("计划必须是 JSON 对象（含 flows 数组）")
+    flows = normalize_plan_flows(payload.get("flows"))
+    if not flows:
+        raise ValueError("flows 必须是非空数组，且每条业务流都需含 name 与非空 steps 数组")
+    return flows
+
+
+def load_explore_plan(out_dir: str | None) -> dict | None:
+    """读 out_dir/plan.json；文件缺失 / 解析失败 → None（回落自由探索）。"""
+    if not out_dir:
+        return None
+    try:
+        p = Path(out_dir) / "plan.json"
+        if not p.is_file():
+            return None
+        obj = json.loads(p.read_text(encoding="utf-8"))
+        return obj if isinstance(obj, dict) else None
+    except (OSError, ValueError) as e:
+        logger.warning("plan.json 读取失败（%s），回落自由探索", e)
+        return None
+
+
+def save_explore_plan(out_dir: str | None, plan: dict) -> str:
+    """计划整体覆盖写 out_dir/plan.json；失败告警返回空串（不抛异常阻断任务）。"""
+    if not out_dir:
+        return ""
+    try:
+        p = Path(out_dir) / "plan.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        return str(p)
+    except OSError as e:
+        logger.warning("plan.json 写入失败：%s", e)
+        return ""
+
+
+def generate_explore_plan(entry_url: str, goal: str = "",
+                          llm_client: Any = None, out_dir: str | None = None,
+                          task_id: str = "", browser_factory: Any = None,
+                          progress_cb=None) -> dict:
+    """计划先行首步骤：LLM 产出 3~5 条业务流计划 → 落盘 out_dir/plan.json。
+
+    LLM 输入 = 用户需求（goal）+ 种子页快照（尽力获取，失败忽略）。
+    模型不可用 / 输出非法 → 兜底单条自由探索流（仍进确认流程，不阻塞任务）。
+
+    返回 {"flows", "summary", "details"}（引擎直接作 StepLog 的 summary/details）。
+    """
+    def _progress(msg: str) -> None:
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
+    snapshot_text = ""
+    if entry_url:
+        _progress("打开种子页获取页面快照…")
+        snapshot_text = _plan_seed_snapshot(entry_url, browser_factory)
+    _progress("正在生成探索计划…")
+
+    flows: list[dict] = []
+    reason = ""
+    llm_ok = False
+    if llm_client is not None:
+        user = (f"【用户需求】\n{goal or '（无需求描述，请按页面快照规划）'}\n\n"
+                f"【种子页快照】\n{snapshot_text or '（无可用快照）'}")
+        try:
+            raw = llm_client.chat(
+                [{"role": "system", "content": _PLAN_SYSTEM_PROMPT},
+                 {"role": "user", "content": user[:12000]}],
+                temperature=0.3, max_tokens=1500)
+            obj = _strip_fences(raw or "")
+            start, end = obj.find("{"), obj.rfind("}")
+            if start >= 0 and end > start:
+                data = json.loads(obj[start:end + 1])
+                flows = normalize_plan_flows(data.get("flows"))
+                reason = str(data.get("reason") or "").strip()
+                llm_ok = bool(flows)
+        except Exception as e:  # noqa: BLE001  LLM 网络/解析失败 → 兜底计划
+            logger.info("探索计划生成失败（%s），改用兜底计划", str(e)[:120])
+    fallback = not llm_ok
+    if not flows:
+        flows = _fallback_plan(goal)
+
+    from app.core.utils import utcnow
+    plan = {
+        "task_id": task_id,
+        "entry_url": entry_url,
+        "goal": goal,
+        "confirmed": False,
+        "created_at": utcnow().isoformat(),
+        "seed_snapshot": bool(snapshot_text),
+        "flows": flows,
+    }
+    path = save_explore_plan(out_dir, plan)
+    summary = f"探索计划已生成：{len(flows)} 条业务流，等待确认后开始探索"
+    if fallback:
+        summary += "（模型生成失败，已用兜底计划，可编辑后确认）"
+    details = {
+        "url": entry_url,
+        "goal": goal,
+        "flows": flows,
+        "reason": reason,
+        "seed_snapshot": bool(snapshot_text),
+        "fallback": fallback,
+        "plan_file": path,
+    }
+    return {"flows": flows, "summary": summary, "details": details}
+
+
+def _build_plan_context(plan: dict | None) -> str:
+    """已确认计划 → 决策 prompt 注入文本（无有效计划返回空串）。"""
+    if not plan:
+        return ""
+    flows = normalize_plan_flows(plan.get("flows"))
+    if not flows:
+        return ""
+    lines = ["【用户已确认的探索计划（按此顺序逐流探索）】"]
+    for i, f in enumerate(flows, 1):
+        lines.append(f"业务流{i}：{f['name']}")
+        for j, s in enumerate(f["steps"], 1):
+            lines.append(f"  {j}. {s}")
+    lines.append("规则：按业务流顺序探索，每探索完一条业务流立即 submit_cases 提交该流的用例；"
+                 "全部业务流完成后 submit_cases(done=true) 结束。")
+    return "\n".join(lines)
+
+
 # ============ M1 视图指纹判重：已见视图上下文注入 ============
 
 # 视图切换入口：点击后视图变化但 URL 往往不变（SPA tab / 菜单项）
@@ -604,11 +854,13 @@ expected（整体预期）、test_data。
 def _build_decision_messages(goal: str, entry_url: str, host: str,
                              history: list[str], obs: str,
                              step_no: int = 0, max_steps: int = 0,
-                             fp_context: str = "") -> list[dict]:
-    """组装决策上下文：system + 截断的 history + 当前观察（+ 视图判重上下文）。"""
+                             fp_context: str = "",
+                             plan_context: str = "") -> list[dict]:
+    """组装决策上下文：system + 截断的 history + 当前观察（+ 计划 + 视图判重上下文）。"""
     recent = history[-12:]  # 截断防 token 爆炸
     hist_text = "\n".join(recent) if recent else "（暂无历史动作）"
     user = (f"【历史动作与结果】\n{hist_text}\n\n【当前页面观察】\n{obs}\n\n"
+            + (f"{plan_context}\n\n" if plan_context else "")
             + (f"{fp_context}\n\n" if fp_context else "")
             + f"【进度】当前第 {step_no}/{max_steps} 步。"
               f"剩余步数不多时请直接 submit_cases 汇总用例并结束。\n"
@@ -625,17 +877,21 @@ def _build_decision_messages(goal: str, entry_url: str, host: str,
 def run_explore(entry_url: str, credentials: dict | None = None,
                 out_dir: str | None = None, llm_client: Any = None,
                 goal: str = "", progress_cb=None,
-                browser_factory: Any = None) -> ExploreOutcome:
+                browser_factory: Any = None,
+                plan: dict | None = None) -> ExploreOutcome:
     """探索式测试主入口：ReAct 循环产出用例。
 
     入参：
         entry_url       ：被测系统入口 URL（域名锁定基准）
         credentials     ：可选 {"username","password"}，有账密首步先登录
-        out_dir         ：任务输出目录（截图落 out_dir/explore/step-NNN.png）
+        out_dir         ：任务输出目录（截图落 out_dir/explore/step-NNN.png；
+                          含 crawler pages.json 时 M2 白名单取其 URL 集）
         llm_client      ：有 .chat(messages, **kw) 的客户端；None → 不启动浏览器直接收敛
         goal            ：探索目标描述（任务名）
         progress_cb     ：可选回调(str)，每步更新 StepLog.progress
         browser_factory ：可注入浏览器工厂（测试用 FakeBrowser）；缺省 PlaywrightBrowser
+        plan            ：M3 计划先行——用户已确认的探索计划（plan.json 内容）；
+                          非空时注入决策上下文，引导按业务流逐流探索
 
     出参：ExploreOutcome（cases 已按现有 case schema 归一化，引擎接 scripter → exporter）
     """
@@ -669,12 +925,29 @@ def run_explore(entry_url: str, credentials: dict | None = None,
     metrics = ExploreMetrics()
     seen_fp: dict[str, int] = {}
 
+    # ---- M2 结构化护栏：白名单在初始化处构建 ----
+    # explore 任务 = 入口同域白名单；out_dir 下若存在 crawler 的 pages.json
+    # （e2e 链路产物），改取其 URL 集。EXPLORE_GUARDRAILS=0 → 整体回落旧逻辑。
+    guardrails = _guardrails_enabled()
+    whitelist: dict = {"hosts": {entry_host} if entry_host else set(), "url_keys": None}
+    if guardrails:
+        pages_json = Path(out_dir) / "pages.json" if out_dir else None
+        whitelist = build_url_whitelist(
+            entry_url, pages_json if pages_json and pages_json.is_file() else None)
+
+    # ---- M3 计划先行：已确认计划 → 决策上下文注入文本 ----
+    plan_ctx = _build_plan_context(plan)
+    plan_flows = normalize_plan_flows(plan.get("flows")) if plan else []
+
     # 视图指纹判重（M1，EXPLORE_FINGERPRINT=1 默认开；纯内存，单次任务内）：
     # visited 每项 {"fp": ViewFingerprint, "tab_triggers": set[str], "clicked": set[str]}
     fp_enabled = _fingerprint_enabled()
     visited: list[dict] = []
     current_view: dict | None = None
     no_new_streak = 0     # 同一视图连续无新元素的步数（循环检测用）
+    # 当前步是否进入新视图（M3 前端时间线「新视图/已见」徽章数据源）：
+    # fp 关闭时保持 None（步骤记录不带 is_new_view 字段）
+    new_view_flag: bool | None = None
 
     # 分层决策开关（EXPLORE_LAYERED=1）：每步先走快速判断，高置信直接执行，
     # 低置信 / 需要生成（fill、submit_cases）/ 解析失败 → 升级主 LLM。默认关闭。
@@ -687,7 +960,11 @@ def run_explore(entry_url: str, credentials: dict | None = None,
     route_hint = "main"
 
     def _allow_url(url: str) -> tuple[bool, str]:
-        """域名锁定：仅允许入口域（file:// 入口允许任意 file:// 页面）。"""
+        """URL 护栏裁决：先做协议/入口域基础校验，再按 M2 白名单判定。
+
+        EXPLORE_GUARDRAILS=0（旧逻辑）：仅域名锁定；开启后白名单统一裁决——
+        无 URL 集时同域放行（行为与旧域名锁一致），有 URL 集时仅放行集合内页面。
+        """
         try:
             p = urlparse(url)
         except ValueError:
@@ -698,8 +975,21 @@ def run_explore(entry_url: str, credentials: dict | None = None,
             if entry_scheme != "file":
                 return False, "已拒绝：本地文件协议不允许（仅限远程站点）"
             return True, "ok"
-        if not p.netloc or p.netloc != entry_host:
-            return False, f"已拒绝：越域导航 {url}（域名锁定，仅允许 {entry_host}）"
+        if not entry_host:
+            return False, f"已拒绝：入口域缺失，不允许导航到 {url}"
+        if not guardrails:
+            # 旧逻辑：仅域名锁定
+            if p.netloc != entry_host:
+                return False, f"已拒绝：越域导航 {url}（域名锁定，仅允许 {entry_host}）"
+            return True, "ok"
+        # M2 白名单裁决
+        if p.netloc not in whitelist["hosts"]:
+            return False, (f"已拒绝：越界被护栏拦截，越域导航 {url}"
+                           f"（白名单仅允许 {entry_host} 域内页面）")
+        if whitelist["url_keys"] is not None:
+            if _norm_url_key(url) not in whitelist["url_keys"]:
+                return False, (f"已拒绝：越界被护栏拦截，{url} 不在允许页面集内"
+                               "（仅允许 crawler 抓取记录过的页面）")
         return True, "ok"
 
     def _add_step(url: str, action: str, args: Any, reason: str,
@@ -708,6 +998,9 @@ def run_explore(entry_url: str, credentials: dict | None = None,
         rec = {"n": len(steps) + 1, "url": url, "action": action,
                "args": args, "reason": reason, "result": ("ok" if ok else f"拒绝/失败：{msg}"),
                "screenshot": shot_rel}
+        if new_view_flag is not None:
+            # M3 前端时间线徽章：True=新视图 / False=已见视图（fp 关闭时不记）
+            rec["is_new_view"] = bool(new_view_flag)
         steps.append(rec)
         outcome.steps = steps
         metrics.note_action(action)
@@ -781,6 +1074,7 @@ def run_explore(entry_url: str, credentials: dict | None = None,
 
             # ---- M1 视图指纹判重：快照后先查重（Jaccard ≥ 0.9 判同视图）----
             fp_context = ""
+            new_view_flag = None
             if fp_enabled:
                 fp = _view_fingerprint(browser.url, obs)
                 matched: dict | None = None
@@ -791,6 +1085,7 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                         best_sim, matched = sim, v
                 if matched is not None and best_sim >= _FP_SIM_THRESHOLD:
                     current_view = matched
+                    new_view_flag = False
                     old_elems = set(matched["fp"].elements)
                     merged = old_elems | set(fp.elements)
                     if len(merged) > len(old_elems):
@@ -823,6 +1118,7 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                                     "clicked": set()}
                     visited.append(current_view)
                     no_new_streak = 0
+                    new_view_flag = True
                     for info in registry.values():
                         role = str(info.get("role") or "")
                         if role in _TRIGGER_ROLES and info.get("name"):
@@ -856,7 +1152,8 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                 messages = _build_decision_messages(goal, entry_url,
                                                     entry_host or entry_scheme, history, obs,
                                                     step_no, max_steps,
-                                                    fp_context=fp_context)
+                                                    fp_context=fp_context,
+                                                    plan_context=plan_ctx)
                 try:
                     t_llm = time.monotonic()
                     raw = llm_client.chat(messages, temperature=0.2, max_tokens=2048)
@@ -953,14 +1250,26 @@ def run_explore(entry_url: str, credentials: dict | None = None,
                         _add_step(browser.url, action, args, reason, False, deny)
                         history.append(f"[{action}] {ref}({info.get('name')}) → {deny}")
                     else:
-                        ok, msg = browser.click(ref)
-                        shot = _shot(browser)
-                        _add_step(browser.url, action, args, reason, ok, msg, shot)
-                        history.append(f"[{action}] {ref}({info.get('name')}) → {'ok' if ok else msg}")
-                        # M1：点击 tab/菜单入口成功 → 记入当前视图已触发集合
-                        if fp_enabled and current_view is not None and ok \
-                                and str(info.get("role") or "") in _TRIGGER_ROLES:
-                            current_view["clicked"].add(str(info.get("name") or ""))
+                        # M2 结构化护栏：链接元素的导航目标先过白名单（与 browser_navigate 同规则）
+                        href = str(info.get("href") or "")
+                        href_blocked = ""
+                        if guardrails and href:
+                            href_ok, href_deny = _allow_url(href)
+                            if not href_ok:
+                                href_blocked = href_deny
+                        if href_blocked:
+                            _add_step(browser.url, action, args, reason, False, href_blocked)
+                            history.append(
+                                f"[{action}] {ref}({info.get('name')}) → {href_blocked}")
+                        else:
+                            ok, msg = browser.click(ref)
+                            shot = _shot(browser)
+                            _add_step(browser.url, action, args, reason, ok, msg, shot)
+                            history.append(f"[{action}] {ref}({info.get('name')}) → {'ok' if ok else msg}")
+                            # M1：点击 tab/菜单入口成功 → 记入当前视图已触发集合
+                            if fp_enabled and current_view is not None and ok \
+                                    and str(info.get("role") or "") in _TRIGGER_ROLES:
+                                current_view["clicked"].add(str(info.get("name") or ""))
 
             elif action == "browser_fill":
                 fields = args.get("fields")
@@ -1050,6 +1359,8 @@ def run_explore(entry_url: str, credentials: dict | None = None,
         "metrics": m,
         "metrics_file": _write_metrics_file(out_dir, m),
         "views_seen": len(visited),
+        # M3 计划先行：本次探索消费的计划（未启用计划时为空数组）
+        "plan_flows": [f["name"] for f in plan_flows],
     }
     return outcome
 

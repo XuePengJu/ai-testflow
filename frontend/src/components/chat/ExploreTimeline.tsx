@@ -22,6 +22,31 @@ interface ExploreStep {
   result: string;
   /** 相对任务目录路径（explore/step-NNN.png），空串 = 该步无截图 */
   screenshot: string;
+  /** M1 视图指纹：该步是否进入新视图（true=新视图 / false=已见 / 缺省=指纹关闭） */
+  is_new_view?: boolean;
+}
+
+/** 「新视图 / 已见」小徽章（M1 视图指纹数据，指纹关闭的旧任务不渲染） */
+function ViewBadge({ isNew }: { isNew: boolean }): JSX.Element {
+  return (
+    <span
+      title={isNew ? "该步进入了一个新视图（视图指纹判重）" : "该步处于已见过的视图"}
+      style={{
+        marginLeft: 6,
+        flexShrink: 0,
+        fontSize: 10,
+        fontWeight: 600,
+        lineHeight: "16px",
+        padding: "0 6px",
+        borderRadius: 8,
+        background: isNew ? "#e8f3ff" : "#f2f3f5",
+        color: isNew ? "#165dff" : "#8f959e",
+        verticalAlign: "middle",
+      }}
+    >
+      {isNew ? "🆕 新视图" : "👁 已见"}
+    </span>
+  );
 }
 
 /** 从 input_summary 解析 steps 数组；解析失败/非数组返回 null（调用方回退原文） */
@@ -160,6 +185,7 @@ export default function ExploreTimeline({ taskId, json }: { taskId: string; json
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12.5, fontWeight: 600, color: "#1f2329" }}>
                 {s.action}
+                {s.is_new_view !== undefined && <ViewBadge isNew={s.is_new_view} />}
                 <span style={{ fontWeight: 400, color: "#8f959e", marginLeft: 8 }}>
                   {s.result && s.result !== "ok" ? clip(s.result, 60) : "执行成功"}
                 </span>

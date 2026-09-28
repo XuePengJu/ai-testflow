@@ -58,6 +58,18 @@ STEPS_EXPLORE = [
     ("exporter", "导出文件", exporter_agent.run_exporter, "files"),
 ]
 
+# M3 计划先行编排：explore 任务首步骤先「生成探索计划」，确认后再自由探索。
+# plan 步骤的函数为 None：需要 db/task 上下文，在循环里单独分发（同 explore）。
+# 仅当 EXPLORE_PLAN_FIRST=1 时启用（见 _plan_first_enabled）。
+STEPS_EXPLORE_PLAN = [
+    ("plan", "生成探索计划", None, "plan"),
+] + STEPS_EXPLORE
+
+
+def _plan_first_enabled() -> bool:
+    """计划先行开关（EXPLORE_PLAN_FIRST，默认开 "1"；设 "0" 走旧自由探索）。"""
+    return os.getenv("EXPLORE_PLAN_FIRST", "1") == "1"
+
 
 def _prepare_input(task: Task, data_dir: str) -> str:
     """返回供 ParserAgent 读取的文件路径；text 类型落盘为 .md。"""
@@ -172,7 +184,8 @@ def run_task(task_id: str) -> None:
         if task.kind == "e2e":
             steps = STEPS_E2E
         elif task.kind == "explore":
-            steps = STEPS_EXPLORE
+            # M3 计划先行：默认在探索前先插入「生成探索计划」步骤（确认后继续）
+            steps = STEPS_EXPLORE_PLAN if _plan_first_enabled() else STEPS_EXPLORE
         else:
             steps = STEPS
 
@@ -191,6 +204,11 @@ def run_task(task_id: str) -> None:
                     continue
                 except (json.JSONDecodeError, ValueError, TypeError):
                     logger.warning("断点续跑：parser input_summary 解析失败，重新执行 parser")
+
+            # 断点续跑 / confirm 重入：plan 步骤已完成（plan.json 已落盘）→ 直接跳过
+            if name == "plan" and name in completed_steps:
+                logger.info("计划先行：任务 %s 的探索计划已生成，跳过 plan 步骤", task_id)
+                continue
 
             step = StepLog(
                 task_id=task_id, name=name, title=title,
@@ -274,6 +292,24 @@ def run_task(task_id: str) -> None:
                          "pages": [{"url": p.url, "title": p.title,
                                     "screenshot": p.screenshot} for p in pages]},
                         ensure_ascii=False)
+                elif name == "plan":
+                    # ---- M3 计划先行：LLM 产出 3~5 条业务流计划 → 落盘 plan.json ----
+                    target = db.get(TestTarget, task.target_id) if task.target_id else None
+                    url = ((target.base_url if target else "") or (task.input_ref or "")).strip()
+                    if not url:
+                        raise ValueError("explore 任务缺少被测系统地址（target_id 与 url 均为空）")
+
+                    def _on_plan_progress(msg: str) -> None:
+                        step.progress = msg
+                        db.commit()
+
+                    plan_result = explorer_agent.generate_explore_plan(
+                        url, goal=task.name or "", llm_client=llm_client,
+                        out_dir=str(out_dir / task.id), task_id=task.id,
+                        progress_cb=_on_plan_progress)
+                    out = plan_result["flows"]
+                    summary = plan_result["summary"]
+                    details = json.dumps(plan_result["details"], ensure_ascii=False)
                 elif name == "explore":
                     # ---- M5 explore：ReAct Agent 探索产出用例（复用 e2e 的 target/凭据解析） ----
                     target = db.get(TestTarget, task.target_id) if task.target_id else None
@@ -291,15 +327,33 @@ def run_task(task_id: str) -> None:
                     task_out = out_dir / task.id
                     task_out.mkdir(parents=True, exist_ok=True)
 
+                    # ---- M3 计划先行：已确认的探索计划 → 注入 run_explore 引导决策 ----
+                    plan = None
+                    if _plan_first_enabled():
+                        loaded = explorer_agent.load_explore_plan(str(task_out))
+                        if loaded is not None and not loaded.get("confirmed"):
+                            # 异常重入（plan 未确认却到了 explore 步骤）→ 重新暂停等确认。
+                            # 正常路径由 confirm API 删掉暂停步骤后再入队，不会走到这里。
+                            step.status = "awaiting_confirm"
+                            step.progress = "探索计划已生成，请确认业务流计划后开始探索"
+                            db.commit()
+                            logger.info("计划先行：任务 %s 的计划未确认，重新暂停等待确认", task_id)
+                            return
+                        if loaded is not None and loaded.get("confirmed"):
+                            plan = loaded
+
                     def _on_explore_step(msg: str) -> None:
                         """每完成一步 → 更新 StepLog.progress（前端轮询实时可见探索时间线）。"""
                         step.progress = msg
                         db.commit()
 
+                    explore_kwargs: dict = {}
+                    if plan is not None:
+                        explore_kwargs["plan"] = plan
                     outcome = explorer_agent.run_explore(
                         url, credentials, out_dir=str(task_out),
                         llm_client=llm_client, goal=task.name or "",
-                        progress_cb=_on_explore_step)
+                        progress_cb=_on_explore_step, **explore_kwargs)
 
                     # 探索产出的用例照常走下游 scripter → exporter（预算超限也收敛交付）
                     # dict → TestCase 对象（下游 cases_to_json/ensure_* 与 e2e 链路同口径）
@@ -352,6 +406,19 @@ def run_task(task_id: str) -> None:
                 # 解析步骤顺带回写任务名 / 需求摘要 / 会话名（失败不影响主流程）
                 if name == "parser":
                     _apply_requirement_naming(db, task, details)
+                if name == "plan":
+                    # ---- M3 计划先行：step 粒度暂停（不动全局任务状态枚举）----
+                    # 任务保持 running；探索步骤标记 awaiting_confirm；引擎退出。
+                    # 用户在 POST /tasks/{id}/explore-plan/confirm 确认（可编辑）后，
+                    # API 覆盖 plan.json（confirmed=true）、删掉本暂停步骤并重新入队续跑。
+                    db.add(StepLog(
+                        task_id=task_id, name="explore", title="探索式测试",
+                        status="awaiting_confirm", started_at=utcnow(),
+                        progress="探索计划已生成，请确认业务流计划后开始探索",
+                    ))
+                    db.commit()
+                    logger.info("计划先行：任务 %s 探索计划已生成，暂停等待用户确认", task_id)
+                    return
             except Exception as e:  # noqa: BLE001
                 try:
                     db.rollback()
