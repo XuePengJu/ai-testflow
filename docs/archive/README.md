@@ -17,8 +17,11 @@
 | 项目1-知识库问答合一执行方案-V4.1.md | V4.1 | 问答合一页 |
 | 项目1-模型池与思考控制执行方案-V1.0.md | V5.1–V5.4 | 多模型池与思考控制 |
 | 项目1-设置页模型区交互重构设计-V1.0.md | V5.2/V5.3 | 设置页模型区重组（已落地） |
+| 项目1-全链路测试闭环与Agent化执行方案-V5.0.md | V5.0 | 全链路闭环 M0–M5（主体已落地；第 11 节测试数据隔离由独立文档承接，仍在根目录） |
+| 项目1-探索Agent计划先行改造-执行计划-V1.0.md | M1–M10 | 计划先行 + 页面重构执行计划（M1–M10 全部落地） |
+| 项目1-探索Agent分层决策改造-阶段0基线-V1.0.md | V5.10 前置 | 分层决策阶段 0 基线实验（阶段 1/2 FastDecider 已落地，开关 EXPLORE_LAYERED 默认关） |
 | contract-m2-execution.md | V5.0 M2 | 脚本生成执行契约（一次性） |
 | handoff-M1-frontend-shared.md | V5.0 M1 | M1 前端共享交接（一次性） |
 | ui_4_report.png / ui_6_report_view.png / ui_7_case_expand.png | — | 09-23 旧 UI 截图（无文档引用） |
 
-**仍在 `docs/` 根目录的活文档**：PRD.md、DEPLOY.md、全链路闭环 V5.0（含待落地第 11 节）、探索分层决策阶段 0 基线（实验数据）、探索计划先行执行计划（M1–M10 台账）、测试数据隔离方案（待落地）、dberp-kb/、screenshots/、explore-metrics/。
+**仍在 `docs/` 根目录的活文档**：PRD.md、API.md、DEPLOY.md、测试数据隔离与自动清理方案（唯一待落地，09-29 核查确认）、dberp-kb/、screenshots/、explore-metrics/。
