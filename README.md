@@ -177,7 +177,7 @@
 
 ### 对话驱动助手（V2.6）
 
-- **Buddy 测试专家助手**：对话流式输出（SSE），折叠展示思考过程
+- **试飞员（TestPilot） 测试专家助手**：对话流式输出（SSE），折叠展示思考过程
 
 - 会话持久化：历史会话列表，跨会话不丢
 
@@ -200,7 +200,7 @@
 ### 对话附件文档解析（V2.9）
 
 - 对话输入框支持上传文档附件（docx / pdf / md / markdown / txt / xlsx / xls），后端 `app/api/files.py` 接收并 `app/services/doc_extract.py` 抽取纯文本
-- 抽取结果（附文件名）作为上下文注入对话请求（`ChatIn.file_id`），Buddy 助手基于文档内容作答——可直接把 PRD / 需求文档丢进对话让它生成用例
+- 抽取结果（附文件名）作为上下文注入对话请求（`ChatIn.file_id`），试飞员（TestPilot） 助手基于文档内容作答——可直接把 PRD / 需求文档丢进对话让它生成用例
 - 解析分层容错：`.docx` 用 python-docx 抽正文段落 + 表格行；`.pdf` 用 pdfplumber 逐页抽取并跳过空白页；`.md/.markdown/.txt` 直接 utf-8 读取（非法字节 `errors="replace"` 容错）；超大文件截断到上限
 - 依赖缺失不崩：缺 python-docx / pdfplumber 时抛出明确错误提示，而非静默失败
 
@@ -510,7 +510,7 @@ npm run build   # 构建 → frontend/dist（不入库；线上发布走 scripts
 
 | 方法   | 路径                | 说明                          |
 | ---- | ----------------- | --------------------------- |
-| POST | `/api/chat/stream` | Buddy 流式对话（SSE）：支持注入任务摘要上下文（`task_id`）+ 深度思考 + 文档附件（`file_id`）；`kb_qa` 模式下自动检索知识库并先发 `citations` 事件（引用溯源） |
+| POST | `/api/chat/stream` | 试飞员（TestPilot） 流式对话（SSE）：支持注入任务摘要上下文（`task_id`）+ 深度思考 + 文档附件（`file_id`）；`kb_qa` 模式下自动检索知识库并先发 `citations` 事件（引用溯源） |
 | POST | `/api/chat`        | 非流式对话（兜底，同渲染管线）              |
 
 ### 文件（V2.9 附件）

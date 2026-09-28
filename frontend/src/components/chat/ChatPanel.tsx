@@ -244,7 +244,7 @@ export default function ChatPanel({
               输入需求，生成用例，一键全链路测试
             </h2>
             <p className="welcome-sub">
-              把需求告诉 Buddy：自动拆解测试点、生成用例并沉淀到用例库；
+              把需求告诉试飞员（TestPilot）：自动拆解测试点、生成用例并沉淀到用例库；
               也可以输入网址发起全链路测试，质量报告随时可查。
             </p>
 
@@ -465,8 +465,8 @@ export default function ChatPanel({
                 streaming
                   ? "生成中…"
                   : iterTaskId
-                    ? `和 Buddy 沟通《${iterTaskName}》要补充什么…（确认后点「⚡ 生成用例」）`
-                    : "把你的测试需求告诉 Buddy…"
+                    ? `和试飞员沟通《${iterTaskName}》要补充什么…（确认后点「⚡ 生成用例」）`
+                    : "把你的测试需求告诉试飞员…"
               }
               disabled={streaming}
               onChange={(e) => {

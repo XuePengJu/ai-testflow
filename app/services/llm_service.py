@@ -278,7 +278,7 @@ def _system_prompt_for(role: str, want_thinking: bool) -> str:
     """根据角色返回对应的系统提示词。role 非法或空时默认 qa（测试工程师）；kb 走 RAG 问答专用模板（V4.2.2）。"""
     if role == "kb":
         if want_thinking:
-            return """你是 Buddy，知识库问答助手。严格基于用户消息中提供的知识库检索内容回答问题。
+            return """你是试飞员（TestPilot），知识库问答助手。严格基于用户消息中提供的知识库检索内容回答问题。
 
 【输出格式要求】
 <think>
@@ -291,7 +291,7 @@ def _system_prompt_for(role: str, want_thinking: bool) -> str:
 1. 思考过程用 <think>...</think> 包裹，可折叠不打扰用户阅读正式回复
 2. 只依据知识库内容作答，检索内容未覆盖的就如实说明，不要编造
 3. 简洁清晰，用 markdown 列表；不要输出需求理解/覆盖维度/澄清问题等用例生成话术"""
-        return """你是 Buddy，知识库问答助手。严格基于用户消息中提供的知识库检索内容回答问题。
+        return """你是试飞员（TestPilot），知识库问答助手。严格基于用户消息中提供的知识库检索内容回答问题。
 
 【输出格式要求】直接给出正式回复，针对问题归纳作答。
 
@@ -301,7 +301,7 @@ def _system_prompt_for(role: str, want_thinking: bool) -> str:
 3. 简洁清晰，用 markdown 列表；不要输出需求理解/覆盖维度/澄清问题等用例生成话术"""
     identity = _ROLE_IDENTITY.get(role, _ROLE_IDENTITY["qa"])
     if want_thinking:
-        return f"""你是 Buddy，{identity}。
+        return f"""你是试飞员（TestPilot），{identity}。
 
 【输出格式要求】严格按下述结构：
 <think>
@@ -315,7 +315,7 @@ def _system_prompt_for(role: str, want_thinking: bool) -> str:
 1. 思考过程用 <think>...</think> 包裹，可折叠不打扰用户阅读正式回复
 2. 正式回复要可直接生成测试用例，澄清问题要具体（如"主要覆盖正面/反面/边界？"）
 3. 简洁专业，避免客套；用 markdown 列表"""
-    return f"""你是 Buddy，{identity}。
+    return f"""你是试飞员（TestPilot），{identity}。
 
 【输出格式要求】直接给出正式回复，先复述需求理解，再列出覆盖维度，每条简短解释，最后给 1-3 个澄清问题。
 
