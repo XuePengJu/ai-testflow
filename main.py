@@ -120,7 +120,11 @@ def health():
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+    # no-cache：入口页不缓存，部署后普通刷新即生效（assets 带内容哈希可强缓存）
+    return HTMLResponse(
+        (STATIC_DIR / "index.html").read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/config.js")
