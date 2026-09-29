@@ -270,14 +270,16 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
   }, [kb.id]);
   useEffect(() => { void load(); }, [load]);
 
-  const upload = async (f: File) => {
+  /** V5.11：返回是否成功，供批量上传统计；progress 形如 " (2/8)" 用于多文件进度提示 */
+  const upload = async (f: File, progress = ""): Promise<boolean> => {
     setBusy(true);
-    toast(`正在入库「${f.name}」…（解析+分块+向量化，请稍候）`);
+    toast(`正在入库${progress}「${f.name}」…（解析+分块+向量化，请稍候）`);
+    let ok = false;
     try {
       const fd = new FormData();
       fd.append("file", f);
       const r = await api(`/api/knowledge/bases/${kb.id}/documents`, { method: "POST", body: fd });
-      if (r.ok) { toast(`「${f.name}」入库完成`); void load(); }
+      if (r.ok) { toast(`「${f.name}」入库完成`); ok = true; void load(); }
       else {
         let msg = `入库失败（HTTP ${r.status}）`;
         try { const d = await r.json(); if (d?.detail) msg = typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail); } catch {}
@@ -286,17 +288,35 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
     } catch {
       toast("入库请求失败：网络错误或后端无响应，请检查后端日志");
     } finally { setBusy(false); }
+    return ok;
   };
 
-  /** M6：拖拽/选择文件前的本地校验（格式 + 大小），不通过直接提示 */
-  const acceptFile = (f: File) => {
-    const ext = "." + (f.name.split(".").pop() || "").toLowerCase();
-    if (!UPLOAD_ACCEPT.includes(ext)) {
-      toast(`暂不支持 ${ext} 格式，请上传 ${UPLOAD_ACCEPT.join("/")} 文件`);
-      return;
+  /** M6：拖拽/选择文件前的本地校验（格式 + 大小），不通过直接提示；V5.11 支持批量多选 */
+  const acceptFiles = (list: FileList | File[]) => {
+    const files = Array.from(list);
+    if (!files.length) return;
+    if (busy) { toast("有文档正在入库，请等当前批次完成再选"); return; }
+    const valid: File[] = [];
+    const rejected: string[] = [];
+    for (const f of files) {
+      const ext = "." + (f.name.split(".").pop() || "").toLowerCase();
+      if (!UPLOAD_ACCEPT.includes(ext)) { rejected.push(`${f.name}（不支持 ${ext}）`); continue; }
+      if (f.size > UPLOAD_MAX_BYTES) { rejected.push(`${f.name}（超 10MB）`); continue; }
+      valid.push(f);
     }
-    if (f.size > UPLOAD_MAX_BYTES) { toast("文件过大，单个文档上限 10MB"); return; }
-    void upload(f);
+    if (rejected.length) {
+      toast(`已跳过 ${rejected.length} 个文件：${rejected.slice(0, 3).join("、")}${rejected.length > 3 ? " 等" : ""}`);
+    }
+    if (!valid.length) return;
+    // 串行入库：解析+向量化是重操作，且百炼 embedding 有速率限制，并发容易撞限
+    void (async () => {
+      let ok = 0, fail = 0;
+      for (let i = 0; i < valid.length; i++) {
+        const done = await upload(valid[i], valid.length > 1 ? ` (${i + 1}/${valid.length})` : "");
+        if (done) ok++; else fail++;
+      }
+      if (valid.length > 1) toast(`批量上传完成：成功 ${ok} / 失败 ${fail}`);
+    })();
   };
 
   const createTextDoc = async () => {
@@ -378,18 +398,18 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
       {!readOnly && (
         <div
           className={"kb-dropzone" + (dragOver ? " drag" : "")}
-          onClick={() => fileRef.current?.click()}
+          onClick={() => { if (!busy) fileRef.current?.click(); }}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => {
             e.preventDefault(); setDragOver(false);
-            const f = e.dataTransfer.files?.[0];
-            if (f) acceptFile(f);
+            const files = e.dataTransfer.files;
+            if (files?.length) acceptFiles(files);
           }}
           role="button" aria-label="上传文档"
         >
           <Upload size={18} className="kb-dz-icon" />
-          <span>拖拽文件到此处，或 <b className="kb-dz-link">选择文件</b></span>
+          <span>拖拽文件到此处，或 <b className="kb-dz-link">选择文件</b>（支持多选）</span>
           <span className="muted kb-dz-hint">支持 md/pdf/docx/xlsx/xmind/csv/json/txt（≤10MB）</span>
         </div>
       )}
@@ -413,8 +433,9 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
         {filtered.length !== docs.length && <span className="muted" style={{ fontSize: 12 }}>筛选出 {filtered.length}/{docs.length} 篇</span>}
       </div>
 
-      <input ref={fileRef} type="file" hidden accept={UPLOAD_ACCEPT.join(",")}
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) acceptFile(f); e.target.value = ""; }} />
+      {/* 不设 accept：macOS Chrome 对 .md 等动态 UTI 扩展名会整体置灰（间歇性），格式交给 acceptFiles 校验 */}
+      <input ref={fileRef} type="file" hidden multiple
+        onChange={(e) => { const fs = e.target.files; if (fs?.length) acceptFiles(fs); e.target.value = ""; }} />
 
       {showNew && (
         <div className="kb-mask" onClick={() => setShowNew(false)}>

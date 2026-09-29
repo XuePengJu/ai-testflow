@@ -31,8 +31,8 @@ function fmtSize(b: number): string {
   return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(2) + " MB";
 }
 
-/** 允许上传的文档格式（与后端 doc_extract.SUPPORTED_EXTS 保持一致） */
-const ACCEPT = ".docx,.pdf,.md,.markdown,.txt";
+/** 允许上传的文档格式（与后端 doc_extract.SUPPORTED_EXTS 保持一致）；
+ *  不设 input accept 属性：macOS Chrome 对 .md 等动态 UTI 扩展名会整体置灰（间歇性），格式交给 ACCEPT_RE 校验 */
 const ACCEPT_HINT = "docx / pdf / md / txt";
 const ACCEPT_RE = /\.(docx|pdf|md|markdown|txt)$/i;
 
@@ -361,7 +361,6 @@ export default function ChatPanel({
               ref={fileRef}
               type="file"
               hidden
-              accept={ACCEPT}
               onChange={(e) => onPickFile(e.target.files?.[0] || null)}
             />
             {/* V5.8 知识库多选检索：不选 = 不检索；按钮徽章显示已选数量 */}
