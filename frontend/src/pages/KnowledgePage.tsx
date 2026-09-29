@@ -97,6 +97,41 @@ const typeMeta = (ft?: string): { abbr: string; color: string } =>
 /* M6：上传拖拽区接受的扩展名与大小上限（与后端 MAX_UPLOAD_BYTES/支持列表同口径） */
 const UPLOAD_ACCEPT = [".md", ".txt", ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".xmind", ".csv", ".json"];
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const BATCH_CONFIRM_THRESHOLD = 50; // 一次入库超过该数量先确认，防手滑拖巨型目录
+
+/** V5.11：拖拽可能拖进来整个文件夹——用 webkitGetAsEntry 递归展开目录拿全部文件；
+ *  webkitGetAsEntry 必须在 drop 事件同步阶段调用（本函数在首个 await 前完成 entries 提取）。
+ *  老浏览器没有该 API 时兜底回退 dataTransfer.files（此时只能拿到散文件）。 */
+async function collectDropFiles(dt: DataTransfer): Promise<File[]> {
+  const entries = (Array.from(dt.items ?? [])
+    .map((it) => (it.webkitGetAsEntry ? it.webkitGetAsEntry() : null))
+    .filter(Boolean) as FileSystemEntry[]);
+  if (!entries.length) return Array.from(dt.files ?? []);
+  const out: File[] = [];
+  const walk = async (entry: FileSystemEntry): Promise<void> => {
+    if (entry.isFile) {
+      const f = await new Promise<File | null>((res) =>
+        (entry as FileSystemFileEntry).file((x) => res(x), () => res(null)));
+      if (f) out.push(f);
+    } else if (entry.isDirectory) {
+      // readEntries 单次最多返回 100 条，必须循环读到空
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      const readAll = async (): Promise<FileSystemEntry[]> => {
+        const acc: FileSystemEntry[] = [];
+        for (;;) {
+          const batch = await new Promise<FileSystemEntry[]>((res) =>
+            reader.readEntries((es) => res(es), () => res([])));
+          if (!batch.length) break;
+          acc.push(...batch);
+        }
+        return acc;
+      };
+      for (const e of await readAll()) await walk(e);
+    }
+  };
+  for (const e of entries) await walk(e);
+  return out;
+}
 
 export default function KnowledgePage() {
   const { role } = useAuth();
@@ -263,6 +298,7 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
   const [typeFilter, setTypeFilter] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const dirRef = useRef<HTMLInputElement>(null); // V5.11：整目录选择（webkitdirectory）
 
   const load = useCallback(async () => {
     const data = await apiJson<{ items: Doc[] }>(`/api/knowledge/bases/${kb.id}/documents`);
@@ -291,23 +327,30 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
     return ok;
   };
 
-  /** M6：拖拽/选择文件前的本地校验（格式 + 大小），不通过直接提示；V5.11 支持批量多选 */
+  /** M6：拖拽/选择文件前的本地校验（格式 + 大小），不通过直接提示；V5.11 支持批量多选/目录 */
   const acceptFiles = (list: FileList | File[]) => {
-    const files = Array.from(list);
+    let files = Array.from(list);
     if (!files.length) return;
     if (busy) { toast("有文档正在入库，请等当前批次完成再选"); return; }
+    if (files.length > BATCH_CONFIRM_THRESHOLD &&
+        !window.confirm(`将一次入库 ${files.length} 个文件，耗时较长，确认继续？`)) return;
     const valid: File[] = [];
     const rejected: string[] = [];
     for (const f of files) {
+      if (f.name.startsWith(".")) continue; // .DS_Store 等隐藏文件静默跳过
       const ext = "." + (f.name.split(".").pop() || "").toLowerCase();
       if (!UPLOAD_ACCEPT.includes(ext)) { rejected.push(`${f.name}（不支持 ${ext}）`); continue; }
       if (f.size > UPLOAD_MAX_BYTES) { rejected.push(`${f.name}（超 10MB）`); continue; }
       valid.push(f);
     }
-    if (rejected.length) {
-      toast(`已跳过 ${rejected.length} 个文件：${rejected.slice(0, 3).join("、")}${rejected.length > 3 ? " 等" : ""}`);
+    // ToastHost 是单槽（新 toast 顶掉旧的）：跳过提示若此时弹出，会立刻被
+    // 第一条「正在入库」进度 toast 覆盖，用户看不到——并入批量结束的汇总 toast
+    if (!valid.length) {
+      if (rejected.length) {
+        toast(`已跳过 ${rejected.length} 个文件：${rejected.slice(0, 3).join("、")}${rejected.length > 3 ? " 等" : ""}`);
+      }
+      return;
     }
-    if (!valid.length) return;
     // 串行入库：解析+向量化是重操作，且百炼 embedding 有速率限制，并发容易撞限
     void (async () => {
       let ok = 0, fail = 0;
@@ -315,7 +358,13 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
         const done = await upload(valid[i], valid.length > 1 ? ` (${i + 1}/${valid.length})` : "");
         if (done) ok++; else fail++;
       }
-      if (valid.length > 1) toast(`批量上传完成：成功 ${ok} / 失败 ${fail}`);
+      if (valid.length > 1 || rejected.length) {
+        let msg = `批量上传完成：成功 ${ok} / 失败 ${fail}`;
+        if (rejected.length) {
+          msg += `，跳过 ${rejected.length} 个：${rejected.slice(0, 2).join("、")}${rejected.length > 2 ? " 等" : ""}`;
+        }
+        toast(msg);
+      }
     })();
   };
 
@@ -403,14 +452,19 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => {
             e.preventDefault(); setDragOver(false);
-            const files = e.dataTransfer.files;
-            if (files?.length) acceptFiles(files);
+            void collectDropFiles(e.dataTransfer).then((fs) => { if (fs.length) acceptFiles(fs); });
           }}
           role="button" aria-label="上传文档"
         >
           <Upload size={18} className="kb-dz-icon" />
-          <span>拖拽文件到此处，或 <b className="kb-dz-link">选择文件</b>（支持多选）</span>
-          <span className="muted kb-dz-hint">支持 md/pdf/docx/xlsx/xmind/csv/json/txt（≤10MB）</span>
+          <span>
+            拖拽文件/文件夹到此处，或{" "}
+            <b className="kb-dz-link" onClick={(e) => { e.stopPropagation(); if (!busy) fileRef.current?.click(); }}>选择文件</b>
+            {" / "}
+            <b className="kb-dz-link" onClick={(e) => { e.stopPropagation(); if (!busy) dirRef.current?.click(); }}>选择文件夹</b>
+            （支持多选）
+          </span>
+          <span className="muted kb-dz-hint">支持 md/pdf/docx/xlsx/xmind/csv/json/txt（≤10MB），选文件夹自动收全部子目录</span>
         </div>
       )}
 
@@ -435,6 +489,9 @@ function DocsTab({ kb, readOnly = false }: { kb: KB; readOnly?: boolean }) {
 
       {/* 不设 accept：macOS Chrome 对 .md 等动态 UTI 扩展名会整体置灰（间歇性），格式交给 acceptFiles 校验 */}
       <input ref={fileRef} type="file" hidden multiple
+        onChange={(e) => { const fs = e.target.files; if (fs?.length) acceptFiles(fs); e.target.value = ""; }} />
+      {/* V5.11：整目录选择（webkitdirectory + directory 属性，Chromium/WebKit/Firefox 均支持） */}
+      <input ref={dirRef} type="file" hidden multiple {...{ webkitdirectory: "", directory: "" }}
         onChange={(e) => { const fs = e.target.files; if (fs?.length) acceptFiles(fs); e.target.value = ""; }} />
 
       {showNew && (
