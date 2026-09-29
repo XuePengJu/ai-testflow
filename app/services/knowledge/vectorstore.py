@@ -19,7 +19,7 @@ from app.core.config import VECTOR_DIR, VECTOR_COLLECTION, AITF_ALLOW_DEMO
 logger = logging.getLogger("knowledge.vectorstore")
 
 MOCK_DIM = 256  # 演示用向量维度（真实 embedding 维度由模型决定，互不通用）
-EMBED_BATCH = 20  # 阿里百炼 embedding 单次批量上限 25，留安全余量分批
+EMBED_BATCH = 10  # 阿里百炼 embedding 单次批量上限：v1/v2=25、v3/v4=10，取 10 全兼容
 
 # 全局生效的 embedding 配置 {provider, base_url, model, api_key}；由调用方在
 # 每次请求前用 llm_service.resolve_embedding(db) 的结果刷新（单进程内赋值安全）
