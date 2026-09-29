@@ -6,10 +6,13 @@
  *   （仅当前已加载会话有消息缓存）→ 语义化兜底名；
  * - 简短会话（总消息数 < 4，不足 2 轮）自动折叠进底部「已归档 · N 个简短会话」
  *   分组，可点击展开；当前正在使用的会话不归档，避免丢失入口。
+ *   V5.11 豁免：①今天有更新的会话（刚发起的探索/任务自动会话立刻可见，过夜自动沉底）；
+ *   ②有 running/pending 任务的会话（生成中永不折叠，任务数据源 = taskStore 5s 轮询，前端 join）。
  * V5.9：hover 操作组扩为 3 个——✏️ 重命名（行内编辑）/ ✨ AI 总结标题 / 🗑 删除。
  */
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useChatStore } from "../../store/chatStore";
+import { useTaskStore } from "../../store/taskStore";
 import { useAuth } from "../../hooks/useAuth";
 import { Trash2, Plus, ChevronDown, ChevronRight, Pencil, Sparkles } from "lucide-react";
 import { toast } from "../../api/client";
@@ -77,6 +80,15 @@ function groupByDate(list: Conv[]): Record<Group, Conv[]> {
   return out;
 }
 
+/** V5.11：今天（本地时区 0 点起）有更新的会话视为「活跃」，豁免归档折叠 */
+function isFreshToday(c: Conv): boolean {
+  const d = parseServerTime(c.updated_at || c.created_at);
+  if (!d || isNaN(d.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return d.getTime() >= today.getTime();
+}
+
 export default function ConversationPicker() {
   const conversations = useChatStore((s) => s.conversations);
   const currentId = useChatStore((s) => s.conversationId);
@@ -93,6 +105,20 @@ export default function ConversationPicker() {
   const [editTitle, setEditTitle] = useState("");
   /** V5.9 AI 生成标题中的会话 id（按钮转圈防重复点击） */
   const [aiBusyId, setAiBusyId] = useState<string | null>(null);
+
+  // V5.11 进行中任务所属会话集合：taskStore 5s 轮询已有全量任务（含 conversation_id/status），前端 join 即可
+  // 注意：hook 必须在下方 `if (!token) return` 早退之前调用，否则登出/登录切换时 hook 数量不一致会崩
+  const tasks = useTaskStore((s) => s.tasks);
+  const runningConvIds = useMemo(
+    () =>
+      new Set(
+        tasks
+          .filter((t) => t.status === "running" || t.status === "pending")
+          .map((t) => t.conversation_id)
+          .filter(Boolean) as string[],
+      ),
+    [tasks],
+  );
 
   const startEdit = (c: Conv) => {
     // 编辑草稿取「展示标题」对应的原标题：低信息量标题时直接用原标题改
@@ -264,7 +290,12 @@ export default function ConversationPicker() {
   }
 
   // 简短会话归档：当前会话不归档（保证正在用的会话永远可见可切回）
-  const isShort = (c: Conv) => (c.message_count ?? 0) < SHORT_CONV_LIMIT && c.id !== currentId;
+  // V5.11 豁免：今天有更新（刚发起的探索/任务会话立刻可见，过夜自动沉底）、有进行中任务（生成中永不折叠）
+  const isShort = (c: Conv) =>
+    c.id !== currentId &&
+    (c.message_count ?? 0) < SHORT_CONV_LIMIT &&
+    !isFreshToday(c) &&
+    !runningConvIds.has(c.id);
   const active = conversations.filter((c) => !isShort(c));
   const short = conversations.filter(isShort);
   const groups = groupByDate(active);

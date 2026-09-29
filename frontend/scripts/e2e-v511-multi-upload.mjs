@@ -80,7 +80,7 @@ try {
   await page.setInputFiles('input[type="file"]', files);
   await page.waitForFunction(
     () => document.body.innerText.includes("批量上传完成：成功 3 / 失败 0"),
-    { timeout: 240000 },
+    null, { timeout: 240000 },
   );
   step(true, "批量上传 3 个 md 全部入库成功（汇总 toast 出现）");
   await shot(page, "e2e-v511-2-batch-done.png");
